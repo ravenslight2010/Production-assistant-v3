@@ -10,11 +10,15 @@ import {
   listInventoryWarehouses,
   listOpeningCounts,
   listWarehouseStock,
+  recordInventoryMovement,
   setProductionWarehouse,
   stageOpeningCount,
+  transferInventory,
   type AuthSession,
   type InventoryMovement,
+  type InventoryMovementRequest,
   type InventoryProduct,
+  type InventoryTransferRequest,
   type OpeningCountRecord,
   type OpeningCountRequest,
   type OpeningCountSummary,
@@ -28,6 +32,7 @@ import {
   type PendingInventoryRequest,
 } from "../components/inventory-storage";
 import { OpeningCountPanel } from "../components/OpeningCountPanel";
+import { InventoryMovementPanel } from "../components/InventoryMovementPanel";
 
 function message(cause: unknown, fallback: string): string {
   return cause instanceof Error ? cause.message : fallback;
@@ -141,13 +146,25 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
         replayed = result.replayed;
         warehouseId = result.warehouse.id;
         confirmation = "Production warehouse selected for new runs. Existing runs retain their frozen warehouse.";
+      } else if (request.kind === "movement") {
+        const result = await recordInventoryMovement(request.payload);
+        replayed = result.replayed;
+        warehouseId = result.warehouseId;
+        confirmation = request.payload.type === "receipt"
+          ? "Receipt recorded. Stock, lot balance, and movement history were reloaded."
+          : "Adjustment recorded. Stock, coordinated lots, and movement history were reloaded.";
+      } else if (request.kind === "transfer") {
+        const result = await transferInventory(request.payload);
+        replayed = result.replayed;
+        warehouseId = result.sourceWarehouseId;
+        confirmation = "Transfer recorded. Source stock, destination lots, and movement history were confirmed.";
       } else if (request.kind === "opening-count") {
         const result = await stageOpeningCount(request.payload);
         replayed = result.replayed;
         warehouseId = result.warehouseId;
         countId = result.countId;
         confirmation = "Opening count staged. Review every stored quantity; no stock has changed.";
-      } else {
+      } else if (request.kind === "opening-review" || request.kind === "opening-apply") {
         const action = request.kind === "opening-review" ? "review" : "apply";
         const result = await actOnOpeningCount(request.countId, action);
         replayed = result.replayed;
@@ -249,11 +266,23 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
 
         <section className="panel min-w-0" aria-labelledby="movement-history-heading">
           <div className="panel-heading"><div><p className="eyebrow">Append-only ledger</p><h2 id="movement-history-heading" className="mt-1 text-lg font-semibold">Movement history</h2></div><span className="status-pill">Latest {movements.length}</span></div>
-          <p className="mt-3 text-xs leading-5 text-muted-foreground">Receipts, adjustments, transfers, opening counts, and run consumption remain server-attributed. This wave provides canonical readback.</p>
+          <p className="mt-3 text-xs leading-5 text-muted-foreground">Receipts, adjustments, transfers, opening counts, and run consumption remain server-attributed and reload from canonical history after every confirmed write.</p>
           <div className="mt-5 space-y-3">{movements.map((movement) => <article key={movement.id} className="rounded-lg border border-border/70 bg-background/40 p-3"><div className="flex items-start justify-between gap-3"><div><h3 className="text-sm font-medium">{movement.productName}</h3><p className="mt-1 font-mono text-xs text-amber-300">{movement.productCode}</p></div><span className="font-mono text-sm">{movement.quantityDelta} {movement.unit}</span></div><p className="mt-2 text-xs text-muted-foreground">{movement.type} · {new Date(movement.occurredAt).toLocaleString()}</p><p className="mt-2 text-xs leading-5">{movement.reason}</p></article>)}{movements.length === 0 ? <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">No movement history for the selected warehouse.</p> : null}</div>
           {nextCursor ? <button type="button" className="button-secondary mt-4 w-full" disabled={!online || busy !== null} onClick={() => void loadOlderMovements()}>{busy === "movements" ? "Loading…" : "Load older movements"}</button> : null}
         </section>
       </div>
+
+      <div className="mt-5"><InventoryMovementPanel online={online} disabled={writeDisabled} warehouse={selectedWarehouse} warehouses={warehouses} products={products}
+        onMovement={async (request: InventoryMovementRequest) => {
+          if (writeDisabled) return false;
+          const pendingRequest: PendingInventoryRequest = { kind: "movement", payload: request };
+          return persistPending(pendingRequest) && sendPending(pendingRequest);
+        }}
+        onTransfer={async (request: InventoryTransferRequest) => {
+          if (writeDisabled) return false;
+          const pendingRequest: PendingInventoryRequest = { kind: "transfer", payload: request };
+          return persistPending(pendingRequest) && sendPending(pendingRequest);
+        }} /></div>
 
       <div className="mt-5"><OpeningCountPanel online={online} disabled={writeDisabled} pending={pending} warehouse={selectedWarehouse} products={products} currentCount={currentCount} counts={counts} onStage={async (request: OpeningCountRequest) => {
         if (writeDisabled) return false;

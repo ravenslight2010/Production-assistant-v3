@@ -40,6 +40,8 @@ export type OpeningCountResult = components["schemas"]["OpeningCountResult"];
 export type CreateWarehouseRequest = components["schemas"]["CreateWarehouseRequest"];
 export type SetProductionWarehouseRequest = components["schemas"]["SetProductionWarehouseRequest"];
 export type OpeningCountRequest = components["schemas"]["OpeningCountRequest"];
+export type InventoryMovementRequest = components["schemas"]["InventoryMovementRequest"];
+export type InventoryTransferRequest = components["schemas"]["InventoryTransferRequest"];
 export type InventoryMovementPage = { movements: InventoryMovement[]; nextCursor: { occurredAt: string; id: string } | null };
 export type ScheduleCommandResult = {
   schedule: ProductionSchedule;
@@ -525,6 +527,40 @@ export async function listInventoryMovements(
     throw new ApiError("The movement history was incomplete. Refresh and retry.", 502);
   }
   return { movements: result.movements, nextCursor: result.nextCursor };
+}
+
+export async function recordInventoryMovement(request: InventoryMovementRequest) {
+  const result = await unwrap(await client.POST("/api/v3/inventory/movements", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  if (result.outcome !== "accepted" || typeof result.replayed !== "boolean"
+    || !UUID.test(result.movementId) || result.warehouseId !== request.warehouseId
+    || result.productCode !== request.productCode || typeof result.quantity !== "string"
+    || !INVENTORY_QUANTITY.test(result.quantity) || result.quantity.startsWith("-")
+    || !Number.isSafeInteger(result.revision) || result.revision < 0) {
+    throw new ApiError("The server did not confirm the inventory movement. Retry the same request.", 502);
+  }
+  return result;
+}
+
+export async function transferInventory(request: InventoryTransferRequest) {
+  const result = await unwrap(await client.POST("/api/v3/inventory/transfers", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  if (result.outcome !== "accepted" || typeof result.replayed !== "boolean"
+    || !UUID.test(result.transferId) || result.productCode !== request.productCode
+    || result.quantity !== request.quantity
+    || result.sourceWarehouseId !== request.sourceWarehouseId
+    || result.targetWarehouseId !== request.targetWarehouseId
+    || typeof result.sourceQuantity !== "string" || !INVENTORY_QUANTITY.test(result.sourceQuantity)
+    || result.sourceQuantity.startsWith("-")
+    || typeof result.targetQuantity !== "string" || !INVENTORY_QUANTITY.test(result.targetQuantity)
+    || result.targetQuantity.startsWith("-")
+    || !Number.isSafeInteger(result.sourceRevision) || result.sourceRevision < 0
+    || !Number.isSafeInteger(result.targetRevision) || result.targetRevision < 0) {
+    throw new ApiError("The server did not confirm the inventory transfer. Retry the same request.", 502);
+  }
+  return result;
 }
 
 export async function listOpeningCounts(): Promise<OpeningCountSummary[]> {

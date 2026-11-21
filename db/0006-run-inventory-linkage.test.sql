@@ -164,6 +164,20 @@ BEGIN
   IF v_movement_count <> 2 THEN
     RAISE EXCEPTION 'Expected exactly one movement for each consumed stock product, got %', v_movement_count;
   END IF;
+  IF (SELECT count(*) FROM v3.inventory_lot_movements lm
+      JOIN v3.inventory_movements m ON m.facility_id = lm.facility_id AND m.id = lm.movement_id
+      WHERE m.facility_id = v_facility AND m.run_id = v_run) <> 2
+    OR EXISTS (
+      SELECT 1 FROM v3.inventory_balances b
+      WHERE b.facility_id = v_facility AND b.warehouse_id = v_warehouse
+        AND b.quantity <> COALESCE((
+          SELECT sum(l.quantity) FROM v3.inventory_lots l
+          WHERE l.facility_id = b.facility_id AND l.warehouse_id = b.warehouse_id
+            AND l.product_id = b.product_id
+        ), 0)
+    ) THEN
+    RAISE EXCEPTION 'Run completion did not consume coordinated lots exactly once';
+  END IF;
 
   v_replay := v3.complete_run_with_inventory(
     v_facility, v_run, v_actor, 'r6-complete-run', repeat('a', 64), 'complete', 1

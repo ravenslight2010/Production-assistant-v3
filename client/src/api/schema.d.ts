@@ -1408,6 +1408,18 @@ export interface components {
             type: "receipt" | "adjustment";
             quantity: string;
             reason: string;
+            /** @description Optional for positive receipts and adjustments; not accepted for negative adjustments. */
+            lotNumber?: string;
+            /**
+             * Format: date
+             * @description Optional lot receipt date; defaults to the server transaction date for positive stock.
+             */
+            receivedOn?: string;
+            /**
+             * Format: date
+             * @description Optional lot expiration date; cannot be before the effective received date.
+             */
+            expiresOn?: string;
         };
         InventoryMovementResult: {
             /** @constant */

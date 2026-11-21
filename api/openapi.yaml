@@ -3179,6 +3179,19 @@ components:
           type: string
           minLength: 3
           maxLength: 500
+        lotNumber:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Optional for positive receipts and adjustments; not accepted for negative adjustments.
+        receivedOn:
+          type: string
+          format: date
+          description: Optional lot receipt date; defaults to the server transaction date for positive stock.
+        expiresOn:
+          type: string
+          format: date
+          description: Optional lot expiration date; cannot be before the effective received date.
     InventoryMovementResult:
       type: object
       required: [outcome, replayed, movementId, warehouseId, productCode, quantity, revision]

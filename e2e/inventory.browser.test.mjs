@@ -9,6 +9,7 @@ import { parseOpeningCountCsv } from "../core/import-csv.mjs";
 const CSRF_TOKEN = "b".repeat(43);
 const STAFF_ID = "76000000-0000-4000-8000-000000000001";
 const WAREHOUSE_ID = "76000000-0000-4000-8000-000000000002";
+const TARGET_WAREHOUSE_ID = "76000000-0000-4000-8000-000000000004";
 const COUNT_ID = "76000000-0000-4000-8000-000000000003";
 const PRODUCT_IDS = [
   "76000000-0000-4000-8000-000000000011",
@@ -70,15 +71,50 @@ function json(route, body, status = 200) {
   return route.fulfill({ status, contentType: "application/json", headers: { "Cache-Control": "no-store" }, body: JSON.stringify(body) });
 }
 
-async function installInventoryApi(context, baseUrl, { manager = true } = {}) {
+async function installInventoryApi(context, baseUrl, { manager = true, established = false } = {}) {
   const warehouses = [];
   const counts = new Map();
   const requests = new Map();
+  const commandResults = new Map();
   const inventoryRequests = [];
   const writes = [];
   const stock = new Map();
+  const targetStock = new Map();
   const movements = [];
+  const targetMovements = [];
+  const stockByWarehouse = new Map([[WAREHOUSE_ID, stock], [TARGET_WAREHOUSE_ID, targetStock]]);
+  const movementsByWarehouse = new Map([[WAREHOUSE_ID, movements], [TARGET_WAREHOUSE_ID, targetMovements]]);
   let loseNextStageResponse = false;
+  let loseNextMovementResponse = false;
+  let nextMovementId = 40;
+  const newMovementId = () => `76000000-0000-4000-8000-${String(nextMovementId++).padStart(12, "0")}`;
+  const changeStock = (warehouseId, code, delta) => {
+    const warehouseStock = stockByWarehouse.get(warehouseId);
+    const product = PRODUCTS.find((item) => item.code === code);
+    const current = warehouseStock.get(code) ?? {
+      productId: product.id, code: product.code, name: product.name, unit: product.unit, quantity: "0", revision: 0,
+    };
+    const next = { ...current, quantity: String(Number(current.quantity) + Number(delta)), revision: current.revision + 1 };
+    warehouseStock.set(code, next);
+    return next;
+  };
+  const addMovement = (warehouseId, code, type, quantityDelta, reason, movementGroupId) => {
+    const product = PRODUCTS.find((item) => item.code === code);
+    movementsByWarehouse.get(warehouseId).unshift({
+      id: newMovementId(), movementGroupId, productCode: code, productName: product.name, unit: product.unit,
+      type, quantityDelta, reason, actorId: STAFF_ID, occurredAt: "2026-11-21T13:00:00.000Z",
+    });
+  };
+  if (established) {
+    warehouses.push(
+      { id: WAREHOUSE_ID, name: "Browser Source", active: true, isProduction: true, createdAt: "2026-11-21T11:00:00.000Z", openingCountApplied: true },
+      { id: TARGET_WAREHOUSE_ID, name: "Browser Target", active: true, isProduction: false, createdAt: "2026-11-21T11:01:00.000Z", openingCountApplied: true },
+    );
+    PRODUCTS.forEach((product) => {
+      stock.set(product.code, { productId: product.id, code: product.code, name: product.name, unit: product.unit, quantity: "20", revision: 1 });
+      targetStock.set(product.code, { productId: product.id, code: product.code, name: product.name, unit: product.unit, quantity: "0", revision: 1 });
+    });
+  }
 
   const countSummary = (count) => ({
     id: count.id,
@@ -170,22 +206,72 @@ async function installInventoryApi(context, baseUrl, { manager = true } = {}) {
     }
     if (path === "/api/v3/inventory/products" && method === "GET") return json(route, { products: PRODUCTS });
     if (path === "/api/v3/inventory/stock" && method === "GET") {
-      assert.equal(url.searchParams.get("warehouseId"), WAREHOUSE_ID);
-      return json(route, { stock: PRODUCTS.map((product) => stock.get(product.code)).filter(Boolean) });
+      const warehouseId = url.searchParams.get("warehouseId");
+      const warehouseStock = stockByWarehouse.get(warehouseId);
+      assert.ok(warehouseStock, "stock reads must address a known warehouse");
+      return json(route, { stock: PRODUCTS.map((product) => warehouseStock.get(product.code)).filter(Boolean) });
     }
     if (path === "/api/v3/inventory/movements" && method === "GET") {
-      assert.equal(url.searchParams.get("warehouseId"), WAREHOUSE_ID);
+      const warehouseId = url.searchParams.get("warehouseId");
+      const warehouseMovements = movementsByWarehouse.get(warehouseId);
+      assert.ok(warehouseMovements, "movement reads must address a known warehouse");
       assert.equal(url.searchParams.get("limit"), "50");
       const beforeId = url.searchParams.get("beforeId");
       if (beforeId) {
-        assert.equal(beforeId, movements[0].id);
-        assert.equal(url.searchParams.get("beforeAt"), movements[0].occurredAt);
-        return json(route, { movements: movements.slice(1), nextCursor: null });
+        assert.equal(beforeId, warehouseMovements[0].id);
+        assert.equal(url.searchParams.get("beforeAt"), warehouseMovements[0].occurredAt);
+        return json(route, { movements: warehouseMovements.slice(1), nextCursor: null });
       }
       return json(route, {
-        movements: movements.slice(0, 1),
-        nextCursor: movements.length > 1 ? { occurredAt: movements[0].occurredAt, id: movements[0].id } : null,
+        movements: warehouseMovements.slice(0, 1),
+        nextCursor: warehouseMovements.length > 1 ? { occurredAt: warehouseMovements[0].occurredAt, id: warehouseMovements[0].id } : null,
       });
+    }
+    if (path === "/api/v3/inventory/movements" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      const prior = requests.get(body.commandId);
+      if (prior) {
+        assert.deepEqual(body, prior, "movement retry must preserve the exact request bytes");
+        return json(route, { ...commandResults.get(body.commandId), replayed: true });
+      }
+      requests.set(body.commandId, body);
+      const next = changeStock(body.warehouseId, body.productCode, body.quantity);
+      const movementGroupId = newMovementId();
+      addMovement(body.warehouseId, body.productCode, body.type, body.quantity, body.reason, movementGroupId);
+      const result = {
+        outcome: "accepted", replayed: false, movementId: movementGroupId, warehouseId: body.warehouseId,
+        productCode: body.productCode, quantity: next.quantity, revision: next.revision,
+      };
+      commandResults.set(body.commandId, result);
+      if (loseNextMovementResponse) {
+        loseNextMovementResponse = false;
+        return json(route, { error: "Synthetic response loss after movement commit." }, 500);
+      }
+      return json(route, result);
+    }
+    if (path === "/api/v3/inventory/transfers" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(Object.keys(body).sort(), ["commandId", "productCode", "quantity", "reason", "sourceWarehouseId", "targetWarehouseId"]);
+      const prior = requests.get(body.commandId);
+      if (prior) {
+        assert.deepEqual(body, prior, "transfer retry must preserve the exact request bytes");
+        return json(route, { ...commandResults.get(body.commandId), replayed: true });
+      }
+      requests.set(body.commandId, body);
+      const source = changeStock(body.sourceWarehouseId, body.productCode, `-${body.quantity}`);
+      const target = changeStock(body.targetWarehouseId, body.productCode, body.quantity);
+      const transferId = newMovementId();
+      addMovement(body.sourceWarehouseId, body.productCode, "transfer_out", `-${body.quantity}`, body.reason, transferId);
+      addMovement(body.targetWarehouseId, body.productCode, "transfer_in", body.quantity, body.reason, transferId);
+      const result = {
+        outcome: "accepted", replayed: false, transferId, productCode: body.productCode, quantity: body.quantity,
+        sourceWarehouseId: body.sourceWarehouseId, sourceQuantity: source.quantity, sourceRevision: source.revision,
+        targetWarehouseId: body.targetWarehouseId, targetQuantity: target.quantity, targetRevision: target.revision,
+      };
+      commandResults.set(body.commandId, result);
+      return json(route, result);
     }
     if (path === "/api/v3/inventory/opening-counts" && method === "GET") {
       assert.equal(url.searchParams.get("limit"), "50");
@@ -258,8 +344,11 @@ async function installInventoryApi(context, baseUrl, { manager = true } = {}) {
     inventoryRequests,
     writes,
     stock,
+    targetStock,
     movements,
+    targetMovements,
     loseNextStageResponse: () => { loseNextStageResponse = true; },
+    loseNextMovementResponse: () => { loseNextMovementResponse = true; },
   };
 }
 
@@ -348,6 +437,101 @@ test("React inventory creates a warehouse, retries opening counts exactly, appli
     await page.setViewportSize(viewport);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
       `the React inventory page must fit ${viewport.width}x${viewport.height}`);
+  }
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test("React inventory records lot receipts, retries adjustments exactly, and transfers between canonical warehouses", { timeout: 90_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installInventoryApi(context, baseUrl, { established: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#inventory`);
+  await page.getByRole("heading", { name: "Inventory", exact: true }).waitFor();
+  const confirmedStock = page.getByRole("region", { name: "Confirmed quantities", exact: true });
+  await confirmedStock.getByRole("cell", { name: "20", exact: true }).first().waitFor();
+
+  await page.getByRole("combobox", { name: "Product", exact: true }).selectOption("DOUGH-A");
+  await page.getByLabel("Quantity", { exact: true }).fill("5");
+  await page.getByLabel("Reason", { exact: true }).fill("Browser lot receipt");
+  await page.getByLabel(/Lot number/u).fill("LOT-BROWSER-A");
+  await page.getByLabel(/Received date/u).fill("2026-11-01");
+  await page.getByLabel(/Expiration date/u).fill("2026-12-01");
+  await page.getByRole("button", { name: "Record receipt", exact: true }).click();
+  await page.getByText(/Receipt recorded\. Stock, lot balance, and movement history were reloaded\./u).waitFor();
+  await confirmedStock.getByRole("cell", { name: "25", exact: true }).waitFor();
+  const receipt = [...api.requests.values()].find((request) => request.type === "receipt");
+  assert.deepEqual(receipt, {
+    commandId: receipt.commandId, warehouseId: WAREHOUSE_ID, productCode: "DOUGH-A", type: "receipt",
+    quantity: "5", reason: "Browser lot receipt", lotNumber: "LOT-BROWSER-A",
+    receivedOn: "2026-11-01", expiresOn: "2026-12-01",
+  });
+  assert.equal(await page.getByLabel("Quantity", { exact: true }).inputValue(), "", "confirmed receipt fields must clear");
+
+  await page.getByRole("button", { name: "Adjustment", exact: true }).click();
+  await page.getByRole("combobox", { name: "Product", exact: true }).selectOption("DOUGH-A");
+  await page.getByLabel("Quantity (+/-)", { exact: true }).fill("-2");
+  await page.getByLabel("Reason", { exact: true }).fill("Browser damage adjustment");
+  assert.equal(await page.getByLabel(/Lot number/u).count(), 0, "negative adjustments cannot supply lot metadata");
+  const originalAdjustment = {
+    commandId: "", warehouseId: WAREHOUSE_ID, productCode: "DOUGH-A", type: "adjustment",
+    quantity: "-2", reason: "Browser damage adjustment",
+  };
+  api.loseNextMovementResponse();
+  await page.getByRole("button", { name: "Record adjustment", exact: true }).click();
+  await page.getByText(/Retry the same request; its identity prevents duplicate writes/u).waitFor();
+  assert.equal(api.stock.get("DOUGH-A").quantity, "23", "the adjustment committed before response loss");
+  assert.equal(api.movements.length, 2);
+  Object.assign(originalAdjustment, { commandId: [...api.requests.values()].find((request) => request.type === "adjustment").commandId });
+  assert.equal(await page.getByRole("button", { name: "Transfer", exact: true }).isDisabled(), true, "an unresolved movement pauses transfers");
+
+  await page.reload();
+  await page.getByRole("button", { name: "Retry the same inventory request", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Retry the same inventory request", exact: true }).click();
+  await page.getByText(/Previous request confirmed\. Adjustment recorded\./u).waitFor();
+  await confirmedStock.getByRole("cell", { name: "23", exact: true }).waitFor();
+  assert.deepEqual([...api.requests.values()].find((request) => request.type === "adjustment"), originalAdjustment);
+  assert.equal(api.movements.length, 2, "exact adjustment retry must not append another movement");
+
+  await page.getByRole("button", { name: "Transfer", exact: true }).click();
+  await page.getByRole("combobox", { name: "Product", exact: true }).selectOption("DOUGH-A");
+  await page.getByLabel("Quantity", { exact: true }).fill("3");
+  await page.getByLabel("Reason", { exact: true }).fill("Browser warehouse transfer");
+  assert.equal(await page.getByRole("combobox", { name: "Target warehouse", exact: true }).inputValue(), TARGET_WAREHOUSE_ID);
+  await page.getByRole("button", { name: "Transfer stock", exact: true }).click();
+  await page.getByText(/Transfer recorded\. Source stock, destination lots, and movement history were confirmed\./u).waitFor();
+  await confirmedStock.getByRole("cell", { name: "20", exact: true }).first().waitFor();
+  assert.equal(api.stock.get("DOUGH-A").quantity, "20");
+  assert.equal(api.targetStock.get("DOUGH-A").quantity, "3");
+  assert.equal(api.movements.length, 3);
+  assert.equal(api.targetMovements.length, 1);
+
+  await page.getByRole("combobox", { name: "Warehouse", exact: true }).selectOption(TARGET_WAREHOUSE_ID);
+  await confirmedStock.getByRole("cell", { name: "3", exact: true }).waitFor();
+  await page.getByText("Browser warehouse transfer", { exact: true }).waitFor();
+  assert.equal(api.targetMovements[0].type, "transfer_in");
+
+  const writesBeforeOffline = api.writes.length;
+  await context.setOffline(true);
+  await page.getByText("Loaded values only · no file retained or writes queued", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Transfer stock", exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Receipt", exact: true }).isDisabled(), true);
+  assert.equal(api.writes.length, writesBeforeOffline);
+  await context.setOffline(false);
+  await page.getByText("Canonical facility inventory · manage-inventory", { exact: true }).waitFor();
+
+  for (const viewport of [
+    { width: 1280, height: 900 },
+    { width: 375, height: 812 },
+    { width: 768, height: 1024 },
+    { width: 1024, height: 768 },
+  ]) {
+    await page.setViewportSize(viewport);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+      `the movement workflow must fit ${viewport.width}x${viewport.height}`);
   }
   assert.deepEqual(errors, []);
   await context.close();

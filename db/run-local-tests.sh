@@ -712,7 +712,11 @@ fi
 " >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0008-production-rule-enforcement.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0009-production-schedules.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0010-inventory-lots.sql" >/dev/null
 "${PSQL[@]}" -c "
+  GRANT EXECUTE ON FUNCTION v3.record_inventory_movement(
+    uuid, uuid, text, text, uuid, text, text, numeric, text, text, date, date
+  ) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.schedule_default_start_time(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.get_production_schedule(uuid, date) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_schedule_run_templates(uuid) TO v3_api_test;
@@ -735,6 +739,8 @@ assert_no_direct_table_access "v3.die_default_settings"
 assert_no_direct_table_access "v3.die_default_events"
 assert_no_direct_table_access "v3.production_schedules"
 assert_no_direct_table_access "v3.production_schedule_receipts"
+assert_no_direct_table_access "v3.inventory_lots"
+assert_no_direct_table_access "v3.inventory_lot_movements"
 INVENTORY_COMPLETION_PRIVILEGES="$("${PSQL[@]}" -c "
   SET ROLE v3_api_test;
   SELECT has_function_privilege(current_user,
@@ -750,6 +756,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0007-approved-setup-catalogs.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0008-production-rule-enforcement.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0009-production-schedules.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0010-inventory-lots.test.sql"
 ENCODED_DB_USER="$(python3 - "$DB_USER" <<'PY'
 import sys
 import urllib.parse

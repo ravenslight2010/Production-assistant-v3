@@ -1,8 +1,16 @@
-import type { CreateWarehouseRequest, OpeningCountRequest, SetProductionWarehouseRequest } from "../api";
+import type {
+  CreateWarehouseRequest,
+  InventoryMovementRequest,
+  InventoryTransferRequest,
+  OpeningCountRequest,
+  SetProductionWarehouseRequest,
+} from "../api";
 
 export type PendingInventoryRequest =
   | { kind: "warehouse-create"; payload: CreateWarehouseRequest }
   | { kind: "production-warehouse"; payload: SetProductionWarehouseRequest }
+  | { kind: "movement"; payload: InventoryMovementRequest }
+  | { kind: "transfer"; payload: InventoryTransferRequest }
   | { kind: "opening-count"; payload: OpeningCountRequest }
   | { kind: "opening-review"; countId: string }
   | { kind: "opening-apply"; countId: string };
@@ -11,6 +19,17 @@ const PREFIX = "fieldline:v3:inventory-pending:";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const key = (userId: string) => `${PREFIX}${userId}`;
 const requestId = (value: unknown): value is string => typeof value === "string" && value.length >= 1 && value.length <= 200;
+const productCode = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(value);
+const quantity = (value: unknown): value is string => typeof value === "string"
+  && /^-?(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?$/u.test(value)
+  && !/^-?0(?:\.0{1,6})?$/u.test(value);
+const reason = (value: unknown): value is string => typeof value === "string"
+  && value.trim().length >= 3 && value.trim().length <= 500;
+function inventoryDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
 
 function parse(value: unknown): PendingInventoryRequest | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -26,6 +45,58 @@ function parse(value: unknown): PendingInventoryRequest | null {
     const body = payload as Record<string, unknown>;
     if (requestId(body.requestId) && typeof body.warehouseId === "string" && UUID.test(body.warehouseId)) {
       return { kind: candidate.kind, payload: { requestId: body.requestId, warehouseId: body.warehouseId } };
+    }
+  }
+  if (candidate.kind === "movement" && payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const body = payload as Record<string, unknown>;
+    const hasLotNumber = Object.hasOwn(body, "lotNumber");
+    const hasReceivedOn = Object.hasOwn(body, "receivedOn");
+    const hasExpiresOn = Object.hasOwn(body, "expiresOn");
+    const hasLotMetadata = hasLotNumber || hasReceivedOn || hasExpiresOn;
+    const validLotNumber = !hasLotNumber || (typeof body.lotNumber === "string"
+      && body.lotNumber.trim().length >= 1 && body.lotNumber.trim().length <= 120
+      && !/[\u0000-\u001f\u007f]/u.test(body.lotNumber));
+    const validDates = (!hasReceivedOn || inventoryDate(body.receivedOn))
+      && (!hasExpiresOn || inventoryDate(body.expiresOn))
+      && (!hasReceivedOn || !hasExpiresOn || String(body.expiresOn) >= String(body.receivedOn));
+    if (requestId(body.commandId) && typeof body.warehouseId === "string" && UUID.test(body.warehouseId)
+      && productCode(body.productCode) && (body.type === "receipt" || body.type === "adjustment")
+      && quantity(body.quantity) && reason(body.reason) && validLotNumber && validDates
+      && (body.type !== "receipt" || !body.quantity.startsWith("-"))
+      && (!body.quantity.startsWith("-") || !hasLotMetadata)) {
+      return {
+        kind: candidate.kind,
+        payload: {
+          commandId: body.commandId,
+          warehouseId: body.warehouseId,
+          productCode: body.productCode,
+          type: body.type,
+          quantity: body.quantity,
+          reason: body.reason,
+          ...(hasLotNumber ? { lotNumber: body.lotNumber as string } : {}),
+          ...(hasReceivedOn ? { receivedOn: body.receivedOn as string } : {}),
+          ...(hasExpiresOn ? { expiresOn: body.expiresOn as string } : {}),
+        },
+      };
+    }
+  }
+  if (candidate.kind === "transfer" && payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const body = payload as Record<string, unknown>;
+    if (requestId(body.commandId) && typeof body.sourceWarehouseId === "string" && UUID.test(body.sourceWarehouseId)
+      && typeof body.targetWarehouseId === "string" && UUID.test(body.targetWarehouseId)
+      && body.sourceWarehouseId !== body.targetWarehouseId && productCode(body.productCode)
+      && quantity(body.quantity) && !body.quantity.startsWith("-") && reason(body.reason)) {
+      return {
+        kind: candidate.kind,
+        payload: {
+          commandId: body.commandId,
+          sourceWarehouseId: body.sourceWarehouseId,
+          targetWarehouseId: body.targetWarehouseId,
+          productCode: body.productCode,
+          quantity: body.quantity,
+          reason: body.reason,
+        },
+      };
     }
   }
   if (candidate.kind === "opening-count" && payload && typeof payload === "object" && !Array.isArray(payload)) {

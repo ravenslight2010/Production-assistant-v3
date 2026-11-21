@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
 import * as XLSX from "xlsx";
@@ -72,6 +73,90 @@ test("inventory routes require a verified manager before database access", async
   });
   assert.equal(restrictedPreview.status, 403);
   assert.equal(operator.calls.length, 0);
+});
+
+test("inventory movements preserve legacy hashes and validate optional lot metadata", async (t) => {
+  const accepted = {
+    outcome: "accepted", replayed: false,
+    movementId: "10000000-0000-4000-8000-000000000010",
+    warehouseId: WAREHOUSE_ID, productCode: "FLOUR", quantity: "25", revision: 1,
+  };
+  const api = await withApi(t, {
+    query: async () => ({ rows: [{ result: accepted }] }),
+  });
+  const legacyBody = {
+    commandId: "movement-legacy", warehouseId: WAREHOUSE_ID, productCode: "FLOUR",
+    type: "receipt", quantity: "25", reason: "Legacy receipt",
+  };
+  const legacyResponse = await send(api.baseUrl, "/api/v3/inventory/movements", {
+    method: "POST", body: legacyBody,
+  });
+  assert.equal(legacyResponse.status, 200);
+  const legacyPayload = {
+    warehouseId: WAREHOUSE_ID, productCode: "FLOUR", type: "receipt", quantity: "25", reason: "Legacy receipt",
+  };
+  const legacyHash = createHash("sha256").update(JSON.stringify(legacyPayload), "utf8").digest("hex");
+  assert.equal(api.calls[0].values[3], legacyHash);
+  assert.match(api.calls[0].text, /\$10::text, \$11::date, \$12::date/u);
+  assert.deepEqual(api.calls[0].values.slice(9), [null, null, null]);
+
+  const lotBody = {
+    ...legacyBody, commandId: "movement-lot", lotNumber: "  LOT-A  ",
+    receivedOn: "2026-11-01", expiresOn: "2026-12-01",
+  };
+  const lotResponse = await send(api.baseUrl, "/api/v3/inventory/movements", {
+    method: "POST", body: lotBody,
+  });
+  assert.equal(lotResponse.status, 200);
+  assert.deepEqual(api.calls[1].values.slice(9), ["LOT-A", "2026-11-01", "2026-12-01"]);
+  assert.notEqual(api.calls[1].values[3], legacyHash);
+
+  const rejectedBodies = [
+    { ...legacyBody, commandId: "negative-lot", type: "adjustment", quantity: "-1", lotNumber: "LOT-A" },
+    { ...legacyBody, commandId: "bad-date", receivedOn: "2026-02-30" },
+    { ...legacyBody, commandId: "bad-expiration", receivedOn: "2026-12-01", expiresOn: "2026-11-30" },
+    { ...legacyBody, commandId: "null-lot", lotNumber: null },
+  ];
+  for (const body of rejectedBodies) {
+    const response = await send(api.baseUrl, "/api/v3/inventory/movements", { method: "POST", body });
+    assert.equal(response.status, 400);
+  }
+  assert.equal(api.calls.length, 2);
+});
+
+test("inventory transfers remain strict and CSRF protected", async (t) => {
+  const targetId = "10000000-0000-4000-8000-000000000004";
+  const accepted = {
+    outcome: "accepted", replayed: false, transferId: "10000000-0000-4000-8000-000000000011",
+    productCode: "FLOUR", quantity: "5", sourceWarehouseId: WAREHOUSE_ID,
+    sourceQuantity: "20", sourceRevision: 2, targetWarehouseId: targetId,
+    targetQuantity: "5", targetRevision: 1,
+  };
+  const api = await withApi(t, { query: async () => ({ rows: [{ result: accepted }] }) });
+  const body = {
+    commandId: "transfer-1", sourceWarehouseId: WAREHOUSE_ID, targetWarehouseId: targetId,
+    productCode: "FLOUR", quantity: "5", reason: "Line replenishment",
+  };
+  const extra = await send(api.baseUrl, "/api/v3/inventory/transfers", {
+    method: "POST", body: { ...body, lotNumber: "LOT-A" },
+  });
+  assert.equal(extra.status, 400);
+  const sameWarehouse = await send(api.baseUrl, "/api/v3/inventory/transfers", {
+    method: "POST", body: { ...body, targetWarehouseId: WAREHOUSE_ID },
+  });
+  assert.equal(sameWarehouse.status, 400);
+  assert.equal(api.calls.length, 0);
+
+  const response = await send(api.baseUrl, "/api/v3/inventory/transfers", { method: "POST", body });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), accepted);
+  assert.match(api.calls[0].text, /transfer_inventory/u);
+  assert.deepEqual(api.calls[0].values.slice(4), [WAREHOUSE_ID, targetId, "FLOUR", "5", "Line replenishment"]);
+
+  const noCsrf = await withApi(t, { csrf: false });
+  const denied = await send(noCsrf.baseUrl, "/api/v3/inventory/transfers", { method: "POST", body, csrf: false });
+  assert.equal(denied.status, 403);
+  assert.equal(noCsrf.calls.length, 0);
 });
 
 test("reviewed die defaults are manager-only, strict, and attributed idempotent writes", async (t) => {

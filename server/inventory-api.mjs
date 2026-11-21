@@ -119,6 +119,25 @@ function validateQuantity(value, { positive = false, nonzero = false } = {}) {
   return value;
 }
 
+function validateInventoryDate(value, name) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
+    throw new InventoryApiError(400, `${name} must use YYYY-MM-DD.`);
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw new InventoryApiError(400, `${name} is not a valid calendar date.`);
+  }
+  return value;
+}
+
+function validateLotNumber(value) {
+  if (typeof value !== "string" || value.trim().length < 1 || value.trim().length > 120
+    || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new InventoryApiError(400, "Lot number must be from 1 to 120 characters without control characters.");
+  }
+  return value.trim();
+}
+
 function hashRequest(value) {
   return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 }
@@ -774,7 +793,8 @@ export function createInventoryApi({ pool, authenticate, verifyCsrf, logger = ()
       if (isInventory && url.pathname === `${INVENTORY_PATH}/movements` && request.method === "POST") {
         operation = "record_movement";
         const body = await readJsonBody(request);
-        requireKeys(body, ["commandId", "warehouseId", "productCode", "type", "quantity", "reason"]);
+        const lotFields = ["lotNumber", "receivedOn", "expiresOn"].filter((key) => Object.hasOwn(body, key));
+        requireKeys(body, ["commandId", "warehouseId", "productCode", "type", "quantity", "reason", ...lotFields]);
         const commandId = validateRequestId(body.commandId);
         const warehouseId = validateUuid(body.warehouseId, "Warehouse ID");
         if (typeof body.productCode !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(body.productCode)) {
@@ -787,11 +807,26 @@ export function createInventoryApi({ pool, authenticate, verifyCsrf, logger = ()
         if (body.type === "receipt" && quantity.startsWith("-")) {
           throw new InventoryApiError(400, "A receipt quantity must be positive.");
         }
+        if (quantity.startsWith("-") && lotFields.length > 0) {
+          throw new InventoryApiError(400, "Negative adjustments consume existing lots and cannot supply lot metadata.");
+        }
+        const lotNumber = Object.hasOwn(body, "lotNumber") ? validateLotNumber(body.lotNumber) : null;
+        const receivedOn = Object.hasOwn(body, "receivedOn") ? validateInventoryDate(body.receivedOn, "Received date") : null;
+        const expiresOn = Object.hasOwn(body, "expiresOn") ? validateInventoryDate(body.expiresOn, "Expiration date") : null;
+        if (receivedOn !== null && expiresOn !== null && expiresOn < receivedOn) {
+          throw new InventoryApiError(400, "Expiration date cannot be before the received date.");
+        }
         const reason = validateReason(body.reason);
-        const payload = { warehouseId, productCode: body.productCode, type: body.type, quantity, reason };
+        const basePayload = { warehouseId, productCode: body.productCode, type: body.type, quantity, reason };
+        const payload = lotFields.length === 0 ? basePayload : {
+          ...basePayload,
+          ...(lotNumber === null ? {} : { lotNumber }),
+          ...(receivedOn === null ? {} : { receivedOn }),
+          ...(expiresOn === null ? {} : { expiresOn }),
+        };
         const result = await pool.query(
-          "SELECT v3.record_inventory_movement($1::uuid, $2::uuid, $3::text, $4::text, $5::uuid, $6::text, $7::text, $8::numeric, $9::text) AS result",
-          [...scope, actor, commandId, hashRequest(payload), warehouseId, body.productCode, body.type, quantity, reason],
+          "SELECT v3.record_inventory_movement($1::uuid, $2::uuid, $3::text, $4::text, $5::uuid, $6::text, $7::text, $8::numeric, $9::text, $10::text, $11::date, $12::date) AS result",
+          [...scope, actor, commandId, hashRequest(payload), warehouseId, body.productCode, body.type, quantity, reason, lotNumber, receivedOn, expiresOn],
         );
         sendJson(response, 200, resultValue(result));
         return true;
