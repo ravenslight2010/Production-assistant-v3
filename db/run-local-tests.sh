@@ -714,12 +714,17 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0009-production-schedules.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0010-inventory-lots.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0011-cycle-counts-freezer-pull.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0012-freezer-surplus.sql" >/dev/null
 "${PSQL[@]}" -c "
   GRANT EXECUTE ON FUNCTION v3.warehouse_guidance(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.mark_cycle_counted(uuid, uuid, text, text, text) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.save_cycle_count_schedule(uuid, uuid, text, text, text, integer, boolean, bigint) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.list_freezer_surplus(uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.confirm_freezer_surplus(uuid, uuid, text, text, uuid, integer) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.allocate_freezer_surplus(uuid, uuid, text, text, uuid, date, uuid, integer, bigint) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.adjust_freezer_surplus(uuid, uuid, text, text, uuid, text, integer, text, bigint, uuid) TO v3_api_test;
 " >/dev/null
-for table in v3.cycle_count_schedules v3.cycle_count_confirmations v3.inventory_lots v3.inventory_lot_movements; do
+for table in v3.cycle_count_schedules v3.cycle_count_confirmations v3.inventory_lots v3.inventory_lot_movements v3.freezer_surplus_lots v3.freezer_surplus_confirmations v3.freezer_surplus_allocations v3.freezer_surplus_events; do
   assert_no_direct_table_access "$table"
 done
 "${PSQL[@]}" -c "
@@ -767,6 +772,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0009-production-schedules.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0010-inventory-lots.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0011-cycle-counts-freezer-pull.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0012-freezer-surplus.test.sql"
 ENCODED_DB_USER="$(python3 - "$DB_USER" <<'PY'
 import sys
 import urllib.parse

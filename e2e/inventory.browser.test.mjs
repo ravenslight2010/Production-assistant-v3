@@ -20,6 +20,15 @@ const MOVEMENT_IDS = [
   "76000000-0000-4000-8000-000000000022",
 ];
 const GROUP_ID = "76000000-0000-4000-8000-000000000030";
+const SURPLUS_RUN_ZERO = "76000000-0000-4000-8000-000000000061";
+const SURPLUS_RUN_STORE = "76000000-0000-4000-8000-000000000062";
+const SURPLUS_LOT_ID = "76000000-0000-4000-8000-000000000063";
+const SURPLUS_SCHEDULE_RUN_ID = "76000000-0000-4000-8000-000000000064";
+const SURPLUS_RECEIPT_EVENT_ID = "76000000-0000-4000-8000-000000000065";
+const SURPLUS_ALLOCATION_ID = "76000000-0000-4000-8000-000000000066";
+const SURPLUS_ALLOCATION_EVENT_ID = "76000000-0000-4000-8000-000000000067";
+const SURPLUS_DAMAGE_EVENT_ID = "76000000-0000-4000-8000-000000000068";
+const SURPLUS_CORRECTION_EVENT_ID = "76000000-0000-4000-8000-000000000069";
 const CSV = "product_code,quantity\nDOUGH-A,12.5\nCHEESE-A,0\n";
 const DIST = new URL("../dist/", import.meta.url);
 const PUBLIC_FILES = new Map([
@@ -71,7 +80,7 @@ function json(route, body, status = 200) {
   return route.fulfill({ status, contentType: "application/json", headers: { "Cache-Control": "no-store" }, body: JSON.stringify(body) });
 }
 
-async function installInventoryApi(context, baseUrl, { manager = true, established = false } = {}) {
+async function installInventoryApi(context, baseUrl, { manager = true, established = false, surplus = false } = {}) {
   const warehouses = [];
   const counts = new Map();
   const requests = new Map();
@@ -92,9 +101,20 @@ async function installInventoryApi(context, baseUrl, { manager = true, establish
       { code: "FREEZER-SAUCE", ingredientName: "Browser Sauce", productCode: "SAUCE-A", quantity: null, unit: "lb", resolved: false, warning: "Scheduled quantity is unresolved; check station capacity." },
     ] }] },
   };
+  const surplusLedger = {
+    lots: [],
+    runs: surplus ? [
+      { runId: SURPLUS_RUN_ZERO, label: "No-surplus completed run", productCode: "PIZZA-A", completedAt: "2026-11-21T13:00:00.000Z", decision: null, lotId: null },
+      { runId: SURPLUS_RUN_STORE, label: "Stored-surplus completed run", productCode: "PIZZA-A", completedAt: "2026-11-21T14:00:00.000Z", decision: null, lotId: null },
+    ] : [],
+    scheduleRuns: surplus ? [{ productionDate: "2026-11-23", runId: SURPLUS_SCHEDULE_RUN_ID, productCode: "PIZZA-A", targetCases: 10, carriedInCases: 0, effectiveTargetCases: 10 }] : [],
+    allocations: [],
+    events: [],
+  };
   let loseNextStageResponse = false;
   let loseNextMovementResponse = false;
   let loseNextCountResponse = false;
+  let loseNextSurplusResponse = false;
   let nextMovementId = 40;
   const newMovementId = () => `76000000-0000-4000-8000-${String(nextMovementId++).padStart(12, "0")}`;
   const changeStock = (warehouseId, code, delta) => {
@@ -221,6 +241,86 @@ async function installInventoryApi(context, baseUrl, { manager = true, establish
       Object.assign(schedule, { cadenceDays: body.cadenceDays, enabled: body.enabled, revision: schedule.revision + 1, due: body.enabled && schedule.lastCountedOn === null });
       if (!existing) guidance.cycleCounts.push(schedule);
       const result = { outcome: existing ? body.enabled ? "updated" : "retired" : "created", replayed: false, schedule };
+      commandResults.set(body.requestId, result);
+      return json(route, result);
+    }
+    if (path === "/api/v3/inventory/freezer-surplus" && method === "GET") return json(route, surplusLedger);
+    if (path === "/api/v3/inventory/freezer-surplus/confirm" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      const prior = requests.get(body.requestId);
+      if (prior) {
+        assert.deepEqual(body, prior, "surplus confirmation retry must preserve exact request bytes");
+        return json(route, { ...commandResults.get(body.requestId), replayed: true });
+      }
+      requests.set(body.requestId, body);
+      const run = surplusLedger.runs.find((item) => item.runId === body.runId);
+      assert.ok(run);
+      assert.equal(run.decision, null, "a new request cannot replace an immutable decision");
+      let result;
+      if (body.cases === 0) {
+        Object.assign(run, { decision: "none", lotId: null });
+        result = { outcome: "accepted", replayed: false, runId: run.runId, decision: "none", lotId: null, cases: 0 };
+      } else {
+        assert.equal(run.runId, SURPLUS_RUN_STORE);
+        const lot = { id: SURPLUS_LOT_ID, productCode: run.productCode, productionDate: "2026-11-21", totalCases: body.cases, remainingCases: body.cases, revision: 1, createdAt: "2026-11-21T14:01:00.000Z" };
+        surplusLedger.lots.push(lot);
+        surplusLedger.events.unshift({ id: SURPLUS_RECEIPT_EVENT_ID, lotId: lot.id, eventType: "receipt", quantityDelta: body.cases, reason: "Completed run surplus receipt", correctsEventId: null, createdAt: "2026-11-21T14:01:00.000Z" });
+        Object.assign(run, { decision: "stored", lotId: lot.id });
+        result = { outcome: "accepted", replayed: false, runId: run.runId, decision: "stored", lotId: lot.id, cases: body.cases, remainingCases: lot.remainingCases, revision: lot.revision };
+      }
+      commandResults.set(body.requestId, result);
+      if (loseNextSurplusResponse) {
+        loseNextSurplusResponse = false;
+        return json(route, { error: "Synthetic surplus response loss after commit." }, 500);
+      }
+      return json(route, result);
+    }
+    if (path === "/api/v3/inventory/freezer-surplus/allocations" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      const prior = requests.get(body.requestId);
+      if (prior) {
+        assert.deepEqual(body, prior, "surplus allocation retry must preserve exact request bytes");
+        return json(route, { ...commandResults.get(body.requestId), replayed: true });
+      }
+      requests.set(body.requestId, body);
+      const lot = surplusLedger.lots.find((item) => item.id === body.lotId);
+      const scheduled = surplusLedger.scheduleRuns.find((item) => item.runId === body.scheduleRunId && item.productionDate === body.productionDate);
+      assert.ok(lot && scheduled);
+      assert.equal(lot.revision, body.expectedRevision);
+      assert.equal(lot.productCode, scheduled.productCode);
+      assert.ok(body.cases <= lot.remainingCases && body.cases <= scheduled.effectiveTargetCases);
+      lot.remainingCases -= body.cases;
+      lot.revision += 1;
+      scheduled.carriedInCases += body.cases;
+      scheduled.effectiveTargetCases = scheduled.targetCases - scheduled.carriedInCases;
+      surplusLedger.allocations.unshift({ id: SURPLUS_ALLOCATION_ID, lotId: lot.id, productionDate: scheduled.productionDate, scheduleRunId: scheduled.runId, cases: body.cases, createdAt: "2026-11-21T14:02:00.000Z" });
+      surplusLedger.events.unshift({ id: SURPLUS_ALLOCATION_EVENT_ID, lotId: lot.id, eventType: "allocation", quantityDelta: -body.cases, reason: "Scheduled run carry-in allocation", correctsEventId: null, createdAt: "2026-11-21T14:02:00.000Z" });
+      const result = { outcome: "accepted", replayed: false, allocationId: SURPLUS_ALLOCATION_ID, lotId: lot.id, remainingCases: lot.remainingCases, revision: lot.revision, carriedInCases: scheduled.carriedInCases, effectiveTargetCases: scheduled.effectiveTargetCases };
+      commandResults.set(body.requestId, result);
+      return json(route, result);
+    }
+    if (path === "/api/v3/inventory/freezer-surplus/adjustments" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      const prior = requests.get(body.requestId);
+      if (prior) {
+        assert.deepEqual(body, prior, "surplus adjustment retry must preserve exact request bytes");
+        return json(route, { ...commandResults.get(body.requestId), replayed: true });
+      }
+      requests.set(body.requestId, body);
+      const lot = surplusLedger.lots.find((item) => item.id === body.lotId);
+      assert.ok(lot);
+      assert.equal(lot.revision, body.expectedRevision);
+      if (body.eventType === "correction") assert.ok(surplusLedger.events.some((event) => event.id === body.correctsEventId && event.lotId === lot.id));
+      const delta = body.eventType === "damage" ? -body.cases : body.cases;
+      assert.ok(lot.remainingCases + delta >= 0 && lot.remainingCases + delta <= lot.totalCases);
+      lot.remainingCases += delta;
+      lot.revision += 1;
+      const eventId = body.eventType === "damage" ? SURPLUS_DAMAGE_EVENT_ID : SURPLUS_CORRECTION_EVENT_ID;
+      surplusLedger.events.unshift({ id: eventId, lotId: lot.id, eventType: body.eventType, quantityDelta: delta, reason: body.reason, correctsEventId: body.correctsEventId ?? null, createdAt: body.eventType === "damage" ? "2026-11-21T14:03:00.000Z" : "2026-11-21T14:04:00.000Z" });
+      const result = { outcome: "accepted", replayed: false, eventId, lotId: lot.id, remainingCases: lot.remainingCases, revision: lot.revision };
       commandResults.set(body.requestId, result);
       return json(route, result);
     }
@@ -398,9 +498,11 @@ async function installInventoryApi(context, baseUrl, { manager = true, establish
     targetStock,
     movements,
     targetMovements,
+    surplusLedger,
     loseNextStageResponse: () => { loseNextStageResponse = true; },
     loseNextMovementResponse: () => { loseNextMovementResponse = true; },
     loseNextCountResponse: () => { loseNextCountResponse = true; },
+    loseNextSurplusResponse: () => { loseNextSurplusResponse = true; },
   };
 }
 
@@ -504,11 +606,12 @@ test("React inventory records lot receipts, retries adjustments exactly, and tra
   await page.goto(`${baseUrl}/#inventory`);
   await page.getByRole("heading", { name: "Inventory", exact: true }).waitFor();
   const confirmedStock = page.getByRole("region", { name: "Confirmed quantities", exact: true });
+  const movementPanel = page.getByRole("region", { name: "Receipts, adjustments, and transfers", exact: true });
   await confirmedStock.getByRole("cell", { name: "20", exact: true }).first().waitFor();
 
   await page.getByRole("combobox", { name: "Product", exact: true }).selectOption("DOUGH-A");
   await page.getByLabel("Quantity", { exact: true }).fill("5");
-  await page.getByLabel("Reason", { exact: true }).fill("Browser lot receipt");
+  await movementPanel.getByLabel("Reason", { exact: true }).fill("Browser lot receipt");
   await page.getByLabel(/Lot number/u).fill("LOT-BROWSER-A");
   await page.getByLabel(/Received date/u).fill("2026-11-01");
   await page.getByLabel(/Expiration date/u).fill("2026-12-01");
@@ -526,7 +629,7 @@ test("React inventory records lot receipts, retries adjustments exactly, and tra
   await page.getByRole("button", { name: "Adjustment", exact: true }).click();
   await page.getByRole("combobox", { name: "Product", exact: true }).selectOption("DOUGH-A");
   await page.getByLabel("Quantity (+/-)", { exact: true }).fill("-2");
-  await page.getByLabel("Reason", { exact: true }).fill("Browser damage adjustment");
+  await movementPanel.getByLabel("Reason", { exact: true }).fill("Browser damage adjustment");
   assert.equal(await page.getByLabel(/Lot number/u).count(), 0, "negative adjustments cannot supply lot metadata");
   const originalAdjustment = {
     commandId: "", warehouseId: WAREHOUSE_ID, productCode: "DOUGH-A", type: "adjustment",
@@ -551,7 +654,7 @@ test("React inventory records lot receipts, retries adjustments exactly, and tra
   await page.getByRole("button", { name: "Transfer", exact: true }).click();
   await page.getByRole("combobox", { name: "Product", exact: true }).selectOption("DOUGH-A");
   await page.getByLabel("Quantity", { exact: true }).fill("3");
-  await page.getByLabel("Reason", { exact: true }).fill("Browser warehouse transfer");
+  await movementPanel.getByLabel("Reason", { exact: true }).fill("Browser warehouse transfer");
   assert.equal(await page.getByRole("combobox", { name: "Target warehouse", exact: true }).inputValue(), TARGET_WAREHOUSE_ID);
   await page.getByRole("button", { name: "Transfer stock", exact: true }).click();
   await page.getByText(/Transfer recorded\. Source stock, destination lots, and movement history were confirmed\./u).waitFor();
@@ -584,6 +687,82 @@ test("React inventory records lot receipts, retries adjustments exactly, and tra
     await page.setViewportSize(viewport);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
       `the movement workflow must fit ${viewport.width}x${viewport.height}`);
+  }
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test("React freezer surplus retries exact decisions and separates carry-in history from ingredient stock", { timeout: 90_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installInventoryApi(context, baseUrl, { established: true, surplus: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#inventory`);
+  const panel = page.getByRole("region", { name: "Freezer surplus", exact: true });
+  await panel.waitFor();
+
+  await panel.getByRole("button", { name: "Confirm no surplus", exact: true }).click();
+  await page.getByText(/No-surplus decision saved permanently for the completed run/u).waitFor();
+  assert.equal(api.surplusLedger.lots.length, 0);
+  assert.equal(api.surplusLedger.runs.find((run) => run.runId === SURPLUS_RUN_ZERO).decision, "none");
+
+  await panel.getByLabel("Completed run", { exact: true }).selectOption(SURPLUS_RUN_STORE);
+  await panel.getByLabel("Surplus cases", { exact: true }).fill("4");
+  api.loseNextSurplusResponse();
+  await panel.getByRole("button", { name: "Store surplus", exact: true }).click();
+  await page.getByText(/Retry the same request; its identity prevents duplicate writes/u).waitFor();
+  assert.equal(api.surplusLedger.lots.length, 1, "the positive decision committed before response loss");
+  assert.equal(api.surplusLedger.events.length, 1);
+  const originalConfirmation = [...api.requests.values()].find((request) => request.runId === SURPLUS_RUN_STORE);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Retry the same inventory request", exact: true }).click();
+  await page.getByText(/Previous request confirmed\. 4 finished cases stored/u).waitFor();
+  assert.equal(api.surplusLedger.lots.length, 1, "exact retry must not create a second lot");
+  assert.equal(api.surplusLedger.events.filter((event) => event.eventType === "receipt").length, 1);
+  assert.deepEqual([...api.requests.values()].find((request) => request.runId === SURPLUS_RUN_STORE), originalConfirmation);
+  await panel.getByText("4 / 4 cases", { exact: true }).waitFor();
+
+  await panel.getByLabel("Scheduled run", { exact: true }).selectOption(SURPLUS_SCHEDULE_RUN_ID);
+  await panel.getByLabel("Carry-in cases", { exact: true }).fill("2");
+  await panel.getByRole("button", { name: "Allocate carry-in", exact: true }).click();
+  await page.getByText(/Carry-in allocated\. 2 carried-in cases leave an effective production target of 8; ingredients were not deducted again/u).waitFor();
+  assert.equal(api.surplusLedger.lots[0].remainingCases, 2);
+  assert.equal(api.surplusLedger.scheduleRuns[0].effectiveTargetCases, 8);
+  assert.equal(api.movements.length, 0, "carry-in must not deduct ingredient stock");
+
+  await panel.getByLabel("Event type", { exact: true }).selectOption("damage");
+  await panel.getByLabel("Cases", { exact: true }).fill("1");
+  await panel.getByLabel("Reason", { exact: true }).fill("Synthetic freezer damage");
+  await panel.getByRole("button", { name: "Append damage", exact: true }).click();
+  await page.getByText(/Surplus damage appended\. 1 physically remaining cases/u).waitFor();
+  assert.equal(api.surplusLedger.events.length, 3);
+
+  await panel.getByLabel("Event type", { exact: true }).selectOption("correction");
+  await panel.getByLabel("Signed correction cases", { exact: true }).fill("1");
+  await panel.getByLabel("Corrected event", { exact: true }).selectOption(SURPLUS_DAMAGE_EVENT_ID);
+  await panel.getByLabel("Reason", { exact: true }).fill("Damage review found one intact case");
+  await panel.getByRole("button", { name: "Append correction", exact: true }).click();
+  await page.getByText(/Surplus correction appended\. 2 physically remaining cases/u).waitFor();
+  assert.equal(api.surplusLedger.events.length, 4);
+  assert.equal(api.surplusLedger.events[0].correctsEventId, SURPLUS_DAMAGE_EVENT_ID);
+  assert.equal(api.movements.length, 0, "physical surplus corrections must not append ingredient movements");
+
+  const writesBeforeOffline = api.writes.length;
+  await context.setOffline(true);
+  await page.getByText("Loaded values only · no file retained or writes queued", { exact: true }).waitFor();
+  assert.equal(await panel.getByRole("button", { name: "Allocate carry-in", exact: true }).isDisabled(), true);
+  assert.equal(await panel.getByRole("button", { name: "Append correction", exact: true }).isDisabled(), true);
+  assert.equal(api.writes.length, writesBeforeOffline);
+  await context.setOffline(false);
+  await page.getByText("Canonical facility inventory · manage-inventory", { exact: true }).waitFor();
+
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 1024, height: 768 }]) {
+    await page.setViewportSize(viewport);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+      `the freezer surplus workflow must fit ${viewport.width}x${viewport.height}`);
   }
   assert.deepEqual(errors, []);
   await context.close();

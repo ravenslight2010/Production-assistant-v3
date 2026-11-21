@@ -140,6 +140,12 @@ export function ScheduleRunCard({
         </label>
       </div>
 
+      {!isNew && !dirty && run.carriedInCases !== undefined && run.effectiveTargetCases !== undefined ? (
+        <div className="notice-banner mt-5" role="status">
+          <span><strong>Freezer carry-in: {run.carriedInCases} cases.</strong> Effective production target: {run.effectiveTargetCases} of {run.targetCases} planned cases. Allocated surplus does not deduct ingredients again.</span>
+        </div>
+      ) : null}
+
       <div className="mt-5 flex flex-wrap gap-2 border-t border-border/70 pt-4">
         <button type="button" className="button-primary" disabled={disabled || !dirty} onClick={onSave}>
           {isNew ? "Add to plan" : `Save run ${position}`}

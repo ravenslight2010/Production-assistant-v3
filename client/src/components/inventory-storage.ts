@@ -1,4 +1,7 @@
 import type {
+  AdjustFreezerSurplusRequest,
+  AllocateFreezerSurplusRequest,
+  ConfirmFreezerSurplusRequest,
   CreateWarehouseRequest,
   InventoryMovementRequest,
   InventoryTransferRequest,
@@ -17,7 +20,10 @@ export type PendingInventoryRequest =
   | { kind: "opening-review"; countId: string }
   | { kind: "opening-apply"; countId: string }
   | { kind: "cycle-count-mark"; payload: MarkCycleCountedRequest }
-  | { kind: "cycle-count-schedule"; payload: SaveCycleCountScheduleRequest };
+  | { kind: "cycle-count-schedule"; payload: SaveCycleCountScheduleRequest }
+  | { kind: "surplus-confirm"; payload: ConfirmFreezerSurplusRequest }
+  | { kind: "surplus-allocation"; payload: AllocateFreezerSurplusRequest }
+  | { kind: "surplus-adjustment"; payload: AdjustFreezerSurplusRequest };
 
 const PREFIX = "fieldline:v3:inventory-pending:";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -130,6 +136,44 @@ function parse(value: unknown): PendingInventoryRequest | null {
       return { kind: candidate.kind, payload: {
         requestId: body.requestId, section: body.section, cadenceDays: body.cadenceDays as number,
         enabled: body.enabled, expectedRevision: body.expectedRevision as number,
+      } };
+    }
+  }
+  if (candidate.kind === "surplus-confirm" && payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const body = payload as Record<string, unknown>;
+    if (requestId(body.requestId) && typeof body.runId === "string" && UUID.test(body.runId)
+      && Number.isSafeInteger(body.cases) && Number(body.cases) >= 0 && Number(body.cases) <= 1_000_000) {
+      return { kind: candidate.kind, payload: { requestId: body.requestId, runId: body.runId, cases: body.cases as number } };
+    }
+  }
+  if (candidate.kind === "surplus-allocation" && payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const body = payload as Record<string, unknown>;
+    if (requestId(body.requestId) && typeof body.lotId === "string" && UUID.test(body.lotId)
+      && inventoryDate(body.productionDate) && typeof body.scheduleRunId === "string" && UUID.test(body.scheduleRunId)
+      && Number.isSafeInteger(body.cases) && Number(body.cases) >= 1 && Number(body.cases) <= 1_000_000
+      && Number.isSafeInteger(body.expectedRevision) && Number(body.expectedRevision) >= 1) {
+      return { kind: candidate.kind, payload: {
+        requestId: body.requestId, lotId: body.lotId, productionDate: body.productionDate,
+        scheduleRunId: body.scheduleRunId, cases: body.cases as number, expectedRevision: body.expectedRevision as number,
+      } };
+    }
+  }
+  if (candidate.kind === "surplus-adjustment" && payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const body = payload as Record<string, unknown>;
+    const adjustment = body.eventType === "damage" || body.eventType === "return" || body.eventType === "correction";
+    const hasCorrection = Object.hasOwn(body, "correctsEventId");
+    const validCorrection = body.eventType === "correction"
+      ? hasCorrection && typeof body.correctsEventId === "string" && UUID.test(body.correctsEventId)
+      : !hasCorrection;
+    if (requestId(body.requestId) && typeof body.lotId === "string" && UUID.test(body.lotId) && adjustment
+      && Number.isSafeInteger(body.cases) && Number(body.cases) !== 0 && Math.abs(Number(body.cases)) <= 1_000_000
+      && (body.eventType === "correction" || Number(body.cases) > 0) && reason(body.reason) && validCorrection
+      && Number.isSafeInteger(body.expectedRevision) && Number(body.expectedRevision) >= 1) {
+      return { kind: candidate.kind, payload: {
+        requestId: body.requestId, lotId: body.lotId,
+        eventType: body.eventType as AdjustFreezerSurplusRequest["eventType"], cases: body.cases as number,
+        reason: body.reason, expectedRevision: body.expectedRevision as number,
+        ...(body.eventType === "correction" ? { correctsEventId: body.correctsEventId as string } : {}),
       } };
     }
   }

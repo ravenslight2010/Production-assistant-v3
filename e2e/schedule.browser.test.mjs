@@ -76,6 +76,10 @@ async function installScheduleApi(context, baseUrl, { manager = true } = {}) {
     if (!schedules.has(date)) schedules.set(date, emptySchedule(date));
     return schedules.get(date);
   };
+  const projectSurplus = (schedule) => ({
+    ...schedule,
+    runs: schedule.runs.map((run) => ({ ...run, carriedInCases: 0, effectiveTargetCases: run.targetCases })),
+  });
 
   await context.addCookies([{ name: "v3_csrf", value: CSRF_TOKEN, url: baseUrl }]);
   await context.route("**/api/v3/**", async (route) => {
@@ -97,7 +101,7 @@ async function installScheduleApi(context, baseUrl, { manager = true } = {}) {
     }
     if (path === "/api/v3/schedules" && method === "GET") {
       scheduleRequests.push(path);
-      return json(route, { schedule: getSchedule(url.searchParams.get("date")) });
+      return json(route, { schedule: projectSurplus(getSchedule(url.searchParams.get("date"))) });
     }
     if (path === "/api/v3/schedules/import-preview" && method === "POST") {
       const body = request.postDataJSON();
@@ -130,21 +134,21 @@ async function installScheduleApi(context, baseUrl, { manager = true } = {}) {
       assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
       commands.push(body);
       const receipt = receipts.get(body.requestId);
-      if (receipt) return json(route, { outcome: "accepted", replayed: true, schedule: receipt.schedule });
+      if (receipt) return json(route, { outcome: "accepted", replayed: true, schedule: projectSurplus(receipt.schedule) });
       const current = getSchedule(body.date);
-      if (body.expectedRevision !== current.revision) return json(route, { outcome: "conflict", replayed: false, schedule: current }, 409);
+      if (body.expectedRevision !== current.revision) return json(route, { outcome: "conflict", replayed: false, schedule: projectSurplus(current) }, 409);
       const next = {
         ...applyScheduleCommand(current, body.command),
         revision: current.revision + 1,
         updatedAt: "2026-11-18T12:00:00.000Z",
       };
       schedules.set(body.date, next);
-      receipts.set(body.requestId, { schedule: next });
+      receipts.set(body.requestId, { schedule: projectSurplus(next) });
       if (loseNextResponse) {
         loseNextResponse = false;
         return json(route, { error: "Synthetic response loss after commit." }, 500);
       }
-      return json(route, { outcome: "accepted", replayed: false, schedule: next });
+      return json(route, { outcome: "accepted", replayed: false, schedule: projectSurplus(next) });
     }
     return json(route, { error: `Unexpected test request: ${method} ${path}` }, 500);
   });
@@ -185,6 +189,9 @@ test("React schedule confirms commands, exact retry, conflicts, import review, a
   assert.equal(api.commands[0].expectedRevision, 0);
 
   const firstRun = page.getByRole("article", { name: "Planned run 1", exact: true });
+  await firstRun.getByText("Freezer carry-in: 0 cases", { exact: false }).waitFor();
+  await firstRun.getByText("Effective production target: 20 of 20 planned cases", { exact: false }).waitFor();
+  await page.getByText("20 effective / 20 planned cases", { exact: false }).first().waitFor();
   await firstRun.getByLabel(/^Target cases for /).fill("25");
   api.loseNextResponse();
   await firstRun.getByRole("button", { name: "Save run 1" }).click();

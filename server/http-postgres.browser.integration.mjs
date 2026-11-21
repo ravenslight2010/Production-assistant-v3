@@ -73,6 +73,9 @@ async function main() {
   let loseOpeningStageResponse = false;
   let openingCountId;
   let openingStageRequestBody;
+  let loseSurplusConfirmResponse = false;
+  let surplusLotId;
+  let surplusConfirmRequestBody;
   let serverInstance;
   let browser;
   try {
@@ -166,6 +169,23 @@ async function main() {
           status: 500,
           contentType: "application/json",
           body: JSON.stringify({ error: "Synthetic opening-count response loss after the disposable database commit." }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.route("**/api/v3/inventory/freezer-surplus/confirm", async (route) => {
+      if (loseSurplusConfirmResponse && route.request().method() === "POST") {
+        loseSurplusConfirmResponse = false;
+        surplusConfirmRequestBody = route.request().postDataJSON();
+        const committed = await route.fetch();
+        assert.equal(committed.status(), 200, await committed.text());
+        surplusLotId = (await committed.json()).lotId;
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Synthetic surplus response loss after the disposable database commit." }),
         });
         return;
       }
@@ -785,6 +805,95 @@ async function main() {
     assert.equal(consumptionRows.rows.length, 1);
     assert.equal(Number(consumptionRows.rows[0].quantity_delta), -10);
 
+    const surplusPanel = page.getByRole("region", { name: "Freezer surplus", exact: true });
+    await surplusPanel.getByLabel("Completed run", { exact: true }).selectOption(inventoryRun.id);
+    await surplusPanel.getByLabel("Surplus cases", { exact: true }).fill("2");
+    const ingredientMovementsBeforeSurplus = await adminPool.query("SELECT count(*)::integer AS count FROM v3.inventory_movements");
+    const surplusLotBaseline = await adminPool.query("SELECT count(*)::integer AS count FROM v3.freezer_surplus_lots");
+    loseSurplusConfirmResponse = true;
+    await surplusPanel.getByRole("button", { name: "Store surplus", exact: true }).click();
+    await page.getByText(/Retry the same request; its identity prevents duplicate writes/).waitFor();
+    assert.match(surplusLotId ?? "", /^[0-9a-f-]{36}$/);
+    let surplusLots = await adminPool.query(
+      "SELECT id::text AS id, total_cases, remaining_cases, revision FROM v3.freezer_surplus_lots ORDER BY created_at, id",
+    );
+    assert.equal(surplusLots.rows.length, surplusLotBaseline.rows[0].count + 1,
+      "the shared disposable database must gain exactly one committed surplus lot");
+    const confirmedLot = surplusLots.rows.find((lot) => lot.id === surplusLotId);
+    assert.ok(confirmedLot, "the captured confirmation lot must be present in PostgreSQL");
+    assert.equal(confirmedLot.remaining_cases, 2);
+
+    await page.reload();
+    const retrySurplusResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/inventory/freezer-surplus/confirm"
+      && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Retry the same inventory request", exact: true }).click();
+    const retrySurplusResponse = await retrySurplusResponsePromise;
+    assert.equal(retrySurplusResponse.status(), 200, await retrySurplusResponse.text());
+    assert.deepEqual(retrySurplusResponse.request().postDataJSON(), surplusConfirmRequestBody,
+      "the real surplus retry must preserve the exact confirmation request bytes");
+    const retrySurplusBody = await retrySurplusResponse.json();
+    assert.equal(retrySurplusBody.replayed, true);
+    assert.equal(retrySurplusBody.lotId, surplusLotId, "exact replay must return the originally committed lot");
+    await page.getByText(/Previous request confirmed\. 2 finished cases stored/).waitFor();
+    surplusLots = await adminPool.query(
+      "SELECT id::text AS id, total_cases, remaining_cases, revision FROM v3.freezer_surplus_lots ORDER BY created_at, id",
+    );
+    assert.equal(surplusLots.rows.length, surplusLotBaseline.rows[0].count + 1, "exact replay must not create another lot");
+    assert.equal(surplusLots.rows.filter((lot) => lot.id === surplusLotId).length, 1);
+    await surplusPanel.getByRole("button", { name: `Select surplus lot ${surplusLotId}`, exact: true }).click();
+
+    await surplusPanel.getByLabel("Scheduled run", { exact: true }).selectOption(plannedRunId);
+    await surplusPanel.getByLabel("Carry-in cases", { exact: true }).fill("1");
+    const surplusAllocationResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/inventory/freezer-surplus/allocations"
+      && response.request().method() === "POST");
+    await surplusPanel.getByRole("button", { name: "Allocate carry-in", exact: true }).click();
+    const surplusAllocationResponse = await surplusAllocationResponsePromise;
+    assert.equal(surplusAllocationResponse.status(), 200, await surplusAllocationResponse.text());
+    const surplusAllocationRequestBody = surplusAllocationResponse.request().postDataJSON();
+    const surplusAllocationBody = await surplusAllocationResponse.json();
+    assert.equal(surplusAllocationRequestBody.lotId, surplusLotId, "the browser must allocate the confirmed lot");
+    assert.equal(surplusAllocationRequestBody.scheduleRunId, plannedRunId);
+    assert.equal(surplusAllocationBody.lotId, surplusLotId, "the server must allocate the same confirmed lot");
+    assert.equal(surplusAllocationBody.remainingCases, 1);
+    assert.equal(surplusAllocationBody.carriedInCases, 1);
+    assert.equal(surplusAllocationBody.effectiveTargetCases, 4);
+    await page.getByText(/Carry-in allocated\. 1 carried-in cases leave an effective production target of 4/).waitFor();
+    surplusLots = await adminPool.query(
+      "SELECT id::text AS id, total_cases, remaining_cases, revision FROM v3.freezer_surplus_lots ORDER BY created_at, id",
+    );
+    assert.equal(surplusLots.rows.length, surplusLotBaseline.rows[0].count + 1);
+    const allocatedLot = surplusLots.rows.find((lot) => lot.id === surplusLotId);
+    assert.ok(allocatedLot);
+    assert.equal(allocatedLot.remaining_cases, 1);
+
+    await page.getByRole("button", { name: "Schedule", exact: true }).click();
+    await page.getByLabel("Production date", { exact: true }).fill(SCHEDULE_DATE);
+    const carriedInCard = page.getByRole("article", { name: "Planned run 1", exact: true });
+    await carriedInCard.getByText("Freezer carry-in: 1 cases", { exact: false }).waitFor();
+    await carriedInCard.getByText("Effective production target: 4 of 5 planned cases", { exact: false }).waitFor();
+    await page.getByRole("button", { name: "Inventory", exact: true }).click();
+    await surplusPanel.getByRole("button", { name: `Select surplus lot ${surplusLotId}`, exact: true }).click();
+    await surplusPanel.getByLabel("Event type", { exact: true }).selectOption("damage");
+    await surplusPanel.getByLabel("Cases", { exact: true }).fill("1");
+    await surplusPanel.getByLabel("Reason", { exact: true }).fill("Real browser freezer damage");
+    await surplusPanel.getByRole("button", { name: "Append damage", exact: true }).click();
+    await page.getByText(/Surplus damage appended\. 0 physically remaining cases/).waitFor();
+    const finalSurplusLot = await adminPool.query(
+      "SELECT remaining_cases, revision FROM v3.freezer_surplus_lots WHERE id = $1",
+      [surplusLotId],
+    );
+    assert.equal(finalSurplusLot.rows[0].remaining_cases, 0);
+    const surplusEventCount = await adminPool.query(
+      "SELECT count(*)::integer AS count FROM v3.freezer_surplus_events WHERE lot_id = $1",
+      [surplusLotId],
+    );
+    assert.equal(surplusEventCount.rows[0].count, 3);
+    const ingredientMovementsAfterSurplus = await adminPool.query("SELECT count(*)::integer AS count FROM v3.inventory_movements");
+    assert.equal(ingredientMovementsAfterSurplus.rows[0].count, ingredientMovementsBeforeSurplus.rows[0].count,
+      "the real surplus workflow must not append ingredient movements");
+
     await page.getByLabel("Opening count CSV", { exact: true }).setInputFiles({
       name: "offline-inventory-not-retained.csv",
       mimeType: "text/csv",
@@ -796,6 +905,8 @@ async function main() {
     await page.getByText("Loaded values only · no file retained or writes queued", { exact: true }).waitFor();
     assert.equal(await page.getByLabel("Opening count CSV", { exact: true }).evaluate((input) => input.files.length), 0);
     assert.equal(await page.getByRole("button", { name: "Stage opening count", exact: true }).isDisabled(), true);
+    assert.equal(await surplusPanel.getByRole("button", { name: "Allocate carry-in", exact: true }).isDisabled(), true);
+    assert.equal(await surplusPanel.getByRole("button", { name: "Append damage", exact: true }).isDisabled(), true);
     assert.equal(browserWrites.length, writesBeforeInventoryOffline, "offline inventory mode must not issue writes");
     await context.setOffline(false);
     offlineCheckActive = false;
@@ -858,8 +969,9 @@ async function main() {
       "409 /api/v3/schedules/commands",
       "500 /api/v3/setup-catalog/imports",
       "500 /api/v3/inventory/opening-counts",
+      "500 /api/v3/inventory/freezer-surplus/confirm",
     ], "only deliberate stale conflicts and injected post-commit response loss should be rejected");
-    console.log("V3 authenticated Chromium/PostgreSQL journey passed: run control; React schedule commands, exact retry, stale conflict, deterministic workbook Apply; setup CSV and source-workbook stage/review/Apply/Undo/reopen with exact retry and real catalog readback; inventory warehouse/opening-count exact retry/Review/Apply, stock/movement and production-warehouse readback; reload persistence, offline write lockout, staff creation, and desktop/phone/tablet layouts.");
+    console.log("V3 authenticated Chromium/PostgreSQL journey passed: run control; React schedule commands, exact retry, stale conflict, deterministic workbook Apply; setup CSV and source-workbook stage/review/Apply/Undo/reopen with exact retry and real catalog readback; inventory warehouse/opening-count exact retry/Review/Apply, stock/movement and production-warehouse readback; freezer-surplus exact replay, single-lot carry-in, schedule projection, physical damage, and no repeat ingredient deduction; reload persistence, offline write lockout, staff creation, and desktop/phone/tablet layouts.");
 
     let webkitBrowser;
     try {
@@ -877,6 +989,9 @@ async function main() {
       await webkitPage.getByLabel("Production date", { exact: true }).fill(SCHEDULE_DATE);
       await webkitPage.getByRole("article", { name: "Planned run 3", exact: true }).waitFor();
       assert.equal(await webkitPage.getByRole("article", { name: /^Planned run / }).count(), 3);
+      const webkitCarryIn = webkitPage.getByRole("article", { name: "Planned run 1", exact: true });
+      await webkitCarryIn.getByText("Freezer carry-in: 1 cases", { exact: false }).waitFor();
+      await webkitCarryIn.getByText("Effective production target: 4 of 5 planned cases", { exact: false }).waitFor();
       assert.ok(await webkitPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
       await webkitPage.getByRole("button", { name: "Setup", exact: true }).click();
       await webkitPage.getByRole("heading", { name: "Setup and master data", exact: true }).waitFor();
@@ -896,8 +1011,11 @@ async function main() {
       await webkitPage.getByRole("button", { name: "Reopen count 1", exact: true }).click();
       await webkitPage.getByRole("region", { name: "Opening count review", exact: true }).getByText("applied", { exact: true }).waitFor();
       await webkitPage.getByText("Used for new production runs. Existing runs keep their original warehouse snapshot.", { exact: true }).waitFor();
+      const webkitSurplus = webkitPage.getByRole("region", { name: "Freezer surplus", exact: true });
+      await webkitSurplus.getByText("0 / 2 cases", { exact: true }).waitFor();
+      await webkitSurplus.getByText("Real browser freezer damage", { exact: true }).waitFor();
       assert.ok(await webkitPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
-      console.log("V3 WebKit/Safari-engine React/PostgreSQL run, schedule, setup history, inventory stock, opening-count, and production-warehouse readback passed.");
+      console.log("V3 WebKit/Safari-engine React/PostgreSQL run, schedule carry-in, setup history, inventory stock, opening-count, production-warehouse, and freezer-surplus readback passed.");
       await webkitBrowser.close();
     } catch (error) {
       if (webkitBrowser) {

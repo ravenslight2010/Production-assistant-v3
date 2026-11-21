@@ -1222,6 +1222,105 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
+  /api/v3/inventory/freezer-surplus:
+    get:
+      operationId: listFreezerSurplus
+      summary: Read the manager-only finished-case surplus ledger
+      responses:
+        "200":
+          description: Finished-case lots, run decisions, allocations, and events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreezerSurplusLedger"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v3/inventory/freezer-surplus/confirm:
+    post:
+      operationId: confirmFreezerSurplus
+      summary: Save one immutable none-or-stored decision for a completed run
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmFreezerSurplusRequest"
+      responses:
+        "200":
+          description: Surplus decision accepted or replayed exactly
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreezerSurplusMutationResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v3/inventory/freezer-surplus/allocations:
+    post:
+      operationId: allocateFreezerSurplus
+      summary: Allocate finished cases to a matching scheduled run without ingredient movement
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AllocateFreezerSurplusRequest"
+      responses:
+        "200":
+          description: Allocation accepted or replayed exactly
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreezerSurplusMutationResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v3/inventory/freezer-surplus/adjustments:
+    post:
+      operationId: adjustFreezerSurplus
+      summary: Append a reasoned damage, return, or linked correction event
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdjustFreezerSurplusRequest"
+      responses:
+        "200":
+          description: Adjustment accepted or replayed exactly
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreezerSurplusMutationResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
   /api/v3/inventory/warehouse-guidance:
     get:
       operationId: getWarehouseGuidance
@@ -3115,6 +3214,129 @@ components:
           type: string
           minLength: 1
           maxLength: 120
+    FreezerSurplusLedger:
+      type: object
+      required: [lots, runs, scheduleRuns, allocations, events]
+      properties:
+        lots:
+          type: array
+          items:
+            $ref: "#/components/schemas/FreezerSurplusLot"
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/FreezerSurplusRun"
+        scheduleRuns:
+          type: array
+          items:
+            $ref: "#/components/schemas/FreezerSurplusScheduleRun"
+        allocations:
+          type: array
+          items:
+            $ref: "#/components/schemas/FreezerSurplusAllocation"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/FreezerSurplusEvent"
+    FreezerSurplusLot:
+      type: object
+      required: [id, productCode, productionDate, totalCases, remainingCases, revision, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        productCode: { type: string }
+        productionDate: { type: string, format: date }
+        totalCases: { type: integer, minimum: 1 }
+        remainingCases: { type: integer, minimum: 0 }
+        revision: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+    FreezerSurplusRun:
+      type: object
+      required: [runId, label, productCode, completedAt, decision, lotId]
+      properties:
+        runId: { type: string, format: uuid }
+        label: { type: string }
+        productCode: { type: string }
+        completedAt: { type: string, format: date-time }
+        decision: { type: [string, "null"], enum: [none, stored, "null"] }
+        lotId: { type: [string, "null"], format: uuid }
+    FreezerSurplusScheduleRun:
+      type: object
+      required: [productionDate, runId, productCode, targetCases, carriedInCases, effectiveTargetCases]
+      properties:
+        productionDate: { type: string, format: date }
+        runId: { type: string, format: uuid }
+        productCode: { type: string }
+        targetCases: { type: integer, minimum: 1 }
+        carriedInCases: { type: integer, minimum: 0 }
+        effectiveTargetCases: { type: integer, minimum: 0 }
+    FreezerSurplusAllocation:
+      type: object
+      required: [id, lotId, productionDate, scheduleRunId, cases, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        lotId: { type: string, format: uuid }
+        productionDate: { type: string, format: date }
+        scheduleRunId: { type: string, format: uuid }
+        cases: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+    FreezerSurplusEvent:
+      type: object
+      required: [id, lotId, eventType, quantityDelta, reason, correctsEventId, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        lotId: { type: string, format: uuid }
+        eventType: { type: string, enum: [receipt, allocation, damage, return, correction] }
+        quantityDelta: { type: integer }
+        reason: { type: string }
+        correctsEventId: { type: [string, "null"], format: uuid }
+        createdAt: { type: string, format: date-time }
+    ConfirmFreezerSurplusRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, runId, cases]
+      properties:
+        requestId: { type: string, format: uuid }
+        runId: { type: string, format: uuid }
+        cases: { type: integer, minimum: 0, maximum: 1000000 }
+    AllocateFreezerSurplusRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, lotId, productionDate, scheduleRunId, cases, expectedRevision]
+      properties:
+        requestId: { type: string, format: uuid }
+        lotId: { type: string, format: uuid }
+        productionDate: { type: string, format: date }
+        scheduleRunId: { type: string, format: uuid }
+        cases: { type: integer, minimum: 1, maximum: 1000000 }
+        expectedRevision: { type: integer, minimum: 1 }
+    AdjustFreezerSurplusRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, lotId, eventType, cases, reason, expectedRevision]
+      properties:
+        requestId: { type: string, format: uuid }
+        lotId: { type: string, format: uuid }
+        eventType: { type: string, enum: [damage, return, correction] }
+        cases: { type: integer, minimum: -1000000, maximum: 1000000 }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+        expectedRevision: { type: integer, minimum: 1 }
+        correctsEventId: { type: string, format: uuid }
+    FreezerSurplusMutationResult:
+      type: object
+      required: [outcome, replayed]
+      properties:
+        outcome: { const: accepted }
+        replayed: { type: boolean }
+        runId: { type: string, format: uuid }
+        decision: { type: string, enum: [none, stored] }
+        lotId: { type: string, format: uuid }
+        allocationId: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        cases: { type: integer, minimum: 0 }
+        remainingCases: { type: integer, minimum: 0 }
+        revision: { type: integer, minimum: 1 }
+        carriedInCases: { type: integer, minimum: 0 }
+        effectiveTargetCases: { type: integer, minimum: 0 }
     WarehouseGuidance:
       type: object
       required: [factoryDate, cycleCounts, freezerPull]
@@ -3713,6 +3935,14 @@ components:
         notes:
           type: string
           maxLength: 500
+        carriedInCases:
+          type: integer
+          minimum: 0
+          description: Server-derived finished-case carry-in; never accepted as a schedule input.
+        effectiveTargetCases:
+          type: integer
+          minimum: 0
+          description: Target cases minus carried-in surplus.
     ScheduleBreak:
       type: object
       additionalProperties: false

@@ -46,6 +46,12 @@ export type WarehouseGuidance = components["schemas"]["WarehouseGuidance"];
 export type CycleCountSchedule = components["schemas"]["CycleCountSchedule"];
 export type MarkCycleCountedRequest = components["schemas"]["MarkCycleCountedRequest"];
 export type SaveCycleCountScheduleRequest = components["schemas"]["SaveCycleCountScheduleRequest"];
+export type FreezerSurplusLedger = components["schemas"]["FreezerSurplusLedger"];
+export type FreezerSurplusLot = components["schemas"]["FreezerSurplusLot"];
+export type FreezerSurplusEvent = components["schemas"]["FreezerSurplusEvent"];
+export type ConfirmFreezerSurplusRequest = components["schemas"]["ConfirmFreezerSurplusRequest"];
+export type AllocateFreezerSurplusRequest = components["schemas"]["AllocateFreezerSurplusRequest"];
+export type AdjustFreezerSurplusRequest = components["schemas"]["AdjustFreezerSurplusRequest"];
 export type InventoryMovementPage = { movements: InventoryMovement[]; nextCursor: { occurredAt: string; id: string } | null };
 export type ScheduleCommandResult = {
   schedule: ProductionSchedule;
@@ -521,6 +527,99 @@ export async function saveCycleCountSchedule(request: SaveCycleCountScheduleRequ
     || result.schedule.section !== request.section || result.schedule.cadenceDays !== request.cadenceDays
     || result.schedule.enabled !== request.enabled) {
     throw new ApiError("The server did not confirm the cycle-count schedule. Retry the same request.", 502);
+  }
+  return result;
+}
+
+function isTimestamp(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function isSurplusLot(value: unknown): value is FreezerSurplusLot {
+  return object(value) && UUID.test(String(value.id)) && INVENTORY_CODE.test(String(value.productCode))
+    && typeof value.productionDate === "string" && CALENDAR_DATE.test(value.productionDate)
+    && Number.isSafeInteger(value.totalCases) && Number(value.totalCases) >= 1 && Number(value.totalCases) <= 1_000_000
+    && Number.isSafeInteger(value.remainingCases) && Number(value.remainingCases) >= 0
+    && Number(value.remainingCases) <= Number(value.totalCases)
+    && Number.isSafeInteger(value.revision) && Number(value.revision) >= 1 && isTimestamp(value.createdAt);
+}
+
+function isSurplusLedger(value: unknown): value is FreezerSurplusLedger {
+  if (!object(value) || !Array.isArray(value.lots) || !value.lots.every(isSurplusLot)
+    || !Array.isArray(value.runs) || !Array.isArray(value.scheduleRuns)
+    || !Array.isArray(value.allocations) || !Array.isArray(value.events)) return false;
+  const lotIds = new Set(value.lots.map((lot) => lot.id));
+  const validRuns = value.runs.every((run) => object(run) && UUID.test(String(run.runId))
+    && typeof run.label === "string" && run.label.length > 0 && INVENTORY_CODE.test(String(run.productCode))
+    && isTimestamp(run.completedAt)
+    && (run.decision === null || run.decision === "none" || run.decision === "stored")
+    && (run.lotId === null || UUID.test(String(run.lotId)))
+    && (run.decision === "stored" ? typeof run.lotId === "string" && lotIds.has(run.lotId) : run.lotId === null));
+  const validScheduleRuns = value.scheduleRuns.every((run) => object(run) && UUID.test(String(run.runId))
+    && typeof run.productionDate === "string" && CALENDAR_DATE.test(run.productionDate)
+    && INVENTORY_CODE.test(String(run.productCode))
+    && Number.isSafeInteger(run.targetCases) && Number(run.targetCases) >= 1
+    && Number.isSafeInteger(run.carriedInCases) && Number(run.carriedInCases) >= 0
+    && Number(run.carriedInCases) <= Number(run.targetCases)
+    && Number.isSafeInteger(run.effectiveTargetCases)
+    && run.effectiveTargetCases === Number(run.targetCases) - Number(run.carriedInCases));
+  const validAllocations = value.allocations.every((allocation) => object(allocation)
+    && UUID.test(String(allocation.id)) && UUID.test(String(allocation.lotId)) && lotIds.has(String(allocation.lotId))
+    && typeof allocation.productionDate === "string" && CALENDAR_DATE.test(allocation.productionDate)
+    && UUID.test(String(allocation.scheduleRunId))
+    && Number.isSafeInteger(allocation.cases) && Number(allocation.cases) >= 1 && Number(allocation.cases) <= 1_000_000
+    && isTimestamp(allocation.createdAt));
+  const validEvents = value.events.every((event) => object(event) && UUID.test(String(event.id))
+    && UUID.test(String(event.lotId)) && lotIds.has(String(event.lotId))
+    && ["receipt", "allocation", "damage", "return", "correction"].includes(String(event.eventType))
+    && Number.isSafeInteger(event.quantityDelta) && event.quantityDelta !== 0 && Math.abs(Number(event.quantityDelta)) <= 1_000_000
+    && typeof event.reason === "string" && event.reason.trim().length >= 3 && event.reason.trim().length <= 500
+    && (event.correctsEventId === null || UUID.test(String(event.correctsEventId)))
+    && (event.eventType !== "correction" || event.correctsEventId !== null) && isTimestamp(event.createdAt));
+  return validRuns && validScheduleRuns && validAllocations && validEvents;
+}
+
+export async function listFreezerSurplus(): Promise<FreezerSurplusLedger> {
+  const result = await unwrap(await client.GET("/api/v3/inventory/freezer-surplus"));
+  if (!isSurplusLedger(result)) throw new ApiError("The freezer surplus ledger was incomplete. Refresh and retry.", 502);
+  return result;
+}
+
+export async function confirmFreezerSurplus(request: ConfirmFreezerSurplusRequest) {
+  const result = await unwrap(await client.POST("/api/v3/inventory/freezer-surplus/confirm", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  const expectedDecision = request.cases === 0 ? "none" : "stored";
+  if (result.outcome !== "accepted" || typeof result.replayed !== "boolean" || result.runId !== request.runId
+    || result.cases !== request.cases || result.decision !== expectedDecision
+    || (expectedDecision === "none" ? result.lotId !== null : !UUID.test(String(result.lotId)))) {
+    throw new ApiError("The server did not confirm the freezer surplus decision. Retry the same request.", 502);
+  }
+  return result;
+}
+
+export async function allocateFreezerSurplus(request: AllocateFreezerSurplusRequest) {
+  const result = await unwrap(await client.POST("/api/v3/inventory/freezer-surplus/allocations", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  if (result.outcome !== "accepted" || typeof result.replayed !== "boolean" || !UUID.test(String(result.allocationId))
+    || result.lotId !== request.lotId || !Number.isSafeInteger(result.remainingCases) || Number(result.remainingCases) < 0
+    || !Number.isSafeInteger(result.revision) || Number(result.revision) < 2
+    || !Number.isSafeInteger(result.carriedInCases) || Number(result.carriedInCases) < request.cases
+    || !Number.isSafeInteger(result.effectiveTargetCases) || Number(result.effectiveTargetCases) < 0) {
+    throw new ApiError("The server did not confirm the freezer surplus allocation. Retry the same request.", 502);
+  }
+  return result;
+}
+
+export async function adjustFreezerSurplus(request: AdjustFreezerSurplusRequest) {
+  const result = await unwrap(await client.POST("/api/v3/inventory/freezer-surplus/adjustments", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  if (result.outcome !== "accepted" || typeof result.replayed !== "boolean" || !UUID.test(String(result.eventId))
+    || result.lotId !== request.lotId || !Number.isSafeInteger(result.remainingCases) || Number(result.remainingCases) < 0
+    || !Number.isSafeInteger(result.revision) || Number(result.revision) < 2) {
+    throw new ApiError("The server did not confirm the freezer surplus adjustment. Retry the same request.", 502);
   }
   return result;
 }

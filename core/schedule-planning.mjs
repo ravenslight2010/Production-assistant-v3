@@ -111,7 +111,19 @@ export function normalizeSchedule(value) {
     || !(value.updatedAt === null || (typeof value.updatedAt === "string" && Number.isFinite(Date.parse(value.updatedAt))))) {
     throw new ScheduleValidationError("The schedule response contains invalid values.", 502);
   }
-  const runs = value.runs.map(normalizeScheduleRun);
+  const runs = value.runs.map((run, index) => {
+    const normalized = normalizeScheduleRun({
+      id: run?.id, productCode: run?.productCode, productionSetupCode: run?.productionSetupCode,
+      runTemplateCode: run?.runTemplateCode, targetCases: run?.targetCases, notes: run?.notes,
+    }, index);
+    if (!Object.hasOwn(run, "carriedInCases") && !Object.hasOwn(run, "effectiveTargetCases")) return normalized;
+    if (!hasExactKeys(run, ["id", "productCode", "productionSetupCode", "runTemplateCode", "targetCases", "notes", "carriedInCases", "effectiveTargetCases"])
+      || !Number.isSafeInteger(run.carriedInCases) || run.carriedInCases < 0 || run.carriedInCases > normalized.targetCases
+      || run.effectiveTargetCases !== normalized.targetCases - run.carriedInCases) {
+      throw new ScheduleValidationError(`Planned run ${index + 1} has invalid carry-in totals.`, 502);
+    }
+    return { ...normalized, carriedInCases: run.carriedInCases, effectiveTargetCases: run.effectiveTargetCases };
+  });
   if (new Set(runs.map((run) => run.id)).size !== runs.length) {
     throw new ScheduleValidationError("The schedule response contains duplicate planned-run IDs.", 502);
   }

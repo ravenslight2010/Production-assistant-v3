@@ -27,6 +27,7 @@ const DIE_DEFAULTS_PATH = `${INVENTORY_PATH}/die-defaults`;
 const WAREHOUSE_GUIDANCE_PATH = `${INVENTORY_PATH}/warehouse-guidance`;
 const CYCLE_COUNT_SCHEDULES_PATH = `${INVENTORY_PATH}/cycle-counts/schedules`;
 const CYCLE_COUNT_MARK_PATH = `${INVENTORY_PATH}/cycle-counts/mark`;
+const SURPLUS_PATH = `${INVENTORY_PATH}/freezer-surplus`;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_WORKBOOK_BODY_BYTES = 7_250 * 1024;
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
@@ -467,6 +468,74 @@ export function createInventoryApi({ pool, authenticate, verifyCsrf, logger = ()
         const result = await pool.query(
           "SELECT v3.save_cycle_count_schedule($1::uuid, $2::uuid, $3::text, $4::text, $5::text, $6::integer, $7::boolean, $8::bigint) AS result",
           [...scope, actor, requestId, hashRequest(payload), body.section, body.cadenceDays, body.enabled, body.expectedRevision],
+        );
+        sendJson(response, 200, resultValue(result));
+        return true;
+      }
+
+      if (url.pathname === SURPLUS_PATH && request.method === "GET") {
+        operation = "list_freezer_surplus";
+        const result = await pool.query("SELECT v3.list_freezer_surplus($1::uuid) AS result", scope);
+        sendJson(response, 200, resultValue(result));
+        return true;
+      }
+      if (url.pathname === `${SURPLUS_PATH}/confirm` && request.method === "POST") {
+        operation = "confirm_freezer_surplus";
+        const body = await readJsonBody(request);
+        requireKeys(body, ["requestId", "runId", "cases"]);
+        const requestId = validateRequestId(body.requestId);
+        if (typeof body.runId !== "string" || !UUID.test(body.runId)
+          || !Number.isSafeInteger(body.cases) || body.cases < 0 || body.cases > 1_000_000) {
+          throw new InventoryApiError(400, "Choose a completed run and a whole number from 0 to 1,000,000 cases.");
+        }
+        const result = await pool.query(
+          "SELECT v3.confirm_freezer_surplus($1::uuid,$2::uuid,$3::text,$4::text,$5::uuid,$6::integer) AS result",
+          [...scope, actor, requestId, hashRequest({ runId: body.runId.toLowerCase(), cases: body.cases }), body.runId.toLowerCase(), body.cases],
+        );
+        sendJson(response, 200, resultValue(result));
+        return true;
+      }
+      if (url.pathname === `${SURPLUS_PATH}/allocations` && request.method === "POST") {
+        operation = "allocate_freezer_surplus";
+        const body = await readJsonBody(request);
+        requireKeys(body, ["requestId", "lotId", "productionDate", "scheduleRunId", "cases", "expectedRevision"]);
+        const requestId = validateRequestId(body.requestId);
+        if (typeof body.lotId !== "string" || !UUID.test(body.lotId) || typeof body.scheduleRunId !== "string" || !UUID.test(body.scheduleRunId)
+          || !Number.isSafeInteger(body.cases) || body.cases < 1 || body.cases > 1_000_000
+          || !Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 1) {
+          throw new InventoryApiError(400, "Choose a surplus lot, scheduled run, positive cases, and current revision.");
+        }
+        const productionDate = validateInventoryDate(body.productionDate, "Production date");
+        const payload = { lotId: body.lotId.toLowerCase(), productionDate, scheduleRunId: body.scheduleRunId.toLowerCase(), cases: body.cases, expectedRevision: body.expectedRevision };
+        const result = await pool.query(
+          "SELECT v3.allocate_freezer_surplus($1::uuid,$2::uuid,$3::text,$4::text,$5::uuid,$6::date,$7::uuid,$8::integer,$9::bigint) AS result",
+          [...scope, actor, requestId, hashRequest(payload), payload.lotId, productionDate, payload.scheduleRunId, body.cases, body.expectedRevision],
+        );
+        sendJson(response, 200, resultValue(result));
+        return true;
+      }
+      if (url.pathname === `${SURPLUS_PATH}/adjustments` && request.method === "POST") {
+        operation = "adjust_freezer_surplus";
+        const body = await readJsonBody(request);
+        const hasCorrection = Object.hasOwn(body, "correctsEventId");
+        requireKeys(body, ["requestId", "lotId", "eventType", "cases", "reason", "expectedRevision", ...(hasCorrection ? ["correctsEventId"] : [])]);
+        const requestId = validateRequestId(body.requestId);
+        if (typeof body.lotId !== "string" || !UUID.test(body.lotId) || !["damage","return","correction"].includes(body.eventType)
+          || !Number.isSafeInteger(body.cases) || body.cases === 0 || Math.abs(body.cases) > 1_000_000
+          || (["damage","return"].includes(body.eventType) && body.cases < 1)
+          || typeof body.reason !== "string" || body.reason.trim().length < 3 || body.reason.trim().length > 500
+          || !Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 1
+          || (body.eventType === "correction" && !hasCorrection)
+          || (body.eventType !== "correction" && hasCorrection)
+          || (hasCorrection && (typeof body.correctsEventId !== "string" || !UUID.test(body.correctsEventId)))) {
+          throw new InventoryApiError(400, "Submit a valid adjustment, reason, current revision, and correction link.");
+        }
+        const payload = { lotId: body.lotId.toLowerCase(), eventType: body.eventType, cases: body.cases,
+          reason: body.reason.trim(), expectedRevision: body.expectedRevision,
+          ...(hasCorrection ? { correctsEventId: body.correctsEventId.toLowerCase() } : {}) };
+        const result = await pool.query(
+          "SELECT v3.adjust_freezer_surplus($1::uuid,$2::uuid,$3::text,$4::text,$5::uuid,$6::text,$7::integer,$8::text,$9::bigint,$10::uuid) AS result",
+          [...scope, actor, requestId, hashRequest(payload), payload.lotId, body.eventType, body.cases, payload.reason, body.expectedRevision, hasCorrection ? payload.correctsEventId : null],
         );
         sendJson(response, 200, resultValue(result));
         return true;

@@ -122,6 +122,41 @@ test("staff receive only guidance and mark-counted access while managers configu
   assert.deepEqual(manager.calls[0].values.slice(4), ["Dry storage", 7, true, 0]);
 });
 
+test("freezer surplus APIs are strict, manager-only, and server hashed", async (t) => {
+  const runId = "10000000-0000-4000-8000-000000000020";
+  const lotId = "10000000-0000-4000-8000-000000000021";
+  const scheduleRunId = "10000000-0000-4000-8000-000000000022";
+  const eventId = "10000000-0000-4000-8000-000000000023";
+  const api = await withApi(t, { query: async (sql) => ({ rows: [{ result: sql.includes("list_freezer_surplus") ? {
+    lots: [], runs: [], scheduleRuns: [], allocations: [], events: [],
+  } : { outcome: "accepted", replayed: false } }] }) });
+  const staff = await withApi(t, { auth: { ...MANAGER, capabilities: [] } });
+  const staffRead = await send(staff.baseUrl, "/api/v3/inventory/freezer-surplus");
+  assert.equal(staffRead.status, 403);
+  assert.equal(staff.calls.length, 0);
+  const read = await send(api.baseUrl, "/api/v3/inventory/freezer-surplus");
+  assert.equal(read.status, 200);
+  const confirm = { requestId: "surplus-confirm", runId, cases: 8 };
+  assert.equal((await send(api.baseUrl, "/api/v3/inventory/freezer-surplus/confirm", { method: "POST", body: confirm })).status, 200);
+  assert.match(api.calls[1].text, /confirm_freezer_surplus/u);
+  assert.deepEqual(api.calls[1].values.slice(4), [runId, 8]);
+  const allocation = { requestId: "surplus-allocate", lotId, productionDate: "2026-11-22", scheduleRunId, cases: 3, expectedRevision: 1 };
+  assert.equal((await send(api.baseUrl, "/api/v3/inventory/freezer-surplus/allocations", { method: "POST", body: allocation })).status, 200);
+  assert.deepEqual(api.calls[2].values.slice(4), [lotId, "2026-11-22", scheduleRunId, 3, 1]);
+  const adjustment = { requestId: "surplus-adjust", lotId, eventType: "correction", cases: -1, reason: "Correct receipt", expectedRevision: 2, correctsEventId: eventId };
+  assert.equal((await send(api.baseUrl, "/api/v3/inventory/freezer-surplus/adjustments", { method: "POST", body: adjustment })).status, 200);
+  assert.deepEqual(api.calls[3].values.slice(4), [lotId, "correction", -1, "Correct receipt", 2, eventId]);
+  const invalid = await send(api.baseUrl, "/api/v3/inventory/freezer-surplus/adjustments", {
+    method: "POST", body: { ...adjustment, requestId: "missing-link", correctsEventId: undefined },
+  });
+  assert.equal(invalid.status, 400);
+  const invalidDamageLink = await send(api.baseUrl, "/api/v3/inventory/freezer-surplus/adjustments", {
+    method: "POST", body: { ...adjustment, requestId: "damage-link", eventType: "damage", cases: 1 },
+  });
+  assert.equal(invalidDamageLink.status, 400);
+  assert.equal(api.calls.length, 4);
+});
+
 test("inventory movements preserve legacy hashes and validate optional lot metadata", async (t) => {
   const accepted = {
     outcome: "accepted", replayed: false,

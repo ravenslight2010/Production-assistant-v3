@@ -822,6 +822,90 @@ async function main() {
     assert.equal(completeRetry.status, 200);
     assert.equal((await jsonResponse(completeRetry)).replayed, true);
 
+    const movementsBeforeSurplus = await adminPool.query("SELECT count(*)::integer AS count FROM v3.inventory_movements");
+    const operatorSurplusRead = await fetch(`${baseUrl}/api/v3/inventory/freezer-surplus`, {
+      headers: { Cookie: operator.cookieHeader, Accept: "application/json" },
+    });
+    assert.equal(operatorSurplusRead.status, 403, "staff must not read the manager-only surplus ledger");
+    const surplusConfirmationRequest = {
+      requestId: "73000000-0000-4000-8000-000000000230",
+      runId: created.run.id,
+      cases: 4,
+    };
+    const surplusConfirmation = await managerPost("/api/v3/inventory/freezer-surplus/confirm", surplusConfirmationRequest);
+    assert.equal(surplusConfirmation.status, 200, await surplusConfirmation.clone().text());
+    const surplusConfirmationBody = await jsonResponse(surplusConfirmation);
+    assert.equal(surplusConfirmationBody.decision, "stored");
+    assert.equal(surplusConfirmationBody.cases, 4);
+    assert.match(surplusConfirmationBody.lotId, /^[0-9a-f-]{36}$/);
+    const surplusConfirmationReplay = await managerPost("/api/v3/inventory/freezer-surplus/confirm", surplusConfirmationRequest);
+    assert.equal(surplusConfirmationReplay.status, 200);
+    const surplusConfirmationReplayBody = await jsonResponse(surplusConfirmationReplay);
+    assert.equal(surplusConfirmationReplayBody.replayed, true);
+    assert.equal(surplusConfirmationReplayBody.lotId, surplusConfirmationBody.lotId);
+    const replacementDecision = await managerPost("/api/v3/inventory/freezer-surplus/confirm", {
+      requestId: "73000000-0000-4000-8000-000000000231", runId: created.run.id, cases: 1,
+    });
+    assert.equal(replacementDecision.status, 409, "a new request cannot replace the immutable completed-run decision");
+
+    const surplusAllocation = await managerPost("/api/v3/inventory/freezer-surplus/allocations", {
+      requestId: "73000000-0000-4000-8000-000000000232",
+      lotId: surplusConfirmationBody.lotId,
+      productionDate: "2035-04-15",
+      scheduleRunId: plannedRunA.id,
+      cases: 3,
+      expectedRevision: 1,
+    });
+    assert.equal(surplusAllocation.status, 200, await surplusAllocation.clone().text());
+    const surplusAllocationBody = await jsonResponse(surplusAllocation);
+    assert.equal(surplusAllocationBody.lotId, surplusConfirmationBody.lotId);
+    assert.equal(surplusAllocationBody.remainingCases, 1);
+    assert.equal(surplusAllocationBody.carriedInCases, 3);
+    assert.equal(surplusAllocationBody.effectiveTargetCases, 17);
+    const carriedInSchedule = await jsonResponse(await fetch(`${baseUrl}${schedulePath}`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    }));
+    const carriedInRun = carriedInSchedule.schedule.runs.find((run) => run.id === plannedRunA.id);
+    assert.equal(carriedInRun.targetCases, 20);
+    assert.equal(carriedInRun.carriedInCases, 3);
+    assert.equal(carriedInRun.effectiveTargetCases, 17);
+
+    const surplusDamage = await managerPost("/api/v3/inventory/freezer-surplus/adjustments", {
+      requestId: "73000000-0000-4000-8000-000000000233",
+      lotId: surplusConfirmationBody.lotId,
+      eventType: "damage",
+      cases: 1,
+      reason: "Integration freezer damage",
+      expectedRevision: 2,
+    });
+    assert.equal(surplusDamage.status, 200, await surplusDamage.clone().text());
+    const surplusDamageBody = await jsonResponse(surplusDamage);
+    assert.equal(surplusDamageBody.remainingCases, 0);
+    const surplusCorrection = await managerPost("/api/v3/inventory/freezer-surplus/adjustments", {
+      requestId: "73000000-0000-4000-8000-000000000234",
+      lotId: surplusConfirmationBody.lotId,
+      eventType: "correction",
+      cases: 1,
+      reason: "Integration damage review correction",
+      expectedRevision: 3,
+      correctsEventId: surplusDamageBody.eventId,
+    });
+    assert.equal(surplusCorrection.status, 200, await surplusCorrection.clone().text());
+    assert.equal((await jsonResponse(surplusCorrection)).remainingCases, 1);
+    const finalSurplusResponse = await fetch(`${baseUrl}/api/v3/inventory/freezer-surplus`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    });
+    assert.equal(finalSurplusResponse.status, 200);
+    const finalSurplus = await jsonResponse(finalSurplusResponse);
+    assert.equal(finalSurplus.lots.length, 1);
+    assert.equal(finalSurplus.lots[0].remainingCases, 1);
+    assert.equal(finalSurplus.allocations.length, 1);
+    assert.equal(finalSurplus.events.length, 4);
+    assert.equal(finalSurplus.events.find((event) => event.eventType === "correction").correctsEventId, surplusDamageBody.eventId);
+    const movementsAfterSurplus = await adminPool.query("SELECT count(*)::integer AS count FROM v3.inventory_movements");
+    assert.equal(movementsAfterSurplus.rows[0].count, movementsBeforeSurplus.rows[0].count,
+      "surplus receipts, carry-in, and corrections must not append ingredient movements");
+
     const operatorStationRead = await fetch(`${baseUrl}/api/v3/runs/${created.run.id}`, {
       headers: { Cookie: operator.cookieHeader, Accept: "application/json" },
     });

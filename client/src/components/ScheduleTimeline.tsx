@@ -49,8 +49,9 @@ export function ScheduleTimeline({
             <li key={run.id} className="py-4">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <strong className="text-sm leading-6">{scheduleRunTitle(run, catalog)}</strong>
-                <span className="font-mono text-xs text-amber-400">{run.targetCases} cases</span>
+                <span className="font-mono text-xs text-amber-400">{run.effectiveTargetCases ?? run.targetCases} effective / {run.targetCases} planned cases</span>
               </div>
+              {run.carriedInCases !== undefined ? <p className="mt-1 text-xs text-amber-300">{run.carriedInCases} freezer carry-in cases · no repeat ingredient deduction</p> : null}
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
                 {estimate?.startMs === undefined
                   ? "Planned start unknown"

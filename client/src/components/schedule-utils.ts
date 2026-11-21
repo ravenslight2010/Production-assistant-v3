@@ -35,7 +35,7 @@ export function validateScheduleRun(
   }
   if (!scheduleTemplate(catalog, runTemplateCode)) throw new Error("Choose an available run template.");
   if (notes.length > 500) throw new Error("Notes must be 500 characters or fewer.");
-  return { ...run, productCode, productionSetupCode, runTemplateCode, targetCases, notes };
+  return { id: run.id, productCode, productionSetupCode, runTemplateCode, targetCases, notes };
 }
 
 export function formatScheduleClock(epochMs: number | undefined): string {

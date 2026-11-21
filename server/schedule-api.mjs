@@ -133,7 +133,11 @@ function normalizeCommand(command, schedule) {
         targetCases: 1,
         notes: "",
       };
-      const normalized = normalizeScheduleRun({ ...existing, ...changes });
+      const normalized = normalizeScheduleRun({
+        id: existing.id, productCode: existing.productCode, productionSetupCode: existing.productionSetupCode,
+        runTemplateCode: existing.runTemplateCode, targetCases: existing.targetCases, notes: existing.notes,
+        ...changes,
+      });
       changes = Object.fromEntries(Object.keys(changes).map((key) => [key, normalized[key]]));
       clean = { type: "update", runId: command.runId.toLowerCase(), changes };
       break;

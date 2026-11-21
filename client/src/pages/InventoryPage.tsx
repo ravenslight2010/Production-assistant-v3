@@ -2,13 +2,17 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Boxes, Plus, RefreshCw, Warehouse as WarehouseIcon } from "lucide-react";
 import {
   actOnOpeningCount,
+  adjustFreezerSurplus,
+  allocateFreezerSurplus,
   ApiError,
+  confirmFreezerSurplus,
   createInventoryWarehouse,
   getOpeningCount,
   getWarehouseGuidance,
   listInventoryMovements,
   listInventoryProducts,
   listInventoryWarehouses,
+  listFreezerSurplus,
   listOpeningCounts,
   listWarehouseStock,
   markCycleCounted,
@@ -17,7 +21,11 @@ import {
   saveCycleCountSchedule,
   stageOpeningCount,
   transferInventory,
+  type AdjustFreezerSurplusRequest,
+  type AllocateFreezerSurplusRequest,
   type AuthSession,
+  type ConfirmFreezerSurplusRequest,
+  type FreezerSurplusLedger,
   type InventoryMovement,
   type InventoryMovementRequest,
   type InventoryProduct,
@@ -38,6 +46,7 @@ import {
   type PendingInventoryRequest,
 } from "../components/inventory-storage";
 import { OpeningCountPanel } from "../components/OpeningCountPanel";
+import { FreezerSurplusPanel } from "../components/FreezerSurplusPanel";
 import { InventoryMovementPanel } from "../components/InventoryMovementPanel";
 import { WarehouseGuidancePanel } from "../components/WarehouseGuidancePanel";
 
@@ -57,6 +66,7 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
   const [counts, setCounts] = useState<OpeningCountSummary[]>([]);
   const [currentCount, setCurrentCount] = useState<OpeningCountRecord | null>(null);
   const [guidance, setGuidance] = useState<WarehouseGuidance | null>(null);
+  const [surplus, setSurplus] = useState<FreezerSurplusLedger | null>(null);
   const [pending, setPending] = useState<PendingInventoryRequest | null>(null);
   const [busy, setBusy] = useState<"load" | "write" | "movements" | null>(null);
   const [warehouseName, setWarehouseName] = useState("");
@@ -82,8 +92,8 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
         setLoaded(true);
         return true;
       }
-      const [nextWarehouses, nextProducts, nextCounts, nextGuidance] = await Promise.all([
-        listInventoryWarehouses(), listInventoryProducts(), listOpeningCounts(), getWarehouseGuidance(),
+      const [nextWarehouses, nextProducts, nextCounts, nextGuidance, nextSurplus] = await Promise.all([
+        listInventoryWarehouses(), listInventoryProducts(), listOpeningCounts(), getWarehouseGuidance(), listFreezerSurplus(),
       ]);
       const requestedId = options.warehouseId ?? selectedWarehouseId;
       const nextWarehouseId = nextWarehouses.some((warehouse) => warehouse.id === requestedId)
@@ -105,6 +115,7 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
       setNextCursor(movementPage.nextCursor);
       setCurrentCount(nextCount);
       setGuidance(nextGuidance);
+      setSurplus(nextSurplus);
       setLoaded(true);
       return true;
     } catch (cause) {
@@ -123,7 +134,7 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
     setNotice(null);
     setBusy(null);
     if (!canManage) {
-      setWarehouses([]); setProducts([]); setStock([]); setMovements([]); setCounts([]); setCurrentCount(null);
+      setWarehouses([]); setProducts([]); setStock([]); setMovements([]); setCounts([]); setCurrentCount(null); setSurplus(null);
     }
     if (online) void loadCanonical();
     else if (!loaded) setError("Offline read-only view. Reconnect to load inventory; no inventory writes are available.");
@@ -187,6 +198,20 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
         const result = await saveCycleCountSchedule(request.payload);
         replayed = result.replayed;
         confirmation = `${result.schedule.section} cycle-count schedule saved and reloaded.`;
+      } else if (request.kind === "surplus-confirm") {
+        const result = await confirmFreezerSurplus(request.payload);
+        replayed = result.replayed;
+        confirmation = result.decision === "none"
+          ? "No-surplus decision saved permanently for the completed run."
+          : `${result.cases ?? request.payload.cases} finished cases stored. The surplus ledger was reloaded; ingredient stock was not changed.`;
+      } else if (request.kind === "surplus-allocation") {
+        const result = await allocateFreezerSurplus(request.payload);
+        replayed = result.replayed;
+        confirmation = `Carry-in allocated. ${result.carriedInCases ?? 0} carried-in cases leave an effective production target of ${result.effectiveTargetCases ?? 0}; ingredients were not deducted again.`;
+      } else if (request.kind === "surplus-adjustment") {
+        const result = await adjustFreezerSurplus(request.payload);
+        replayed = result.replayed;
+        confirmation = `Surplus ${request.payload.eventType} appended. ${result.remainingCases ?? 0} physically remaining cases; canonical history was reloaded.`;
       } else if (request.kind === "opening-review" || request.kind === "opening-apply") {
         const action = request.kind === "opening-review" ? "review" : "apply";
         const result = await actOnOpeningCount(request.countId, action);
@@ -289,6 +314,23 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
           const pendingRequest: PendingInventoryRequest = { kind: "cycle-count-schedule", payload: request };
           return persistPending(pendingRequest) && sendPending(pendingRequest);
         }} /> : null}
+
+      {surplus ? <div className="mt-5"><FreezerSurplusPanel ledger={surplus} disabled={writeDisabled}
+        onConfirm={async (request: ConfirmFreezerSurplusRequest) => {
+          if (writeDisabled) return false;
+          const pendingRequest: PendingInventoryRequest = { kind: "surplus-confirm", payload: request };
+          return persistPending(pendingRequest) && sendPending(pendingRequest);
+        }}
+        onAllocate={async (request: AllocateFreezerSurplusRequest) => {
+          if (writeDisabled) return false;
+          const pendingRequest: PendingInventoryRequest = { kind: "surplus-allocation", payload: request };
+          return persistPending(pendingRequest) && sendPending(pendingRequest);
+        }}
+        onAdjust={async (request: AdjustFreezerSurplusRequest) => {
+          if (writeDisabled) return false;
+          const pendingRequest: PendingInventoryRequest = { kind: "surplus-adjustment", payload: request };
+          return persistPending(pendingRequest) && sendPending(pendingRequest);
+        }} /></div> : null}
 
       <div className="mt-6 grid items-start gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)]">
         <section className="panel min-w-0" aria-labelledby="warehouse-stock-heading">

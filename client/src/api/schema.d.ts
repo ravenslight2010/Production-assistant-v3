@@ -553,6 +553,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/inventory/freezer-surplus": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the manager-only finished-case surplus ledger */
+        get: operations["listFreezerSurplus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/inventory/freezer-surplus/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save one immutable none-or-stored decision for a completed run */
+        post: operations["confirmFreezerSurplus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/inventory/freezer-surplus/allocations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Allocate finished cases to a matching scheduled run without ingredient movement */
+        post: operations["allocateFreezerSurplus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/inventory/freezer-surplus/adjustments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Append a reasoned damage, return, or linked correction event */
+        post: operations["adjustFreezerSurplus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/inventory/warehouse-guidance": {
         parameters: {
             query?: never;
@@ -1391,6 +1459,126 @@ export interface components {
             requestId: string;
             name: string;
         };
+        FreezerSurplusLedger: {
+            lots: components["schemas"]["FreezerSurplusLot"][];
+            runs: components["schemas"]["FreezerSurplusRun"][];
+            scheduleRuns: components["schemas"]["FreezerSurplusScheduleRun"][];
+            allocations: components["schemas"]["FreezerSurplusAllocation"][];
+            events: components["schemas"]["FreezerSurplusEvent"][];
+        };
+        FreezerSurplusLot: {
+            /** Format: uuid */
+            id: string;
+            productCode: string;
+            /** Format: date */
+            productionDate: string;
+            totalCases: number;
+            remainingCases: number;
+            revision: number;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        FreezerSurplusRun: {
+            /** Format: uuid */
+            runId: string;
+            label: string;
+            productCode: string;
+            /** Format: date-time */
+            completedAt: string;
+            /** @enum {string|null} */
+            decision: "none" | "stored" | "null" | null;
+            /** Format: uuid */
+            lotId: string | null;
+        };
+        FreezerSurplusScheduleRun: {
+            /** Format: date */
+            productionDate: string;
+            /** Format: uuid */
+            runId: string;
+            productCode: string;
+            targetCases: number;
+            carriedInCases: number;
+            effectiveTargetCases: number;
+        };
+        FreezerSurplusAllocation: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            lotId: string;
+            /** Format: date */
+            productionDate: string;
+            /** Format: uuid */
+            scheduleRunId: string;
+            cases: number;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        FreezerSurplusEvent: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            lotId: string;
+            /** @enum {string} */
+            eventType: "receipt" | "allocation" | "damage" | "return" | "correction";
+            quantityDelta: number;
+            reason: string;
+            /** Format: uuid */
+            correctsEventId: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ConfirmFreezerSurplusRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            runId: string;
+            cases: number;
+        };
+        AllocateFreezerSurplusRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            lotId: string;
+            /** Format: date */
+            productionDate: string;
+            /** Format: uuid */
+            scheduleRunId: string;
+            cases: number;
+            expectedRevision: number;
+        };
+        AdjustFreezerSurplusRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            lotId: string;
+            /** @enum {string} */
+            eventType: "damage" | "return" | "correction";
+            cases: number;
+            reason: string;
+            expectedRevision: number;
+            /** Format: uuid */
+            correctsEventId?: string;
+        };
+        FreezerSurplusMutationResult: {
+            /** @constant */
+            outcome: "accepted";
+            replayed: boolean;
+            /** Format: uuid */
+            runId?: string;
+            /** @enum {string} */
+            decision?: "none" | "stored";
+            /** Format: uuid */
+            lotId?: string;
+            /** Format: uuid */
+            allocationId?: string;
+            /** Format: uuid */
+            eventId?: string;
+            cases?: number;
+            remainingCases?: number;
+            revision?: number;
+            carriedInCases?: number;
+            effectiveTargetCases?: number;
+        };
         WarehouseGuidance: {
             /** Format: date */
             factoryDate: string;
@@ -1690,6 +1878,10 @@ export interface components {
             runTemplateCode: string;
             targetCases: number;
             notes: string;
+            /** @description Server-derived finished-case carry-in; never accepted as a schedule input. */
+            carriedInCases?: number;
+            /** @description Target cases minus carried-in surplus. */
+            effectiveTargetCases?: number;
         };
         ScheduleBreak: {
             /** @enum {integer} */
@@ -2971,6 +3163,115 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    listFreezerSurplus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Finished-case lots, run decisions, allocations, and events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FreezerSurplusLedger"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    confirmFreezerSurplus: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmFreezerSurplusRequest"];
+            };
+        };
+        responses: {
+            /** @description Surplus decision accepted or replayed exactly */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FreezerSurplusMutationResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    allocateFreezerSurplus: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AllocateFreezerSurplusRequest"];
+            };
+        };
+        responses: {
+            /** @description Allocation accepted or replayed exactly */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FreezerSurplusMutationResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    adjustFreezerSurplus: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdjustFreezerSurplusRequest"];
+            };
+        };
+        responses: {
+            /** @description Adjustment accepted or replayed exactly */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FreezerSurplusMutationResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     getWarehouseGuidance: {
