@@ -1,0 +1,52 @@
+{
+  "name": "production-assistant-v3",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@12.8.1",
+  "engines": {
+    "node": "24.22.3",
+    "pnpm": ">=12.8.1"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite --config client/vite.config.ts --host 0.0.0.0",
+    "dev:api": "node server/main.mjs",
+    "dev:worker": "node server/worker-main.mjs",
+    "start": "node server/main.mjs",
+    "start:worker": "node server/worker-main.mjs",
+    "generate:api": "openapi-typescript api/openapi.yaml -o client/src/api/schema.d.ts",
+    "check:api-generated": "pnpm run generate:api && git diff --exit-code -- client/src/api/schema.d.ts",
+    "typecheck": "tsc -p client/tsconfig.json --noEmit",
+    "build": "pnpm run generate:api && pnpm run typecheck && vite build --config client/vite.config.ts && pnpm run check:server",
+    "check:server": "for file in server/*.mjs web/*.js; do node --check \"$file\" || exit; done",
+    "test": "node --test core/*.test.mjs server/*.test.mjs web/*.test.mjs",
+    "test:browser": "node --test e2e/*.test.mjs",
+    "test:db": "bash db/run-local-tests.sh",
+    "check:no-ai": "node scripts/check-no-ai.mjs",
+    "check:research": "node scripts/check-research.mjs",
+    "audit:prod": "pnpm audit --prod --audit-level high"
+  },
+  "dependencies": {
+    "lucide-react": "1.69.0",
+    "openapi-fetch": "0.15.0",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "wouter": "3.13.0",
+    "xlsx": "npm:@e965/xlsx@0.20.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "26.6.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "openapi-typescript": "7.13.0",
+    "playwright": "1.65.1",
+    "tailwindcss": "4.3.5",
+    "typescript": "6.0.3",
+    "vite": "8.3.8"
+  }
+}

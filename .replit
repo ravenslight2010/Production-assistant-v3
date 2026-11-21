@@ -1,0 +1,39 @@
+modules = ["nodejs-24", "postgresql-16"]
+
+[deployment]
+router = "application"
+deploymentTarget = "vm"
+build = ["pnpm", "run", "build"]
+run = ["bash", "scripts/start-v3.sh"]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "V3 Production Assistant"
+
+[[workflows.workflow]]
+name = "V3 Production Assistant"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "V3_USE_PROJECT_DATABASE=true NODE_ENV=development bash scripts/start-v3.sh"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[nix]
+channel = "stable-25_05"
+packages = ["process-compose", "shellcheck"]
+
+[[ports]]
+localPort = 5000
+externalPort = 80
