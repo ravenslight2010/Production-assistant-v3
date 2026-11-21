@@ -70,7 +70,7 @@ Status labels describe this checkout: `ported` means the underlying V2 behavior 
 | Feature | V1 behavior | V2 behavior | V3 disposition | Current status |
 |---|---|---|---|---|
 | Product/setup master data | Profiles, recipes, production setups | Reviewed setup catalogs and imported products | `combine`: reviewed setup/master data only | `ported` API and React setup CSV/history; full catalog editors `pending` |
-| Source-workbook preview | Broad V1 workbook imports | Deterministic parse and read-only preview | `rebuild`: no AI fallback | `ported` API; React `pending` |
+| Source-workbook preview | Broad V1 workbook imports | Deterministic parse and read-only preview | `rebuild`: no AI fallback | `ported` API and React review for six source families; private-workbook fidelity `pending` |
 | Review and explicit Apply | Human review in V1 workflows | Staged imports with explicit manager Apply and governed Undo | `combine` | `ported` |
 | Import history/retry | V1 import history and reconciliation | Persisted history, request hashes, safe idempotent retry, canonical reopen | `combine` | `ported` |
 | CSV templates | V1 import/export templates | Strict synthetic templates, shared CSV parsers, and React template download | `combine` | `ported` |
@@ -79,9 +79,9 @@ Status labels describe this checkout: `ported` means the underlying V2 behavior 
 | Production rules manager | V1 manager UI | Server enforcement and staged source attribution | `combine` | `ported` API; React `pending` |
 | Reviewed die defaults | V1 die/setup defaults | Manager-only reviewed defaults and history | `combine` | `ported` API; React `pending` |
 | Named recipes, cheese recipes, dough variants | Rich V1 recipe management | Reviewed catalog foundation, not full UI parity | `defer` complete V1 management parity | `pending` |
-| Premixes and mixes | V1 premix/mix creation and reconciliation | Import/capability research and later-phase candidates | `defer` | `pending` |
-| Shipping guide | V1 shipping import and packaging data | Deterministic shipping-capacity parser | `combine` | `ported` domain; UI `pending` |
-| Dough/cheese/sauce guides | V1 guide imports and recipe effects | Deterministic source/capability importers | `combine` | `ported` domain; UI `pending` |
+| Premixes and mixes | V1 premix/mix creation and reconciliation | Import/capability research and later-phase candidates | `defer` | `ported` deterministic premix source review; full management `pending` |
+| Shipping guide | V1 shipping import and packaging data | Deterministic shipping-capacity parser | `combine` | `ported` deterministic source review; full editor `pending` |
+| Dough/cheese/sauce guides | V1 guide imports and recipe effects | Deterministic source/capability importers | `combine` | `ported` deterministic source review; full editors `pending` |
 | Allergens and substitutions | V1 allergen mapping, warnings, logs | Later-phase candidate | `defer` | `pending` |
 
 ## Inventory and warehouse
@@ -136,10 +136,10 @@ Verified in an isolated checkout with synthetic data and disposable PostgreSQL 1
 
 - Production React build, strict TypeScript, server syntax checks, and generated OpenAPI client stability: **PASS**.
 - Synthetic unit suite: **173 PASS, 0 FAIL, 2 SKIPPED**. Both skips require private customer workbooks that were not provisioned.
-- React Chromium suite: **7 PASS, 0 FAIL**, covering service-worker migration/offline reading, run commands, station conflicts, schedule commands and exact retry, stale conflicts, workbook review/Apply, setup staging/review/exact-retry/Apply/Undo/reopen, manager-only access, offline write lockout, navigation, staff creation, sign-out, and phone/tablet/desktop layouts.
+- React Chromium suite: **9 PASS, 0 FAIL**, covering service-worker migration/offline reading, run commands, station conflicts, schedule commands and exact retry, stale conflicts, workbook review/Apply, setup CSV and source-workbook staging/review/exact-retry/Apply/Undo/reopen, source-row confirmation and correction, source-summary preservation, cheese applicator-slot enforcement, manager-only access, offline write lockout, navigation, staff creation, sign-out, and phone/tablet/desktop layouts.
 - Disposable PostgreSQL suite: **PASS**, covering migrations, SQL invariants, direct partial schedule updates, concurrent bootstrap/run/station/inventory commands, worker leases and automatic-progress functions, restricted runtime-role access, reviewed imports, inventory, schedules, role revocation, and cutover rehearsal.
-- Real Chromium/React/PostgreSQL journey: **PASS**, covering authenticated session use, run preparation, start, first manual station update, stale conflict, pause/resume/complete, exact-once completion receipt, schedule add/update/exact-retry/move/swap/breaks/conflict, deterministic workbook Apply, setup post-commit response loss/exact retry without duplication, canonical setup review, real catalog Apply/Undo readback, history reopen, staff creation and authentication, reload persistence, offline write lockout, and desktop/phone/tablet emulation.
-- WebKit 27.2/Safari-engine React/PostgreSQL run, schedule, and setup history/reopen readback plus tablet-landscape layout checks: **PASS** using the pinned Playwright browser. This is engine emulation, not physical iOS Safari evidence.
+- Real Chromium/React/PostgreSQL journey: **PASS**, covering authenticated session use, run preparation, start, first manual station update, stale conflict, pause/resume/complete, exact-once completion receipt, schedule add/update/exact-retry/move/swap/breaks/conflict, deterministic workbook Apply, setup post-commit response loss/exact retry without duplication, canonical setup review, real catalog Apply/Undo readback, deterministic XLSX source preview/reviewed staging/source-summary persistence/real run-template Apply, history reopen, staff creation and authentication, reload persistence, offline write lockout, and desktop/phone/tablet emulation.
+- WebKit 27.2/Safari-engine React/PostgreSQL run, schedule, and setup history/reopen readback, including source-workbook summary and applied run-template values, plus tablet-landscape layout checks: **PASS** using the pinned Playwright browser. This is engine emulation, not physical iOS Safari evidence.
 - Production dependency audit: **PASS**; no known vulnerabilities reported.
 - No-AI and research-safety guards: **PASS**.
 
@@ -147,4 +147,4 @@ Qualification limits:
 
 - Private-workbook fidelity: **NOT PROVEN**; the two corpus tests remain explicit skips.
 - Supervised API plus external worker as one deployed runtime, physical Android/iOS devices, accessibility audit, Reserved VM pilot, backup/restore rehearsal, and production readiness: **NOT RUN / NOT ESTABLISHED** as applicable.
-- This snapshot does not claim complete V1/V2 feature parity. No GitHub write, deployment, production access, or V1 data access occurred.
+- This snapshot does not claim complete V1/V2 feature parity. No deployment, production access, or V1 data access occurred.

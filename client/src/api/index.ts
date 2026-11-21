@@ -26,6 +26,9 @@ export type SetupCatalogDetail = components["schemas"]["SetupCatalogDetail"];
 export type SetupCatalogStageResponse = components["schemas"]["SetupCatalogStageResponse"];
 export type SetupCatalogActionResult = components["schemas"]["SetupCatalogActionResult"];
 export type SetupCatalogStageRequest = components["schemas"]["SetupCatalogRequest"];
+export type SourceWorkbookFamily = components["schemas"]["SourceWorkbookPreviewRequest"]["family"];
+export type SourceWorkbookPreview = components["schemas"]["SourceWorkbookPreviewResponse"];
+export type SourceImportSummary = components["schemas"]["SourceImportSummary"];
 export type ScheduleCommandResult = {
   schedule: ProductionSchedule;
   replayed: boolean;
@@ -245,6 +248,9 @@ const SETUP_CATALOG_FAMILIES: SetupCatalogFamily[] = [
   "ingredients", "mixes", "die-types", "die-line-defaults", "production-rules",
   "freezer-pull-items", "run-templates", "manager-lists", "aliases",
 ];
+const SOURCE_WORKBOOK_FAMILIES: SourceWorkbookFamily[] = [
+  "spec-sheets", "premix-sheets", "cheese-mix-specs", "shipping-guides", "sauce-guides", "dough-guides",
+];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -255,19 +261,64 @@ function isSetupCatalogRecord(value: unknown): value is SetupCatalogRecord {
   return object(value) && typeof value.code === "string" && typeof value.name === "string" && object(value.data);
 }
 
+export function isSourceImportSummary(value: unknown): value is SourceImportSummary {
+  return object(value)
+    && SOURCE_WORKBOOK_FAMILIES.includes(value.sourceFamily as SourceWorkbookFamily)
+    && typeof value.sourceSha256 === "string" && /^[0-9a-f]{64}$/u.test(value.sourceSha256)
+    && value.parserVersion === "v1-source-import/1"
+    && ["sourceRows", "importedRows", "skippedRows", "unresolvedRows"].every((key) =>
+      Number.isSafeInteger(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= 2000);
+}
+
+function isSourceWorkbookPreview(value: unknown): value is SourceWorkbookPreview {
+  if (!object(value) || !SOURCE_WORKBOOK_FAMILIES.includes(value.family as SourceWorkbookFamily)) return false;
+  const targetFamily = value.family === "premix-sheets" ? "mixes" : "run-templates";
+  return value.targetFamily === targetFamily && value.parserVersion === "v1-source-import/1"
+    && typeof value.fileSha256 === "string" && /^[0-9a-f]{64}$/u.test(value.fileSha256)
+    && Number.isSafeInteger(value.sourceRows) && Number(value.sourceRows) >= 0 && Number(value.sourceRows) <= 2000
+    && Number.isSafeInteger(value.proposedRows) && Number(value.proposedRows) >= 0 && Number(value.proposedRows) <= 2000
+    && Number.isSafeInteger(value.skippedRows) && Number(value.skippedRows) >= 0 && Number(value.skippedRows) <= 2000
+    && Array.isArray(value.records) && value.records.length === value.proposedRows
+    && value.records.every((item) => object(item) && typeof item.source === "string" && item.source.length <= 240
+      && item.targetFamily === targetFamily && isSetupCatalogRecord(item.record)
+      && (item.sourceDetails === undefined || (object(item.sourceDetails) && JSON.stringify(item.sourceDetails).length <= 20_000)))
+    && Array.isArray(value.unresolvedRows) && value.unresolvedRows.length <= 2000
+    && value.unresolvedRows.every((item) => object(item) && typeof item.source === "string" && item.source.length <= 240
+      && typeof item.reason === "string" && item.reason.length <= 300);
+}
+
 function isSetupCatalogHistoryItem(value: unknown): value is SetupCatalogHistoryItem {
   return object(value) && typeof value.id === "string" && UUID.test(value.id)
     && typeof value.family === "string" && ["staged", "applied", "undone"].includes(String(value.status))
     && Number.isSafeInteger(value.rowCount) && Number(value.rowCount) >= 1
     && typeof value.createdBy === "string" && typeof value.createdAt === "string"
     && (value.appliedAt === null || typeof value.appliedAt === "string")
-    && (value.undoneAt === null || typeof value.undoneAt === "string");
+    && (value.undoneAt === null || typeof value.undoneAt === "string")
+    && (value.sourceSummary == null || isSourceImportSummary(value.sourceSummary));
 }
 
 function isSetupCatalogDetail(value: unknown): value is SetupCatalogDetail {
   if (!isSetupCatalogHistoryItem(value)) return false;
   const records = (value as unknown as { records?: unknown }).records;
   return Array.isArray(records) && records.length === value.rowCount && records.every(isSetupCatalogRecord);
+}
+
+export async function previewSourceWorkbook(input: {
+  family: SourceWorkbookFamily;
+  fileName: string;
+  workbookBase64: string;
+  signal: AbortSignal;
+}): Promise<SourceWorkbookPreview> {
+  const { signal, ...body } = input;
+  const result = await unwrap(await client.POST("/api/v3/setup-catalog/imports/workbooks/preview", {
+    params: { header: mutationHeaders() },
+    body,
+    signal,
+  }));
+  if (!isSourceWorkbookPreview(result) || result.family !== body.family) {
+    throw new ApiError("The server returned an incomplete source-workbook review. Nothing was staged.", 502);
+  }
+  return result;
 }
 
 export async function listSetupCatalogImports(): Promise<SetupCatalogHistoryItem[]> {
@@ -301,7 +352,12 @@ export async function stageSetupCatalogImport(
     || !SETUP_CATALOG_FAMILIES.includes(result.family) || result.family !== request.family
     || !Number.isSafeInteger(result.rowCount) || result.rowCount < 1
     || !Array.isArray(result.records) || result.records.length !== result.rowCount
-    || !result.records.every(isSetupCatalogRecord) || typeof result.replayed !== "boolean") {
+    || !result.records.every(isSetupCatalogRecord) || typeof result.replayed !== "boolean"
+    || (request.sourceSummary
+      ? !isSourceImportSummary(result.sourceSummary)
+        || !(["sourceFamily", "sourceSha256", "parserVersion", "sourceRows", "importedRows", "skippedRows", "unresolvedRows"] as const)
+          .every((key) => result.sourceSummary?.[key] === request.sourceSummary?.[key])
+      : result.sourceSummary != null)) {
     throw new ApiError("The server did not return a complete staged setup review. Retry the same request.", 502);
   }
   return result;

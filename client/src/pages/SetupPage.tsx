@@ -20,6 +20,7 @@ import {
   readPendingSetupCatalogImport,
   writePendingSetupCatalogImport,
 } from "../components/setup-catalog-storage";
+import { SourceWorkbookImport } from "../components/SourceWorkbookImport";
 
 const FAMILY_LABELS: Record<SetupCatalogFamily, string> = {
   ingredients: "Ingredients",
@@ -123,6 +124,18 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
     if (fileInput.current) fileInput.current.value = "";
   }
 
+  function persistPending(request: SetupCatalogStageRequest): boolean {
+    try {
+      writePendingSetupCatalogImport(userId, request);
+      setPending(request);
+      return true;
+    } catch {
+      setError("This device could not retain the pending request. Nothing was sent; check browser storage and try again.");
+      setNotice(null);
+      return false;
+    }
+  }
+
   async function stage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const file = fileInput.current?.files?.[0];
@@ -138,14 +151,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       const csv = await file.text();
       parseSetupCatalogCsv(family, csv);
       const request: SetupCatalogStageRequest = { requestId: crypto.randomUUID(), family, csv };
-      try {
-        writePendingSetupCatalogImport(userId, request);
-      } catch {
-        setError("This device could not retain the pending request. Nothing was sent; check browser storage and try again.");
-        setNotice(null);
-        return;
-      }
-      setPending(request);
+      if (!persistPending(request)) return;
       await sendPending(request);
     } catch (cause) {
       setError(message(cause, "The CSV could not be validated. Nothing was staged."));
@@ -155,11 +161,11 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
     }
   }
 
-  async function sendPending(request: SetupCatalogStageRequest) {
-    if (!online || !canManage) return;
+  async function sendPending(request: SetupCatalogStageRequest): Promise<boolean> {
+    if (!online || !canManage) return false;
     setBusy("stage");
     setError(null);
-    setNotice("Staging the reviewed CSV. Nothing will be applied yet.");
+    setNotice("Staging the reviewed setup records. Nothing will be applied yet.");
     try {
       const result = await stageSetupCatalogImport(request);
       clearPendingSetupCatalogImport(userId);
@@ -168,7 +174,8 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       const reloaded = await loadCanonical(result.importId, true);
       setNotice(result.replayed
         ? `The previous staging request was confirmed. ${reloaded ? "The canonical setup review has been reloaded." : "Canonical review reload failed; refresh before applying."}`
-        : `CSV staged. Review the stored records; no setup values have been applied.${reloaded ? "" : " Canonical review reload failed; refresh before applying."}`);
+        : `${request.sourceSummary ? "Reviewed source records" : "CSV"} staged. Review the stored records; no setup values have been applied.${reloaded ? "" : " Canonical review reload failed; refresh before applying."}`);
+      return true;
     } catch (cause) {
       const status = cause instanceof ApiError ? cause.status : 0;
       if (status >= 400 && status < 500 && ![401, 403, 429].includes(status)) {
@@ -180,7 +187,8 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       else if (status === 403) setError("Your session could not authorize staging. Refresh your session; the same request is retained.");
       else if (status === 429 || status >= 500 || status === 0) {
         setError(`${message(cause, "Staging was not confirmed.")} Retry the same request; its request ID prevents duplicate imports.`);
-      } else setError(message(cause, "The CSV was rejected. Nothing was staged."));
+      } else setError(message(cause, "The setup records were rejected. Nothing was staged."));
+      return false;
     } finally {
       setBusy(null);
     }
@@ -261,7 +269,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       {notice ? <div className="notice-banner" role="status">{notice}<button type="button" className="ml-auto underline" onClick={() => setNotice(null)}>Dismiss</button></div> : null}
       {pending ? (
         <div className="notice-banner" role="status">
-          <span>A CSV staging response is unresolved. Other setup writes are paused until the exact request succeeds or is rejected.</span>
+          <span>A setup staging response is unresolved. Other setup writes are paused until the exact request succeeds or is rejected.</span>
           <button type="button" className="button-secondary ml-auto" disabled={!online || busy !== null} onClick={() => void sendPending(pending)}>Retry the same staging request</button>
         </div>
       ) : null}
@@ -293,6 +301,16 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
             </form>
           </section>
 
+          <SourceWorkbookImport
+            online={online}
+            disabled={writeDisabled}
+            pending={pending !== null}
+            onStage={async (request) => {
+              if (writeDisabled || !persistPending(request)) return false;
+              return sendPending(request);
+            }}
+          />
+
           {review ? (
             <section className="panel" aria-labelledby="setup-review-heading">
               <div className="panel-heading">
@@ -300,6 +318,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
                 <span className={`status-pill ${review.status === "applied" ? "status-running" : review.status === "staged" ? "status-paused" : ""}`}>{review.status}</span>
               </div>
               <p className="mt-3 text-sm text-muted-foreground">{reviewLabel(review.status)} · {FAMILY_LABELS[review.family as SetupCatalogFamily] ?? review.family} · {review.rowCount} row(s)</p>
+              {review.sourceSummary ? <p className="mt-2 text-xs text-muted-foreground">Source {review.sourceSummary.sourceFamily} · {review.sourceSummary.sourceRows} source row(s) · {review.sourceSummary.importedRows} imported · {review.sourceSummary.skippedRows} skipped · {review.sourceSummary.unresolvedRows} still unresolved · SHA-256 {review.sourceSummary.sourceSha256.slice(0, 12)}…</p> : null}
               <div className="mt-5 space-y-4">
                 {review.records.map((record, index) => (
                   <article key={`${record.code}-${index}`} className="rounded-lg border border-border/70 bg-background/40 p-4" aria-label={`Setup record ${index + 1}`}>
@@ -333,6 +352,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
                   <div><h3 className="text-sm font-semibold">{FAMILY_LABELS[item.family as SetupCatalogFamily] ?? item.family}</h3><p className="mt-1 text-xs text-muted-foreground">{item.rowCount} row(s) · {new Date(item.createdAt).toLocaleString()}</p></div>
                   <span className={`status-pill ${item.status === "applied" ? "status-running" : item.status === "staged" ? "status-paused" : ""}`}>{item.status}</span>
                 </div>
+                {item.sourceSummary ? <p className="mt-3 text-xs text-muted-foreground">Source {item.sourceSummary.sourceFamily} · {item.sourceSummary.importedRows} imported · {item.sourceSummary.skippedRows} skipped · {item.sourceSummary.unresolvedRows} unresolved</p> : null}
                 {item.createdCount != null || item.updatedCount != null ? <p className="mt-3 text-xs text-muted-foreground">{item.createdCount ?? 0} created · {item.updatedCount ?? 0} updated</p> : null}
                 <button type="button" className="button-secondary mt-4 w-full" disabled={!online || busy !== null} onClick={() => void reopen(item)}>{review?.id === item.id ? "Reload canonical review" : `Reopen import ${index + 1}`}</button>
               </article>

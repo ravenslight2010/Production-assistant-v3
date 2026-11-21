@@ -64,7 +64,7 @@ function detail(importItem) {
     createdAt: "2026-11-21T12:00:00.000Z",
     appliedAt: importItem.appliedAt ?? null,
     undoneAt: importItem.undoneAt ?? null,
-    sourceSummary: null,
+    sourceSummary: importItem.sourceSummary ?? null,
     createdCount: importItem.createdCount ?? null,
     updatedCount: importItem.updatedCount ?? null,
   };
@@ -100,16 +100,44 @@ async function installSetupApi(context, baseUrl, { manager = true } = {}) {
         return historyItem;
       }) });
     }
+    if (path === "/api/v3/setup-catalog/imports/workbooks/preview" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(Object.keys(body).sort(), ["family", "fileName", "workbookBase64"]);
+      assert.equal(Buffer.from(body.workbookBase64, "base64").toString(), "synthetic workbook bytes");
+      if (body.family === "cheese-mix-specs") {
+        return json(route, {
+          family: body.family, targetFamily: "run-templates", parserVersion: "v1-source-import/1",
+          fileSha256: "c".repeat(64), sourceRows: 1, proposedRows: 1, skippedRows: 0, unresolvedRows: [],
+          records: [{ source: "cheese.xlsx / Sheet1 / row 2", targetFamily: "run-templates", record: {
+            code: "CHEESE-SOURCE", name: "Cheese Source", data: { brand: "Brand", flavor: "Original", values: {} },
+          }, sourceDetails: { recipe: "Mozzarella" } }],
+        });
+      }
+      return json(route, {
+        family: body.family, targetFamily: "run-templates", parserVersion: "v1-source-import/1",
+        fileSha256: "a".repeat(64), sourceRows: 4, proposedRows: 2, skippedRows: 1,
+        unresolvedRows: [{ source: "source.xlsx / Sheet1 / row 5", reason: "Unsupported source row requires manager review." }],
+        records: [
+          { source: "source.xlsx / Sheet1 / row 2", targetFamily: "run-templates", record: {
+            code: "SOURCE-A", name: "Source A", data: { brand: "Brand", flavor: "Original", values: { targetDoughballWeight: 4 } },
+          }, sourceDetails: { cells: { A2: "SOURCE-A", B2: "Source A" } } },
+          { source: "source.xlsx / Sheet1 / row 3", targetFamily: "run-templates", record: {
+            code: "SOURCE-B", name: "Source B", data: { brand: "Brand", flavor: "Original", values: { targetDoughballWeight: 6 } },
+          }, sourceDetails: { cells: { A3: "SOURCE-B", B3: "Source B" } } },
+        ],
+      });
+    }
     if (path === "/api/v3/setup-catalog/imports" && method === "POST") {
       const body = request.postDataJSON();
       assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
-      assert.deepEqual(Object.keys(body).sort(), ["csv", "family", "requestId"]);
+      assert.deepEqual(Object.keys(body).sort(), body.sourceSummary ? ["csv", "family", "requestId", "sourceSummary"] : ["csv", "family", "requestId"]);
       const records = parseSetupCatalogCsv(body.family, body.csv);
       const prior = requests.get(body.requestId);
       if (prior) {
         assert.deepEqual(body, prior, "exact retry must preserve request ID, family, and CSV bytes");
         const item = imports.get(IMPORT_ID);
-        return json(route, { outcome: "staged", importId: IMPORT_ID, family: item.family, rowCount: item.rowCount, replayed: true, records });
+        return json(route, { outcome: "staged", importId: IMPORT_ID, family: item.family, rowCount: item.rowCount, replayed: true, records, sourceSummary: item.sourceSummary ?? null });
       }
       const item = {
         id: IMPORT_ID,
@@ -117,6 +145,7 @@ async function installSetupApi(context, baseUrl, { manager = true } = {}) {
         status: "staged",
         rowCount: records.length,
         records,
+        sourceSummary: body.sourceSummary ?? null,
       };
       requests.set(body.requestId, body);
       imports.set(IMPORT_ID, item);
@@ -124,7 +153,7 @@ async function installSetupApi(context, baseUrl, { manager = true } = {}) {
         loseNextStageResponse = false;
         return json(route, { error: "Synthetic response loss after staging commit." }, 500);
       }
-      return json(route, { outcome: "staged", importId: IMPORT_ID, family: item.family, rowCount: item.rowCount, replayed: false, records }, 201);
+      return json(route, { outcome: "staged", importId: IMPORT_ID, family: item.family, rowCount: item.rowCount, replayed: false, records, sourceSummary: item.sourceSummary }, 201);
     }
     const detailMatch = path.match(/^\/api\/v3\/setup-catalog\/imports\/([0-9a-f-]+)$/);
     if (detailMatch && method === "GET") {
@@ -236,6 +265,102 @@ test("React setup catalog stages without applying, retries exactly, applies, und
       `the React setup page must fit ${viewport.width}x${viewport.height}`);
   }
   assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test("source workbook review gates edits, preserves source summaries on exact retry, and stays read-only offline", { timeout: 90_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installSetupApi(context, baseUrl);
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#setup`);
+  await page.getByRole("heading", { name: "Setup and master data", exact: true }).waitFor();
+  const family = page.getByLabel("Source workbook family", { exact: true });
+  assert.deepEqual(await family.locator("option").allTextContents(), ["Spec sheets", "Premix sheets", "Cheese mix specs", "Shipping guides", "Sauce guides", "Dough guides"]);
+  await family.selectOption("sauce-guides");
+  assert.equal(await page.getByLabel("Source workbook file", { exact: true }).getAttribute("accept"), ".xlsx,.docx");
+  await family.selectOption("spec-sheets");
+  await page.getByLabel("Source workbook file", { exact: true }).setInputFiles({ name: "source.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from("synthetic workbook bytes") });
+  await page.getByRole("button", { name: "Preview workbook", exact: true }).click();
+  await page.getByText(/Deterministic preview loaded\. Nothing has been staged or applied/).waitFor();
+  const first = page.getByRole("article", { name: "Source record 1", exact: true });
+  const second = page.getByRole("article", { name: "Source record 2", exact: true });
+  await first.getByText("SOURCE-A — Source A", { exact: true }).waitFor();
+  assert.equal(api.imports.size, 0, "preview must not stage or apply setup records");
+
+  await second.getByLabel("Include", { exact: true }).uncheck();
+  await first.getByLabel("V3 code", { exact: true }).fill("SOURCE-EDITED");
+  await first.getByLabel("Mapped V3 JSON", { exact: true }).fill("{invalid");
+  await first.getByLabel("Reviewed and confirmed", { exact: true }).check();
+  await page.getByRole("button", { name: "Acknowledge review-only", exact: true }).click();
+  await page.getByRole("button", { name: "Stage reviewed source records", exact: true }).click();
+  await page.getByText("Review every included source record and correct invalid mapped JSON before staging.", { exact: true }).waitFor();
+  assert.equal(api.imports.size, 0, "invalid mapped JSON must not reach staging");
+  const mappedJson = JSON.stringify({ brand: "Brand", flavor: "Original", values: { targetDoughballWeight: 5 } }, null, 2);
+  await first.getByLabel("Mapped V3 JSON", { exact: true }).fill(mappedJson);
+  await first.getByLabel("Reviewed and confirmed", { exact: true }).check();
+
+  const writesBeforeOffline = api.writes.length;
+  await context.setOffline(true);
+  await page.getByText("Loaded values only · no file retained or writes queued", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Source workbook file", { exact: true }).evaluate((input) => input.files.length), 0);
+  assert.equal(await page.getByRole("button", { name: "Preview workbook", exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Stage reviewed source records", exact: true }).isDisabled(), true);
+  assert.equal(await first.getByLabel("V3 code", { exact: true }).inputValue(), "SOURCE-EDITED");
+  assert.equal(api.writes.length, writesBeforeOffline, "offline source review must not issue writes");
+  await context.setOffline(false);
+  await page.getByText("Server-owned import lifecycle · manage-inventory", { exact: true }).waitFor();
+
+  api.loseNextStageResponse();
+  await page.getByRole("button", { name: "Stage reviewed source records", exact: true }).click();
+  await page.getByText(/Retry the same request; its request ID prevents duplicate imports/).waitFor();
+  assert.equal(api.imports.size, 1);
+  const originalRequest = [...api.requests.values()][0];
+  assert.deepEqual(originalRequest.sourceSummary, {
+    sourceFamily: "spec-sheets", sourceSha256: "a".repeat(64), parserVersion: "v1-source-import/1",
+    sourceRows: 4, importedRows: 1, skippedRows: 2, unresolvedRows: 1,
+  });
+  assert.equal(parseSetupCatalogCsv(originalRequest.family, originalRequest.csv)[0].code, "SOURCE-EDITED");
+  await page.reload();
+  await page.getByRole("button", { name: "Retry the same staging request", exact: true }).click();
+  await page.getByText(/The previous staging request was confirmed\. The canonical setup review has been reloaded\./).waitFor();
+  assert.equal(api.imports.size, 1, "source exact retry must not duplicate the import");
+  assert.deepEqual([...api.requests.values()], [originalRequest]);
+  const review = page.getByRole("region", { name: "Setup import review" });
+  await review.getByText("SOURCE-EDITED", { exact: true }).waitFor();
+  await review.getByText(/Source spec-sheets · 4 source row\(s\) · 1 imported · 2 skipped · 1 still unresolved/).waitFor();
+  assert.equal(api.appliedRecords.size, 0, "source staging remains review-only until Apply");
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test("cheese source review requires an explicit applicator slot before staging", { timeout: 60_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installSetupApi(context, baseUrl);
+  const page = await context.newPage();
+  await page.goto(`${baseUrl}/#setup`);
+  await page.getByLabel("Source workbook family", { exact: true }).selectOption("cheese-mix-specs");
+  await page.getByLabel("Source workbook file", { exact: true }).setInputFiles({ name: "cheese.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from("synthetic workbook bytes") });
+  await page.getByRole("button", { name: "Preview workbook", exact: true }).click();
+  const candidate = page.getByRole("article", { name: "Source record 1", exact: true });
+  await candidate.getByLabel("Reviewed and confirmed", { exact: true }).check();
+  await page.getByRole("button", { name: "Stage reviewed source records", exact: true }).click();
+  await page.getByText("Choose an explicit V3 cheese applicator slot for every included cheese recipe.", { exact: true }).waitFor();
+  assert.equal(api.imports.size, 0);
+  await candidate.getByLabel("Mapped V3 JSON", { exact: true }).fill(JSON.stringify({
+    brand: "Brand", flavor: "Original", values: { app1CheeseRecipe: [{ ingredient: "MOZZARELLA", lbs: 1 }], app1CheeseRecipeName: "Mozzarella" },
+  }, null, 2));
+  await candidate.getByLabel("Reviewed and confirmed", { exact: true }).check();
+  await page.getByRole("button", { name: "Stage reviewed source records", exact: true }).click();
+  await page.getByText(/Reviewed source records staged\. Review the stored records/).waitFor();
+  assert.equal(api.imports.size, 1);
+  assert.deepEqual([...api.requests.values()][0].sourceSummary, {
+    sourceFamily: "cheese-mix-specs", sourceSha256: "c".repeat(64), parserVersion: "v1-source-import/1",
+    sourceRows: 1, importedRows: 1, skippedRows: 0, unresolvedRows: 0,
+  });
   await context.close();
 });
 

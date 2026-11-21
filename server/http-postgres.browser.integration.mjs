@@ -488,6 +488,83 @@ async function main() {
     await page.getByRole("button", { name: "Reopen import 1", exact: true }).click();
     await page.getByText("Canonical import details reloaded. Review the preserved values before acting.").waitFor();
     await page.getByRole("region", { name: "Setup import review" }).getByText(setupName, { exact: true }).waitFor();
+
+    const sourceFlavor = `Browser Source ${suffix}`;
+    const sourceWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(sourceWorkbook, XLSX.utils.aoa_to_sheet([
+      ["Brand", "Flavor", "Target Doughball Weight", "Pizzas Per Case"],
+      ["Integration Brand", sourceFlavor, 8, 12],
+    ]), "Specifications");
+    const sourceWorkbookBytes = XLSX.write(sourceWorkbook, { type: "buffer", bookType: "xlsx" });
+    await page.getByLabel("Source workbook family", { exact: true }).selectOption("spec-sheets");
+    await page.getByLabel("Source workbook file", { exact: true }).setInputFiles({
+      name: "source-browser-integration.xlsx",
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      buffer: sourceWorkbookBytes,
+    });
+    await page.getByRole("button", { name: "Preview workbook", exact: true }).click();
+    const sourceCandidate = page.getByRole("article", { name: "Source record 1", exact: true });
+    await sourceCandidate.getByText(new RegExp(`Integration Brand · ${sourceFlavor}$`)).waitFor();
+    assert.equal(await page.getByRole("article", { name: /^Unresolved source row / }).count(), 0);
+    await sourceCandidate.getByLabel("Reviewed and confirmed", { exact: true }).check();
+    const stageSourceResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/setup-catalog/imports" && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Stage reviewed source records", exact: true }).click();
+    const stageSourceResponse = await stageSourceResponsePromise;
+    assert.equal(stageSourceResponse.status(), 201, await stageSourceResponse.text());
+    await page.getByText(/Reviewed source records staged\. Review the stored records; no setup values have been applied\./).waitFor();
+    const sourceHistoryItem = (await setupHistoryRead()).find((item) => item.sourceSummary?.sourceFamily === "spec-sheets");
+    assert.ok(sourceHistoryItem, "the real source import must appear in canonical history");
+    const sourceImportId = sourceHistoryItem.id;
+    const sourceDetailRead = async () => {
+      const response = await page.request.get(`${baseUrl}/api/v3/setup-catalog/imports/${sourceImportId}`);
+      assert.equal(response.status(), 200);
+      return response.json();
+    };
+    let sourceDetail = await sourceDetailRead();
+    assert.equal(sourceDetail.status, "staged");
+    assert.equal(sourceDetail.rowCount, 1);
+    assert.equal(sourceDetail.records[0].name, `Integration Brand · ${sourceFlavor}`);
+    assert.deepEqual(sourceDetail.records[0].data.values, { targetDoughballWeight: 8, pizzasPerCase: 12 });
+    assert.equal(sourceDetail.sourceSummary.sourceRows, 1);
+    assert.equal(sourceDetail.sourceSummary.importedRows, 1);
+    assert.equal(sourceDetail.sourceSummary.skippedRows, 0);
+    assert.equal(sourceDetail.sourceSummary.unresolvedRows, 0);
+    assert.match(sourceDetail.sourceSummary.sourceSha256, /^[0-9a-f]{64}$/);
+    const sourceCode = sourceDetail.records[0].code;
+    const sourceRecordRead = async () => {
+      const result = await adminPool.query(
+        `SELECT record.code, record.name, record.data, record.source_import_id
+         FROM v3.setup_run_template_records AS record
+         JOIN v3.facility_scope AS scope
+           ON scope.facility_id = record.facility_id AND scope.singleton
+         WHERE lower(record.code) = lower($1)`,
+        [sourceCode],
+      );
+      return result.rows;
+    };
+    assert.deepEqual(await sourceRecordRead(), [], "source staging must not mutate real run templates");
+    await setupReview.getByText(/Source spec-sheets · 1 source row\(s\) · 1 imported · 0 skipped · 0 still unresolved/).waitFor();
+    const applySourceResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/setup-catalog/imports/${sourceImportId}/apply`
+      && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Apply reviewed import", exact: true }).click();
+    const applySourceResponse = await applySourceResponsePromise;
+    assert.equal(applySourceResponse.status(), 200);
+    assert.equal((await applySourceResponse.json()).createdCount, 1);
+    sourceDetail = await sourceDetailRead();
+    assert.equal(sourceDetail.status, "applied");
+    const appliedSourceRecords = await sourceRecordRead();
+    assert.equal(appliedSourceRecords.length, 1);
+    assert.equal(appliedSourceRecords[0].source_import_id, sourceImportId);
+    assert.deepEqual(appliedSourceRecords[0].data.values, { targetDoughballWeight: 8, pizzasPerCase: 12 });
+    await page.reload();
+    await page.getByRole("heading", { name: "Setup and master data", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Reopen import 1", exact: true }).click();
+    await page.getByText("Canonical import details reloaded. Review the preserved values before acting.").waitFor();
+    await setupReview.getByText(sourceCode, { exact: true }).waitFor();
+    await setupReview.getByText(/Source spec-sheets · 1 source row\(s\) · 1 imported · 0 skipped · 0 still unresolved/).waitFor();
+
     for (const viewport of [
       { width: 1280, height: 900 },
       { width: 375, height: 812 },
@@ -543,7 +620,7 @@ async function main() {
       "409 /api/v3/schedules/commands",
       "500 /api/v3/setup-catalog/imports",
     ], "only deliberate stale conflicts and injected post-commit response loss should be rejected");
-    console.log("V3 authenticated Chromium/PostgreSQL journey passed: run control; React schedule commands, exact retry, stale conflict, deterministic workbook Apply; setup stage/review/Apply/Undo/reopen with exact retry and real catalog readback; reload persistence, offline write lockout, staff creation, and desktop/phone/tablet layouts.");
+    console.log("V3 authenticated Chromium/PostgreSQL journey passed: run control; React schedule commands, exact retry, stale conflict, deterministic workbook Apply; setup CSV and source-workbook stage/review/Apply/Undo/reopen with exact retry and real catalog readback; reload persistence, offline write lockout, staff creation, and desktop/phone/tablet layouts.");
 
     let webkitBrowser;
     try {
@@ -567,9 +644,10 @@ async function main() {
       await webkitPage.getByRole("button", { name: "Reopen import 1", exact: true }).click();
       await webkitPage.getByText("Canonical import details reloaded. Review the preserved values before acting.").waitFor();
       const webkitSetupReview = webkitPage.getByRole("region", { name: "Setup import review" });
-      await webkitSetupReview.getByText("undone", { exact: true }).waitFor();
-      await webkitSetupReview.getByText(setupName, { exact: true }).waitFor();
-      await webkitSetupReview.getByLabel(`Values for ${setupCode}`, { exact: true }).waitFor();
+      await webkitSetupReview.getByText("applied", { exact: true }).waitFor();
+      await webkitSetupReview.getByText(`Integration Brand · ${sourceFlavor}`, { exact: true }).waitFor();
+      await webkitSetupReview.getByLabel(`Values for ${sourceCode}`, { exact: true }).waitFor();
+      await webkitSetupReview.getByText(/Source spec-sheets · 1 source row\(s\) · 1 imported · 0 skipped · 0 still unresolved/).waitFor();
       assert.ok(await webkitPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
       console.log("V3 WebKit/Safari-engine React/PostgreSQL run, schedule, and setup history readback passed.");
       await webkitBrowser.close();

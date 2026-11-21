@@ -1,4 +1,4 @@
-import type { SetupCatalogStageRequest } from "../api";
+import { isSourceImportSummary, type SetupCatalogStageRequest } from "../api";
 
 const PENDING_PREFIX = "fieldline:v3:setup-catalog-pending:";
 const FAMILIES = new Set([
@@ -17,11 +17,16 @@ export function readPendingSetupCatalogImport(userId: string): SetupCatalogStage
     if (!value || typeof value.requestId !== "string" || value.requestId.length < 1 || value.requestId.length > 200
       || typeof value.family !== "string" || !FAMILIES.has(value.family)
       || typeof value.csv !== "string" || value.csv.length < 1 || value.csv.length > 1024 * 1024
-      || value.sourceSummary !== undefined) {
+      || (value.sourceSummary !== undefined && !isSourceImportSummary(value.sourceSummary))) {
       sessionStorage.removeItem(key);
       return null;
     }
-    return { requestId: value.requestId, family: value.family as SetupCatalogStageRequest["family"], csv: value.csv };
+    return {
+      requestId: value.requestId,
+      family: value.family as SetupCatalogStageRequest["family"],
+      csv: value.csv,
+      ...(value.sourceSummary ? { sourceSummary: value.sourceSummary } : {}),
+    };
   } catch {
     sessionStorage.removeItem(key);
     return null;
