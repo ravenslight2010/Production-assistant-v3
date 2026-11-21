@@ -5,13 +5,16 @@ import {
   ApiError,
   createInventoryWarehouse,
   getOpeningCount,
+  getWarehouseGuidance,
   listInventoryMovements,
   listInventoryProducts,
   listInventoryWarehouses,
   listOpeningCounts,
   listWarehouseStock,
+  markCycleCounted,
   recordInventoryMovement,
   setProductionWarehouse,
+  saveCycleCountSchedule,
   stageOpeningCount,
   transferInventory,
   type AuthSession,
@@ -19,6 +22,9 @@ import {
   type InventoryMovementRequest,
   type InventoryProduct,
   type InventoryTransferRequest,
+  type MarkCycleCountedRequest,
+  type SaveCycleCountScheduleRequest,
+  type WarehouseGuidance,
   type OpeningCountRecord,
   type OpeningCountRequest,
   type OpeningCountSummary,
@@ -33,6 +39,7 @@ import {
 } from "../components/inventory-storage";
 import { OpeningCountPanel } from "../components/OpeningCountPanel";
 import { InventoryMovementPanel } from "../components/InventoryMovementPanel";
+import { WarehouseGuidancePanel } from "../components/WarehouseGuidancePanel";
 
 function message(cause: unknown, fallback: string): string {
   return cause instanceof Error ? cause.message : fallback;
@@ -49,6 +56,7 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
   const [nextCursor, setNextCursor] = useState<{ occurredAt: string; id: string } | null>(null);
   const [counts, setCounts] = useState<OpeningCountSummary[]>([]);
   const [currentCount, setCurrentCount] = useState<OpeningCountRecord | null>(null);
+  const [guidance, setGuidance] = useState<WarehouseGuidance | null>(null);
   const [pending, setPending] = useState<PendingInventoryRequest | null>(null);
   const [busy, setBusy] = useState<"load" | "write" | "movements" | null>(null);
   const [warehouseName, setWarehouseName] = useState("");
@@ -60,15 +68,22 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
   const writeDisabled = !online || !canManage || busy !== null || pending !== null;
 
   async function loadCanonical(options: { warehouseId?: string; countId?: string; quiet?: boolean } = {}): Promise<boolean> {
-    if (!online || !canManage) return false;
+    if (!online) return false;
     const generation = ++loadGeneration.current;
     if (!options.quiet) {
       setBusy("load");
       setError(null);
     }
     try {
-      const [nextWarehouses, nextProducts, nextCounts] = await Promise.all([
-        listInventoryWarehouses(), listInventoryProducts(), listOpeningCounts(),
+      if (!canManage) {
+        const nextGuidance = await getWarehouseGuidance();
+        if (generation !== loadGeneration.current) return false;
+        setGuidance(nextGuidance);
+        setLoaded(true);
+        return true;
+      }
+      const [nextWarehouses, nextProducts, nextCounts, nextGuidance] = await Promise.all([
+        listInventoryWarehouses(), listInventoryProducts(), listOpeningCounts(), getWarehouseGuidance(),
       ]);
       const requestedId = options.warehouseId ?? selectedWarehouseId;
       const nextWarehouseId = nextWarehouses.some((warehouse) => warehouse.id === requestedId)
@@ -89,6 +104,7 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
       setMovements(movementPage.movements);
       setNextCursor(movementPage.nextCursor);
       setCurrentCount(nextCount);
+      setGuidance(nextGuidance);
       setLoaded(true);
       return true;
     } catch (cause) {
@@ -107,8 +123,7 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
     setNotice(null);
     setBusy(null);
     if (!canManage) {
-      setWarehouses([]); setProducts([]); setStock([]); setMovements([]); setCounts([]); setCurrentCount(null); setLoaded(false);
-      return;
+      setWarehouses([]); setProducts([]); setStock([]); setMovements([]); setCounts([]); setCurrentCount(null);
     }
     if (online) void loadCanonical();
     else if (!loaded) setError("Offline read-only view. Reconnect to load inventory; no inventory writes are available.");
@@ -127,7 +142,7 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
   }
 
   async function sendPending(request: PendingInventoryRequest): Promise<boolean> {
-    if (!online || !canManage) return false;
+    if (!online || (!canManage && request.kind !== "cycle-count-mark")) return false;
     setBusy("write");
     setError(null);
     setNotice(null);
@@ -164,6 +179,14 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
         warehouseId = result.warehouseId;
         countId = result.countId;
         confirmation = "Opening count staged. Review every stored quantity; no stock has changed.";
+      } else if (request.kind === "cycle-count-mark") {
+        const result = await markCycleCounted(request.payload);
+        replayed = result.replayed;
+        confirmation = `${result.section} confirmed counted on ${result.countedOn}. Stock was not changed.`;
+      } else if (request.kind === "cycle-count-schedule") {
+        const result = await saveCycleCountSchedule(request.payload);
+        replayed = result.replayed;
+        confirmation = `${result.schedule.section} cycle-count schedule saved and reloaded.`;
       } else if (request.kind === "opening-review" || request.kind === "opening-apply") {
         const action = request.kind === "opening-review" ? "review" : "apply";
         const result = await actOnOpeningCount(request.countId, action);
@@ -186,7 +209,7 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
         setPending(null);
         if (status === 409) await loadCanonical({ quiet: true });
       }
-      if (status === 401) setError("Your manager session expired. Sign in again; the same inventory request is retained for safe retry.");
+      if (status === 401) setError("Your session expired. Sign in again; the same inventory request is retained for safe retry.");
       else if (status === 403) setError("Your session could not authorize this inventory action. Refresh your session; the same request is retained.");
       else if (status === 429 || status >= 500 || status === 0) {
         setError(`${message(cause, "The inventory request was not confirmed.")} Retry the same request; its identity prevents duplicate writes.`);
@@ -234,7 +257,15 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
   }
 
   if (!canManage) {
-    return <div><div className="page-heading"><div><p className="eyebrow">Stock authority</p><h1>Inventory</h1><p>Manager-only physical inventory.</p></div></div><section className="panel mt-6 max-w-3xl" role="alert"><h2 className="text-lg font-semibold">Manager access required</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">Your account does not have the manage-inventory capability required to read or change warehouse inventory.</p></section></div>;
+    return <div><div className="page-heading"><div><p className="eyebrow">Warehouse guidance</p><h1>Inventory</h1><p>Cycle-count reminders and scheduled freezer pull. Physical stock and configuration remain manager-controlled.</p></div><button type="button" className="button-secondary" disabled={!online || busy !== null} onClick={() => void loadCanonical()}><RefreshCw className="h-4 w-4" />Refresh guidance</button></div>
+      {pending ? <div className="notice-banner" role="status"><span>An inventory response is unresolved. Retry the identical request before another write.</span><button type="button" className="button-secondary ml-auto" disabled={!online || busy !== null || pending.kind !== "cycle-count-mark"} onClick={() => void sendPending(pending)}>Retry the same request</button></div> : null}
+      {error ? <div className="error-banner mt-4" role="alert">{error}</div> : null}{notice ? <div className="notice-banner" role="status">{notice}</div> : null}
+      {guidance ? <WarehouseGuidancePanel guidance={guidance} canManage={false} disabled={!online || busy !== null || pending !== null} onMark={async (request: MarkCycleCountedRequest) => {
+        if (!online || busy !== null || pending !== null) return false;
+        const pendingRequest: PendingInventoryRequest = { kind: "cycle-count-mark", payload: request };
+        return persistPending(pendingRequest) && sendPending(pendingRequest);
+      }} onSave={async () => false} /> : <section className="panel mt-6"><p className="text-sm text-muted-foreground">{online ? "Loading warehouse guidance…" : "Offline read-only view. Reconnect to load guidance."}</p></section>}
+    </div>;
   }
 
   return (
@@ -247,6 +278,17 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
       {error ? <div className="error-banner" role="alert">{error}</div> : null}
       {notice ? <div className="notice-banner" role="status">{notice}<button type="button" className="ml-auto underline" onClick={() => setNotice(null)}>Dismiss</button></div> : null}
       {pending ? <div className="notice-banner" role="status"><span>An inventory response is unresolved. Other inventory writes are paused until the exact request succeeds or is rejected.</span><button type="button" className="button-secondary ml-auto" disabled={!online || busy !== null} onClick={() => void sendPending(pending)}>Retry the same inventory request</button></div> : null}
+
+      {guidance ? <WarehouseGuidancePanel guidance={guidance} canManage disabled={!online || busy !== null || pending !== null}
+        onMark={async (request: MarkCycleCountedRequest) => {
+          if (!online || busy !== null || pending !== null) return false;
+          const pendingRequest: PendingInventoryRequest = { kind: "cycle-count-mark", payload: request };
+          return persistPending(pendingRequest) && sendPending(pendingRequest);
+        }} onSave={async (request: SaveCycleCountScheduleRequest) => {
+          if (!online || busy !== null || pending !== null) return false;
+          const pendingRequest: PendingInventoryRequest = { kind: "cycle-count-schedule", payload: request };
+          return persistPending(pendingRequest) && sendPending(pendingRequest);
+        }} /> : null}
 
       <div className="mt-6 grid items-start gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)]">
         <section className="panel min-w-0" aria-labelledby="warehouse-stock-heading">

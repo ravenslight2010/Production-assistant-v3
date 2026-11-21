@@ -75,6 +75,53 @@ test("inventory routes require a verified manager before database access", async
   assert.equal(operator.calls.length, 0);
 });
 
+test("staff receive only guidance and mark-counted access while managers configure schedules", async (t) => {
+  const staff = { ...MANAGER, capabilities: [] };
+  const guidance = { factoryDate: "2026-11-21", cycleCounts: [], freezerPull: { groups: [] } };
+  const api = await withApi(t, {
+    auth: staff,
+    query: async (sql) => ({ rows: [{ result: sql.includes("mark_cycle_counted") ? {
+      outcome: "accepted", replayed: false, confirmationId: "10000000-0000-4000-8000-000000000012",
+      section: "Dry storage", countedOn: "2026-11-21",
+    } : guidance }] }),
+  });
+  const read = await send(api.baseUrl, "/api/v3/inventory/warehouse-guidance");
+  assert.equal(read.status, 200);
+  assert.deepEqual(await read.json(), guidance);
+  const marked = await send(api.baseUrl, "/api/v3/inventory/cycle-counts/mark", {
+    method: "POST", body: { requestId: "count-staff-1", section: "Dry storage" },
+  });
+  assert.equal(marked.status, 200);
+  assert.match(api.calls[1].text, /mark_cycle_counted/u);
+  assert.equal(api.calls[1].values[4], "Dry storage");
+
+  const configured = await send(api.baseUrl, "/api/v3/inventory/cycle-counts/schedules", {
+    method: "POST", body: { requestId: "count-config-1", section: "Dry storage", cadenceDays: 7, enabled: true, expectedRevision: 0 },
+  });
+  assert.equal(configured.status, 403);
+  const stock = await send(api.baseUrl, "/api/v3/inventory/warehouses");
+  assert.equal(stock.status, 403);
+  assert.equal(api.calls.length, 2);
+
+  const noCsrf = await withApi(t, { auth: staff, csrf: false });
+  const denied = await send(noCsrf.baseUrl, "/api/v3/inventory/cycle-counts/mark", {
+    method: "POST", csrf: false, body: { requestId: "count-staff-2", section: "Dry storage" },
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(noCsrf.calls.length, 0);
+
+  const manager = await withApi(t, { query: async () => ({ rows: [{ result: {
+    outcome: "created", replayed: false,
+    schedule: { section: "Dry storage", cadenceDays: 7, enabled: true, lastCountedOn: null, revision: 1 },
+  } }] }) });
+  const saved = await send(manager.baseUrl, "/api/v3/inventory/cycle-counts/schedules", {
+    method: "POST", body: { requestId: "count-config-2", section: "Dry storage", cadenceDays: 7, enabled: true, expectedRevision: 0 },
+  });
+  assert.equal(saved.status, 200);
+  assert.match(manager.calls[0].text, /save_cycle_count_schedule/u);
+  assert.deepEqual(manager.calls[0].values.slice(4), ["Dry storage", 7, true, 0]);
+});
+
 test("inventory movements preserve legacy hashes and validate optional lot metadata", async (t) => {
   const accepted = {
     outcome: "accepted", replayed: false,

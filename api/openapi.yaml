@@ -1222,6 +1222,78 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
+  /api/v3/inventory/warehouse-guidance:
+    get:
+      operationId: getWarehouseGuidance
+      summary: Read cycle-count and scheduled freezer-pull guidance
+      description: Available to every signed-in staff member; contains no stock balances or physical-inventory writes.
+      responses:
+        "200":
+          description: Server-dated warehouse guidance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WarehouseGuidance"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v3/inventory/cycle-counts/mark:
+    post:
+      operationId: markCycleCounted
+      summary: Mark an enabled cycle-count section counted on the server factory date
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkCycleCountedRequest"
+      responses:
+        "200":
+          description: Count confirmation accepted or confirmed by exact retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CycleCountConfirmation"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v3/inventory/cycle-counts/schedules:
+    post:
+      operationId: saveCycleCountSchedule
+      summary: Create or revise a manager-owned cycle-count schedule
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaveCycleCountScheduleRequest"
+      responses:
+        "200":
+          description: Schedule saved or confirmed by exact retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CycleCountScheduleResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
   /api/v3/inventory/warehouses:
     get:
       operationId: listInventoryWarehouses
@@ -3043,6 +3115,145 @@ components:
           type: string
           minLength: 1
           maxLength: 120
+    WarehouseGuidance:
+      type: object
+      required: [factoryDate, cycleCounts, freezerPull]
+      properties:
+        factoryDate:
+          type: string
+          format: date
+        cycleCounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/CycleCountSchedule"
+        freezerPull:
+          type: object
+          required: [groups]
+          properties:
+            groups:
+              type: array
+              items:
+                $ref: "#/components/schemas/FreezerPullGroup"
+    CycleCountSchedule:
+      type: object
+      required: [section, cadenceDays, enabled, lastCountedOn, revision, due, overdueDays]
+      properties:
+        section:
+          type: string
+        cadenceDays:
+          type: integer
+          minimum: 1
+          maximum: 365
+        enabled:
+          type: boolean
+        lastCountedOn:
+          type: [string, "null"]
+          format: date
+        revision:
+          type: integer
+          minimum: 1
+        due:
+          type: boolean
+        overdueDays:
+          type: [integer, "null"]
+          minimum: 0
+    FreezerPullGroup:
+      type: object
+      required: [productionDate, runId, productCode, targetCases, items]
+      properties:
+        productionDate:
+          type: string
+          format: date
+        runId:
+          type: string
+          format: uuid
+        productCode:
+          type: string
+        targetCases:
+          type: integer
+          minimum: 1
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FreezerPullItem"
+    FreezerPullItem:
+      type: object
+      required: [code, ingredientName, productCode, quantity, unit, resolved, warning]
+      properties:
+        code:
+          type: string
+        ingredientName:
+          type: string
+        productCode:
+          type: string
+        quantity:
+          type: [string, "null"]
+        unit:
+          type: [string, "null"]
+        resolved:
+          type: boolean
+        warning:
+          type: [string, "null"]
+    MarkCycleCountedRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, section]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        section:
+          type: string
+          minLength: 1
+          maxLength: 120
+    CycleCountConfirmation:
+      type: object
+      required: [outcome, replayed, confirmationId, section, countedOn]
+      properties:
+        outcome:
+          const: accepted
+        replayed:
+          type: boolean
+        confirmationId:
+          type: string
+          format: uuid
+        section:
+          type: string
+        countedOn:
+          type: string
+          format: date
+    SaveCycleCountScheduleRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, section, cadenceDays, enabled, expectedRevision]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        section:
+          type: string
+          minLength: 1
+          maxLength: 120
+        cadenceDays:
+          type: integer
+          minimum: 1
+          maximum: 365
+        enabled:
+          type: boolean
+        expectedRevision:
+          type: integer
+          minimum: 0
+    CycleCountScheduleResult:
+      type: object
+      required: [outcome, replayed, schedule]
+      properties:
+        outcome:
+          type: string
+          enum: [created, updated, retired, re-enabled]
+        replayed:
+          type: boolean
+        schedule:
+          $ref: "#/components/schemas/CycleCountSchedule"
     Warehouse:
       type: object
       required: [id, name, active, isProduction, createdAt, openingCountApplied]

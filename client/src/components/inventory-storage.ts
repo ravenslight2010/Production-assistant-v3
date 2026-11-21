@@ -3,6 +3,8 @@ import type {
   InventoryMovementRequest,
   InventoryTransferRequest,
   OpeningCountRequest,
+  MarkCycleCountedRequest,
+  SaveCycleCountScheduleRequest,
   SetProductionWarehouseRequest,
 } from "../api";
 
@@ -13,7 +15,9 @@ export type PendingInventoryRequest =
   | { kind: "transfer"; payload: InventoryTransferRequest }
   | { kind: "opening-count"; payload: OpeningCountRequest }
   | { kind: "opening-review"; countId: string }
-  | { kind: "opening-apply"; countId: string };
+  | { kind: "opening-apply"; countId: string }
+  | { kind: "cycle-count-mark"; payload: MarkCycleCountedRequest }
+  | { kind: "cycle-count-schedule"; payload: SaveCycleCountScheduleRequest };
 
 const PREFIX = "fieldline:v3:inventory-pending:";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -109,6 +113,25 @@ function parse(value: unknown): PendingInventoryRequest | null {
   if ((candidate.kind === "opening-review" || candidate.kind === "opening-apply")
     && typeof candidate.countId === "string" && UUID.test(candidate.countId)) {
     return { kind: candidate.kind, countId: candidate.countId };
+  }
+  if (candidate.kind === "cycle-count-mark" && payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const body = payload as Record<string, unknown>;
+    if (requestId(body.requestId) && typeof body.section === "string" && body.section.trim() === body.section
+      && body.section.length >= 1 && body.section.length <= 120 && !/[\u0000-\u001f\u007f]/u.test(body.section)) {
+      return { kind: candidate.kind, payload: { requestId: body.requestId, section: body.section } };
+    }
+  }
+  if (candidate.kind === "cycle-count-schedule" && payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const body = payload as Record<string, unknown>;
+    if (requestId(body.requestId) && typeof body.section === "string" && body.section.trim() === body.section
+      && body.section.length >= 1 && body.section.length <= 120 && !/[\u0000-\u001f\u007f]/u.test(body.section)
+      && Number.isSafeInteger(body.cadenceDays) && Number(body.cadenceDays) >= 1 && Number(body.cadenceDays) <= 365
+      && typeof body.enabled === "boolean" && Number.isSafeInteger(body.expectedRevision) && Number(body.expectedRevision) >= 0) {
+      return { kind: candidate.kind, payload: {
+        requestId: body.requestId, section: body.section, cadenceDays: body.cadenceDays as number,
+        enabled: body.enabled, expectedRevision: body.expectedRevision as number,
+      } };
+    }
   }
   return null;
 }

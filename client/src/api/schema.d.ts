@@ -553,6 +553,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/inventory/warehouse-guidance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read cycle-count and scheduled freezer-pull guidance
+         * @description Available to every signed-in staff member; contains no stock balances or physical-inventory writes.
+         */
+        get: operations["getWarehouseGuidance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/inventory/cycle-counts/mark": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark an enabled cycle-count section counted on the server factory date */
+        post: operations["markCycleCounted"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/inventory/cycle-counts/schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create or revise a manager-owned cycle-count schedule */
+        post: operations["saveCycleCountSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/inventory/warehouses": {
         parameters: {
             query?: never;
@@ -1336,6 +1390,71 @@ export interface components {
         CreateWarehouseRequest: {
             requestId: string;
             name: string;
+        };
+        WarehouseGuidance: {
+            /** Format: date */
+            factoryDate: string;
+            cycleCounts: components["schemas"]["CycleCountSchedule"][];
+            freezerPull: {
+                groups: components["schemas"]["FreezerPullGroup"][];
+            };
+        };
+        CycleCountSchedule: {
+            section: string;
+            cadenceDays: number;
+            enabled: boolean;
+            /** Format: date */
+            lastCountedOn: string | null;
+            revision: number;
+            due: boolean;
+            overdueDays: number | null;
+        };
+        FreezerPullGroup: {
+            /** Format: date */
+            productionDate: string;
+            /** Format: uuid */
+            runId: string;
+            productCode: string;
+            targetCases: number;
+            items: components["schemas"]["FreezerPullItem"][];
+        };
+        FreezerPullItem: {
+            code: string;
+            ingredientName: string;
+            productCode: string;
+            quantity: string | null;
+            unit: string | null;
+            resolved: boolean;
+            warning: string | null;
+        };
+        MarkCycleCountedRequest: {
+            /** Format: uuid */
+            requestId: string;
+            section: string;
+        };
+        CycleCountConfirmation: {
+            /** @constant */
+            outcome: "accepted";
+            replayed: boolean;
+            /** Format: uuid */
+            confirmationId: string;
+            section: string;
+            /** Format: date */
+            countedOn: string;
+        };
+        SaveCycleCountScheduleRequest: {
+            /** Format: uuid */
+            requestId: string;
+            section: string;
+            cadenceDays: number;
+            enabled: boolean;
+            expectedRevision: number;
+        };
+        CycleCountScheduleResult: {
+            /** @enum {string} */
+            outcome: "created" | "updated" | "retired" | "re-enabled";
+            replayed: boolean;
+            schedule: components["schemas"]["CycleCountSchedule"];
         };
         Warehouse: {
             /** Format: uuid */
@@ -2852,6 +2971,86 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    getWarehouseGuidance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-dated warehouse guidance */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseGuidance"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    markCycleCounted: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkCycleCountedRequest"];
+            };
+        };
+        responses: {
+            /** @description Count confirmation accepted or confirmed by exact retry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CycleCountConfirmation"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    saveCycleCountSchedule: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveCycleCountScheduleRequest"];
+            };
+        };
+        responses: {
+            /** @description Schedule saved or confirmed by exact retry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CycleCountScheduleResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     listInventoryWarehouses: {

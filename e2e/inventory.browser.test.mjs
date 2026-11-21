@@ -84,8 +84,17 @@ async function installInventoryApi(context, baseUrl, { manager = true, establish
   const targetMovements = [];
   const stockByWarehouse = new Map([[WAREHOUSE_ID, stock], [TARGET_WAREHOUSE_ID, targetStock]]);
   const movementsByWarehouse = new Map([[WAREHOUSE_ID, movements], [TARGET_WAREHOUSE_ID, targetMovements]]);
+  const guidance = {
+    factoryDate: "2026-11-21",
+    cycleCounts: [{ section: "Dry storage", cadenceDays: 7, enabled: true, lastCountedOn: null, revision: 1, due: true, overdueDays: null }],
+    freezerPull: { groups: [{ productionDate: "2026-11-23", runId: "76000000-0000-4000-8000-000000000051", productCode: "PIZZA-A", targetCases: 10, items: [
+      { code: "FREEZER-FLOUR", ingredientName: "Browser Dough", productCode: "DOUGH-A", quantity: "20", unit: "lb", resolved: true, warning: null },
+      { code: "FREEZER-SAUCE", ingredientName: "Browser Sauce", productCode: "SAUCE-A", quantity: null, unit: "lb", resolved: false, warning: "Scheduled quantity is unresolved; check station capacity." },
+    ] }] },
+  };
   let loseNextStageResponse = false;
   let loseNextMovementResponse = false;
+  let loseNextCountResponse = false;
   let nextMovementId = 40;
   const newMovementId = () => `76000000-0000-4000-8000-${String(nextMovementId++).padStart(12, "0")}`;
   const changeStock = (warehouseId, code, delta) => {
@@ -172,7 +181,49 @@ async function installInventoryApi(context, baseUrl, { manager = true, establish
     if (path === "/api/v3/auth/bootstrap-status" && method === "GET") return json(route, { available: false });
     if (path.startsWith("/api/v3/inventory/")) inventoryRequests.push(`${method} ${path}`);
     if (!["GET", "HEAD", "OPTIONS"].includes(method)) writes.push(`${method} ${path}`);
+    if (path === "/api/v3/inventory/warehouse-guidance" && method === "GET") return json(route, guidance);
+    if (path === "/api/v3/inventory/cycle-counts/mark" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(Object.keys(body).sort(), ["requestId", "section"]);
+      const prior = requests.get(body.requestId);
+      if (prior) {
+        assert.deepEqual(body, prior, "cycle-count retry must preserve exact request bytes");
+        return json(route, { ...commandResults.get(body.requestId), replayed: true });
+      }
+      requests.set(body.requestId, body);
+      const schedule = guidance.cycleCounts.find((item) => item.section === body.section && item.enabled);
+      assert.ok(schedule);
+      schedule.lastCountedOn = guidance.factoryDate;
+      schedule.due = false;
+      schedule.revision += 1;
+      const result = { outcome: "accepted", replayed: false, confirmationId: "76000000-0000-4000-8000-000000000052", section: body.section, countedOn: guidance.factoryDate };
+      commandResults.set(body.requestId, result);
+      if (loseNextCountResponse) {
+        loseNextCountResponse = false;
+        return json(route, { error: "Synthetic response loss after count commit." }, 500);
+      }
+      return json(route, result);
+    }
     if (!manager) return json(route, { error: "Forbidden" }, 403);
+    if (path === "/api/v3/inventory/cycle-counts/schedules" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      const prior = requests.get(body.requestId);
+      if (prior) {
+        assert.deepEqual(body, prior);
+        return json(route, { ...commandResults.get(body.requestId), replayed: true });
+      }
+      requests.set(body.requestId, body);
+      const existing = guidance.cycleCounts.find((item) => item.section === body.section);
+      assert.equal(body.expectedRevision, existing?.revision ?? 0);
+      const schedule = existing ?? { section: body.section, lastCountedOn: null, due: true, overdueDays: null, revision: 0 };
+      Object.assign(schedule, { cadenceDays: body.cadenceDays, enabled: body.enabled, revision: schedule.revision + 1, due: body.enabled && schedule.lastCountedOn === null });
+      if (!existing) guidance.cycleCounts.push(schedule);
+      const result = { outcome: existing ? body.enabled ? "updated" : "retired" : "created", replayed: false, schedule };
+      commandResults.set(body.requestId, result);
+      return json(route, result);
+    }
     if (path === "/api/v3/inventory/warehouses" && method === "GET") return json(route, { warehouses });
     if (path === "/api/v3/inventory/warehouses" && method === "POST") {
       const body = request.postDataJSON();
@@ -349,6 +400,7 @@ async function installInventoryApi(context, baseUrl, { manager = true, establish
     targetMovements,
     loseNextStageResponse: () => { loseNextStageResponse = true; },
     loseNextMovementResponse: () => { loseNextMovementResponse = true; },
+    loseNextCountResponse: () => { loseNextCountResponse = true; },
   };
 }
 
@@ -537,7 +589,33 @@ test("React inventory records lot receipts, retries adjustments exactly, and tra
   await context.close();
 });
 
-test("React inventory denies non-managers without inventory reads or writes", { timeout: 45_000 }, async (t) => {
+test("React managers configure cycle-count cadence and availability from canonical guidance", { timeout: 45_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installInventoryApi(context, baseUrl);
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#inventory`);
+  await page.getByRole("heading", { name: "Cycle counts", exact: true }).waitFor();
+  await page.getByLabel("Section", { exact: true }).fill("Freezer");
+  await page.getByLabel("Cadence (days)", { exact: true }).fill("3");
+  await page.getByRole("button", { name: "Add schedule", exact: true }).click();
+  await page.getByText(/Freezer cycle-count schedule saved and reloaded/u).waitFor();
+  const card = page.locator("article").filter({ has: page.getByRole("heading", { name: "Freezer", exact: true }) });
+  await card.getByText("Every 3 days", { exact: false }).waitFor();
+  await card.getByRole("button", { name: "Configure", exact: true }).click();
+  assert.equal(await page.getByLabel("Section", { exact: true }).isDisabled(), true);
+  await page.getByLabel("Enabled for reminders and staff confirmation").uncheck();
+  await page.getByRole("button", { name: "Save schedule", exact: true }).click();
+  await page.getByText(/Previous request confirmed|Freezer cycle-count schedule saved/u).first().waitFor();
+  await card.getByText("Disabled", { exact: true }).first().waitFor();
+  assert.equal(api.writes.filter((path) => path.includes("cycle-counts/schedules")).length, 2);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test("React staff guidance marks counts with exact retry while stock and configuration stay manager-only", { timeout: 60_000 }, async (t) => {
   const baseUrl = await serveDist(t);
   const context = await openBrowser(t);
   const api = await installInventoryApi(context, baseUrl, { manager: false });
@@ -545,10 +623,33 @@ test("React inventory denies non-managers without inventory reads or writes", { 
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`${baseUrl}/#inventory`);
-  await page.getByRole("heading", { name: "Manager access required", exact: true }).waitFor();
-  await page.getByText(/does not have the manage-inventory capability/).waitFor();
-  assert.deepEqual(api.inventoryRequests, []);
-  assert.deepEqual(api.writes, []);
+  await page.getByRole("heading", { name: "Cycle counts", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Freezer pull", exact: true }).waitFor();
+  await page.getByText("20 lb", { exact: true }).waitFor();
+  await page.getByText(/Scheduled quantity is unresolved; check station capacity/u).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Configure", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("heading", { name: "Confirmed quantities", exact: true }).count(), 0);
+
+  api.loseNextCountResponse();
+  await page.getByRole("button", { name: "Mark counted", exact: true }).click();
+  await page.getByText(/Retry the same request; its identity prevents duplicate writes/u).waitFor();
+  const original = [...api.requests.values()].find((request) => request.section === "Dry storage");
+  await page.reload();
+  await page.getByRole("button", { name: "Retry the same request", exact: true }).click();
+  await page.getByText(/Previous request confirmed\. Dry storage confirmed counted on 2026-11-21/u).waitFor();
+  assert.deepEqual([...api.requests.values()].find((request) => request.section === "Dry storage"), original);
+  assert.equal(api.writes.filter((path) => path.includes("cycle-counts/mark")).length, 2);
+  assert.equal(api.inventoryRequests.some((path) => /warehouses|stock|movements|opening-counts/u.test(path)), false);
+
+  const writes = api.writes.length;
+  await context.setOffline(true);
+  assert.equal(await page.getByRole("button", { name: "Confirm count", exact: true }).isDisabled(), true);
+  assert.equal(api.writes.length, writes);
+  await context.setOffline(false);
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 375, height: 812 }, { width: 768, height: 1024 }]) {
+    await page.setViewportSize(viewport);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+  }
   assert.deepEqual(errors, []);
   await context.close();
 });

@@ -713,6 +713,15 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0008-production-rule-enforcement.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0009-production-schedules.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0010-inventory-lots.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0011-cycle-counts-freezer-pull.sql" >/dev/null
+"${PSQL[@]}" -c "
+  GRANT EXECUTE ON FUNCTION v3.warehouse_guidance(uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.mark_cycle_counted(uuid, uuid, text, text, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.save_cycle_count_schedule(uuid, uuid, text, text, text, integer, boolean, bigint) TO v3_api_test;
+" >/dev/null
+for table in v3.cycle_count_schedules v3.cycle_count_confirmations v3.inventory_lots v3.inventory_lot_movements; do
+  assert_no_direct_table_access "$table"
+done
 "${PSQL[@]}" -c "
   GRANT EXECUTE ON FUNCTION v3.record_inventory_movement(
     uuid, uuid, text, text, uuid, text, text, numeric, text, text, date, date
@@ -757,6 +766,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0008-production-rule-enforcement.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0009-production-schedules.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0010-inventory-lots.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0011-cycle-counts-freezer-pull.test.sql"
 ENCODED_DB_USER="$(python3 - "$DB_USER" <<'PY'
 import sys
 import urllib.parse

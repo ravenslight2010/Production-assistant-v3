@@ -42,6 +42,10 @@ export type SetProductionWarehouseRequest = components["schemas"]["SetProduction
 export type OpeningCountRequest = components["schemas"]["OpeningCountRequest"];
 export type InventoryMovementRequest = components["schemas"]["InventoryMovementRequest"];
 export type InventoryTransferRequest = components["schemas"]["InventoryTransferRequest"];
+export type WarehouseGuidance = components["schemas"]["WarehouseGuidance"];
+export type CycleCountSchedule = components["schemas"]["CycleCountSchedule"];
+export type MarkCycleCountedRequest = components["schemas"]["MarkCycleCountedRequest"];
+export type SaveCycleCountScheduleRequest = components["schemas"]["SaveCycleCountScheduleRequest"];
 export type InventoryMovementPage = { movements: InventoryMovement[]; nextCursor: { occurredAt: string; id: string } | null };
 export type ScheduleCommandResult = {
   schedule: ProductionSchedule;
@@ -467,6 +471,58 @@ function isOpeningCountResult(value: unknown): value is OpeningCountResult {
   return object(value) && ["reviewed", "applied"].includes(String(value.outcome))
     && UUID.test(String(value.countId)) && UUID.test(String(value.warehouseId))
     && Number.isSafeInteger(value.rowCount) && Number(value.rowCount) >= 1 && typeof value.replayed === "boolean";
+}
+
+const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/u;
+
+function isCycleCountSchedule(value: unknown): value is CycleCountSchedule {
+  return object(value) && typeof value.section === "string" && value.section.length >= 1 && value.section.length <= 120
+    && Number.isSafeInteger(value.cadenceDays) && Number(value.cadenceDays) >= 1 && Number(value.cadenceDays) <= 365
+    && typeof value.enabled === "boolean" && (value.lastCountedOn === null
+      || (typeof value.lastCountedOn === "string" && CALENDAR_DATE.test(value.lastCountedOn)))
+    && Number.isSafeInteger(value.revision) && Number(value.revision) >= 1 && typeof value.due === "boolean"
+    && (value.overdueDays === null || (Number.isSafeInteger(value.overdueDays) && Number(value.overdueDays) >= 0));
+}
+
+export async function getWarehouseGuidance(): Promise<WarehouseGuidance> {
+  const result = await unwrap(await client.GET("/api/v3/inventory/warehouse-guidance"));
+  const groups = result.freezerPull.groups;
+  const validGroups = groups.every((group) => UUID.test(group.runId)
+    && CALENDAR_DATE.test(group.productionDate) && INVENTORY_CODE.test(group.productCode)
+    && Number.isSafeInteger(group.targetCases) && group.targetCases >= 1
+    && group.items.every((item) => INVENTORY_CODE.test(item.code) && item.ingredientName.length > 0
+      && INVENTORY_CODE.test(item.productCode) && typeof item.resolved === "boolean"
+      && (item.quantity === null || (INVENTORY_QUANTITY.test(item.quantity) && !item.quantity.startsWith("-")))
+      && (item.unit === null || item.unit.length > 0) && (item.warning === null || item.warning.length > 0)
+      && (item.resolved ? item.quantity !== null && item.unit !== null && item.warning === null : item.warning !== null)));
+  if (!CALENDAR_DATE.test(result.factoryDate) || !result.cycleCounts.every(isCycleCountSchedule) || !validGroups) {
+    throw new ApiError("Warehouse guidance was incomplete. Refresh and retry.", 502);
+  }
+  return result;
+}
+
+export async function markCycleCounted(request: MarkCycleCountedRequest) {
+  const result = await unwrap(await client.POST("/api/v3/inventory/cycle-counts/mark", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  if (result.outcome !== "accepted" || typeof result.replayed !== "boolean" || !UUID.test(result.confirmationId)
+    || result.section !== request.section || !CALENDAR_DATE.test(result.countedOn)) {
+    throw new ApiError("The server did not confirm the cycle count. Retry the same request.", 502);
+  }
+  return result;
+}
+
+export async function saveCycleCountSchedule(request: SaveCycleCountScheduleRequest) {
+  const result = await unwrap(await client.POST("/api/v3/inventory/cycle-counts/schedules", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  if (!["created", "updated", "retired", "re-enabled"].includes(result.outcome)
+    || typeof result.replayed !== "boolean" || !isCycleCountSchedule(result.schedule)
+    || result.schedule.section !== request.section || result.schedule.cadenceDays !== request.cadenceDays
+    || result.schedule.enabled !== request.enabled) {
+    throw new ApiError("The server did not confirm the cycle-count schedule. Retry the same request.", 502);
+  }
+  return result;
 }
 
 export async function listInventoryWarehouses(): Promise<Warehouse[]> {

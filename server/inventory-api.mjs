@@ -24,6 +24,9 @@ const SETUP_CATALOG_PATH = "/api/v3/setup-catalog/imports";
 const SOURCE_WORKBOOK_PREVIEW_PATH = `${SETUP_CATALOG_PATH}/workbooks/preview`;
 const INVENTORY_PATH = "/api/v3/inventory";
 const DIE_DEFAULTS_PATH = `${INVENTORY_PATH}/die-defaults`;
+const WAREHOUSE_GUIDANCE_PATH = `${INVENTORY_PATH}/warehouse-guidance`;
+const CYCLE_COUNT_SCHEDULES_PATH = `${INVENTORY_PATH}/cycle-counts/schedules`;
+const CYCLE_COUNT_MARK_PATH = `${INVENTORY_PATH}/cycle-counts/mark`;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_WORKBOOK_BODY_BYTES = 7_250 * 1024;
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
@@ -395,7 +398,10 @@ export function createInventoryApi({ pool, authenticate, verifyCsrf, logger = ()
         throw new InventoryApiError(400, "This request does not accept query parameters.");
       }
       const auth = await authenticate(request);
-      requireManager(auth);
+      const staffGuidanceRead = request.method === "GET" && url.pathname === WAREHOUSE_GUIDANCE_PATH;
+      const staffCountWrite = request.method === "POST" && url.pathname === CYCLE_COUNT_MARK_PATH;
+      if (!staffGuidanceRead && !staffCountWrite) requireManager(auth);
+      else if (!auth?.verified) throw new InventoryApiError(401, "Sign in to access inventory.");
       if (request.method !== "GET") {
         if (request.method !== "POST") throw new InventoryApiError(405, "This method is not allowed.");
         if (await verifyCsrf(request, auth) !== true) {
@@ -417,6 +423,54 @@ export function createInventoryApi({ pool, authenticate, verifyCsrf, logger = ()
       }
       const scope = [auth.facilityId.toLowerCase()];
       const actor = auth.actorId.toLowerCase();
+
+      if (url.pathname === WAREHOUSE_GUIDANCE_PATH && request.method === "GET") {
+        operation = "warehouse_guidance";
+        const result = await pool.query("SELECT v3.warehouse_guidance($1::uuid) AS result", scope);
+        sendJson(response, 200, resultValue(result));
+        return true;
+      }
+
+      if (url.pathname === CYCLE_COUNT_MARK_PATH && request.method === "POST") {
+        operation = "mark_cycle_counted";
+        const body = await readJsonBody(request);
+        requireKeys(body, ["requestId", "section"]);
+        const requestId = validateRequestId(body.requestId);
+        if (typeof body.section !== "string" || body.section.trim() !== body.section
+          || body.section.length < 1 || body.section.length > 120 || /[\u0000-\u001f\u007f]/u.test(body.section)) {
+          throw new InventoryApiError(400, "Choose a valid cycle count section.");
+        }
+        const result = await pool.query(
+          "SELECT v3.mark_cycle_counted($1::uuid, $2::uuid, $3::text, $4::text, $5::text) AS result",
+          [...scope, actor, requestId, hashRequest({ section: body.section }), body.section],
+        );
+        sendJson(response, 200, resultValue(result));
+        return true;
+      }
+
+      if (url.pathname === CYCLE_COUNT_SCHEDULES_PATH && request.method === "POST") {
+        operation = "save_cycle_count_schedule";
+        const body = await readJsonBody(request);
+        requireKeys(body, ["requestId", "section", "cadenceDays", "enabled", "expectedRevision"]);
+        const requestId = validateRequestId(body.requestId);
+        if (typeof body.section !== "string" || body.section.trim() !== body.section
+          || body.section.length < 1 || body.section.length > 120 || /[\u0000-\u001f\u007f]/u.test(body.section)
+          || !Number.isSafeInteger(body.cadenceDays) || body.cadenceDays < 1 || body.cadenceDays > 365
+          || typeof body.enabled !== "boolean" || !Number.isSafeInteger(body.expectedRevision)
+          || body.expectedRevision < 0) {
+          throw new InventoryApiError(400, "Submit a valid section, cadence, status, and current revision.");
+        }
+        const payload = {
+          section: body.section, cadenceDays: body.cadenceDays,
+          enabled: body.enabled, expectedRevision: body.expectedRevision,
+        };
+        const result = await pool.query(
+          "SELECT v3.save_cycle_count_schedule($1::uuid, $2::uuid, $3::text, $4::text, $5::text, $6::integer, $7::boolean, $8::bigint) AS result",
+          [...scope, actor, requestId, hashRequest(payload), body.section, body.cadenceDays, body.enabled, body.expectedRevision],
+        );
+        sendJson(response, 200, resultValue(result));
+        return true;
+      }
 
       if (isImports && url.pathname === IMPORTS_PATH && request.method === "GET") {
         operation = "list_imports";

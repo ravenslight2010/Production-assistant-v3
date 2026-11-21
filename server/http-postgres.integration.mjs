@@ -223,6 +223,32 @@ async function main() {
         body: JSON.stringify(body),
       });
     }
+    const cycleScheduleResponse = await managerPost("/api/v3/inventory/cycle-counts/schedules", {
+      requestId: "73000000-0000-4000-8000-0000000001f1", section: "Integration dry storage",
+      cadenceDays: 7, enabled: true, expectedRevision: 0,
+    });
+    assert.equal(cycleScheduleResponse.status, 200, await cycleScheduleResponse.clone().text());
+    const staffGuidanceResponse = await fetch(`${baseUrl}/api/v3/inventory/warehouse-guidance`, {
+      headers: { Cookie: operator.cookieHeader, Accept: "application/json" },
+    });
+    assert.equal(staffGuidanceResponse.status, 200);
+    const staffGuidance = await jsonResponse(staffGuidanceResponse);
+    assert.equal(staffGuidance.cycleCounts[0].due, true);
+    assert.ok(staffGuidance.freezerPull && Array.isArray(staffGuidance.freezerPull.groups));
+    const markRequest = { requestId: "73000000-0000-4000-8000-0000000001f2", section: "Integration dry storage" };
+    const firstMark = await sessionPost(operator, "/api/v3/inventory/cycle-counts/mark", markRequest);
+    assert.equal(firstMark.status, 200, await firstMark.clone().text());
+    const replayedMark = await sessionPost(operator, "/api/v3/inventory/cycle-counts/mark", markRequest);
+    assert.equal((await jsonResponse(replayedMark)).replayed, true);
+    const staffConfig = await sessionPost(operator, "/api/v3/inventory/cycle-counts/schedules", {
+      ...markRequest, requestId: "73000000-0000-4000-8000-0000000001f3", cadenceDays: 7, enabled: true, expectedRevision: 2,
+    });
+    assert.equal(staffConfig.status, 403, "staff must not configure cycle-count schedules");
+    const countedGuidance = await jsonResponse(await fetch(`${baseUrl}/api/v3/inventory/warehouse-guidance`, {
+      headers: { Cookie: operator.cookieHeader },
+    }));
+    assert.equal(countedGuidance.cycleCounts[0].due, false);
+
     const initialWarehouseResponse = await fetch(`${baseUrl}/api/v3/inventory/warehouses`, {
       headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
     });
