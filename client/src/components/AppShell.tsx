@@ -6,6 +6,7 @@ import { FeaturePage, type FeatureKey } from "../pages/FeaturePage";
 import { StaffPage } from "../pages/StaffPage";
 import { SchedulePage } from "../pages/SchedulePage";
 import { SetupPage } from "../pages/SetupPage";
+import { InventoryPage } from "../pages/InventoryPage";
 
 type View = "run" | "schedule" | "setup" | "inventory" | "warehouse" | "qc" | "reports" | "staff";
 type NavItem = { id: View; label: string; icon: ComponentType<{ className?: string }> };
@@ -98,8 +99,9 @@ export function AppShell({ session, onSignOut }: { session: AuthSession; onSignO
         {view === "run" ? <RunPage online={online} /> : null}
         {view === "schedule" ? <SchedulePage session={session} online={online} /> : null}
         {view === "setup" ? <SetupPage session={session} online={online} /> : null}
+        {view === "inventory" ? <InventoryPage session={session} online={online} /> : null}
         {view === "staff" && canManageStaff ? <StaffPage session={session} online={online} /> : null}
-        {!["run", "schedule", "setup", "staff"].includes(view) ? <FeaturePage feature={view as FeatureKey} online={online} /> : null}
+        {!["run", "schedule", "setup", "inventory", "staff"].includes(view) ? <FeaturePage feature={view as FeatureKey} online={online} /> : null}
       </main>
     </div>
   );

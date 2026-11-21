@@ -1,0 +1,370 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { chromium } from "playwright";
+import { parseOpeningCountCsv } from "../core/import-csv.mjs";
+
+const CSRF_TOKEN = "b".repeat(43);
+const STAFF_ID = "76000000-0000-4000-8000-000000000001";
+const WAREHOUSE_ID = "76000000-0000-4000-8000-000000000002";
+const COUNT_ID = "76000000-0000-4000-8000-000000000003";
+const PRODUCT_IDS = [
+  "76000000-0000-4000-8000-000000000011",
+  "76000000-0000-4000-8000-000000000012",
+];
+const MOVEMENT_IDS = [
+  "76000000-0000-4000-8000-000000000021",
+  "76000000-0000-4000-8000-000000000022",
+];
+const GROUP_ID = "76000000-0000-4000-8000-000000000030";
+const CSV = "product_code,quantity\nDOUGH-A,12.5\nCHEESE-A,0\n";
+const DIST = new URL("../dist/", import.meta.url);
+const PUBLIC_FILES = new Map([
+  ["/", ["index.html", "text/html; charset=utf-8"]],
+  ["/index.html", ["index.html", "text/html; charset=utf-8"]],
+  ["/manifest.webmanifest", ["manifest.webmanifest", "application/manifest+json; charset=utf-8"]],
+  ["/sw.js", ["sw.js", "text/javascript; charset=utf-8"]],
+  ["/logo.svg", ["logo.svg", "image/svg+xml"]],
+  ["/favicon.ico", ["logo.svg", "image/svg+xml"]],
+]);
+const PRODUCTS = [
+  { id: PRODUCT_IDS[0], code: "DOUGH-A", name: "Browser Dough", unit: "lb", active: true },
+  { id: PRODUCT_IDS[1], code: "CHEESE-A", name: "Browser Cheese", unit: "lb", active: true },
+];
+
+async function serveDist(t) {
+  const server = createServer(async (request, response) => {
+    const pathname = new URL(request.url, "http://127.0.0.1").pathname;
+    let asset = PUBLIC_FILES.get(pathname);
+    if (!asset && /^\/assets\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(pathname)) {
+      asset = [pathname.slice(1), pathname.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8"];
+    }
+    if (!asset || !["GET", "HEAD"].includes(request.method)) {
+      response.writeHead(404).end();
+      return;
+    }
+    try {
+      const contents = await readFile(new URL(asset[0], DIST));
+      response.writeHead(200, { "Content-Type": asset[1], "Cache-Control": "no-cache" });
+      response.end(request.method === "HEAD" ? undefined : contents);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => new Promise((resolve) => server.close(resolve)));
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+async function openBrowser(t) {
+  const browserPath = process.env.CHROMIUM_PATH
+    || execFileSync("which", ["chromium"], { encoding: "utf8" }).trim();
+  const browser = await chromium.launch({ headless: true, executablePath: browserPath, args: ["--no-sandbox"] });
+  t.after(() => browser.close());
+  return browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: "block" });
+}
+
+function json(route, body, status = 200) {
+  return route.fulfill({ status, contentType: "application/json", headers: { "Cache-Control": "no-store" }, body: JSON.stringify(body) });
+}
+
+async function installInventoryApi(context, baseUrl, { manager = true } = {}) {
+  const warehouses = [];
+  const counts = new Map();
+  const requests = new Map();
+  const inventoryRequests = [];
+  const writes = [];
+  const stock = new Map();
+  const movements = [];
+  let loseNextStageResponse = false;
+
+  const countSummary = (count) => ({
+    id: count.id,
+    warehouseId: count.warehouseId,
+    warehouseName: warehouses.find((warehouse) => warehouse.id === count.warehouseId).name,
+    status: count.status,
+    rowCount: count.rows.length,
+    createdBy: count.createdBy,
+    reviewedBy: count.reviewedBy,
+    appliedBy: count.appliedBy,
+    createdAt: count.createdAt,
+    reviewedAt: count.reviewedAt,
+    appliedAt: count.appliedAt,
+  });
+  const applyCount = (count) => {
+    const warehouse = warehouses.find((item) => item.id === count.warehouseId);
+    warehouse.openingCountApplied = true;
+    count.rows.forEach((row, index) => {
+      const product = PRODUCTS.find((item) => item.code === row.productCode);
+      stock.set(row.productCode, {
+        productId: product.id,
+        code: product.code,
+        name: product.name,
+        unit: product.unit,
+        quantity: row.quantity,
+        revision: 1,
+      });
+      movements.unshift({
+        id: MOVEMENT_IDS[index],
+        movementGroupId: GROUP_ID,
+        productCode: product.code,
+        productName: product.name,
+        unit: product.unit,
+        type: "opening_count",
+        quantityDelta: row.quantity,
+        reason: `Browser opening count ${row.productCode}`,
+        actorId: STAFF_ID,
+        occurredAt: `2026-11-21T12:0${3 - index}:00.000Z`,
+      });
+    });
+  };
+
+  await context.addCookies([{ name: "v3_csrf", value: CSRF_TOKEN, url: baseUrl }]);
+  await context.route("**/api/v3/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+    if (path === "/api/v3/auth/session" && method === "GET") {
+      return json(route, {
+        staff: { userId: STAFF_ID, username: "manager", role: "manager", capabilities: manager ? ["manage-inventory"] : [] },
+        expiresAt: "2026-11-22T12:00:00.000Z",
+      });
+    }
+    if (path === "/api/v3/auth/bootstrap-status" && method === "GET") return json(route, { available: false });
+    if (path.startsWith("/api/v3/inventory/")) inventoryRequests.push(`${method} ${path}`);
+    if (!["GET", "HEAD", "OPTIONS"].includes(method)) writes.push(`${method} ${path}`);
+    if (!manager) return json(route, { error: "Forbidden" }, 403);
+    if (path === "/api/v3/inventory/warehouses" && method === "GET") return json(route, { warehouses });
+    if (path === "/api/v3/inventory/warehouses" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(Object.keys(body).sort(), ["name", "requestId"]);
+      const prior = requests.get(body.requestId);
+      if (prior) {
+        assert.deepEqual(body, prior);
+        return json(route, { outcome: "created", replayed: true, warehouse: warehouses[0] });
+      }
+      requests.set(body.requestId, body);
+      const warehouse = {
+        id: WAREHOUSE_ID,
+        name: body.name,
+        active: true,
+        isProduction: false,
+        createdAt: "2026-11-21T12:00:00.000Z",
+        openingCountApplied: false,
+      };
+      warehouses.push(warehouse);
+      return json(route, { outcome: "created", replayed: false, warehouse }, 201);
+    }
+    if (path === "/api/v3/inventory/production-warehouse" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.equal(body.warehouseId, WAREHOUSE_ID);
+      const warehouse = warehouses.find((item) => item.id === body.warehouseId);
+      assert.equal(warehouse.openingCountApplied, true);
+      warehouse.isProduction = true;
+      return json(route, { outcome: "accepted", replayed: false, warehouse });
+    }
+    if (path === "/api/v3/inventory/products" && method === "GET") return json(route, { products: PRODUCTS });
+    if (path === "/api/v3/inventory/stock" && method === "GET") {
+      assert.equal(url.searchParams.get("warehouseId"), WAREHOUSE_ID);
+      return json(route, { stock: PRODUCTS.map((product) => stock.get(product.code)).filter(Boolean) });
+    }
+    if (path === "/api/v3/inventory/movements" && method === "GET") {
+      assert.equal(url.searchParams.get("warehouseId"), WAREHOUSE_ID);
+      assert.equal(url.searchParams.get("limit"), "50");
+      const beforeId = url.searchParams.get("beforeId");
+      if (beforeId) {
+        assert.equal(beforeId, movements[0].id);
+        assert.equal(url.searchParams.get("beforeAt"), movements[0].occurredAt);
+        return json(route, { movements: movements.slice(1), nextCursor: null });
+      }
+      return json(route, {
+        movements: movements.slice(0, 1),
+        nextCursor: movements.length > 1 ? { occurredAt: movements[0].occurredAt, id: movements[0].id } : null,
+      });
+    }
+    if (path === "/api/v3/inventory/opening-counts" && method === "GET") {
+      assert.equal(url.searchParams.get("limit"), "50");
+      return json(route, { counts: [...counts.values()].map(countSummary) });
+    }
+    if (path === "/api/v3/inventory/opening-counts" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(Object.keys(body).sort(), ["csv", "requestId", "warehouseId"]);
+      const rows = parseOpeningCountCsv(body.csv, PRODUCTS.map((product) => product.code));
+      const prior = requests.get(body.requestId);
+      if (prior) {
+        assert.deepEqual(body, prior, "exact retry must preserve request ID, warehouse, and CSV bytes");
+        const count = counts.get(COUNT_ID);
+        return json(route, { outcome: "staged", countId: COUNT_ID, warehouseId: count.warehouseId, rowCount: rows.length, replayed: true, rows: count.rows });
+      }
+      requests.set(body.requestId, body);
+      const count = {
+        id: COUNT_ID,
+        warehouseId: body.warehouseId,
+        status: "staged",
+        rows,
+        createdBy: STAFF_ID,
+        reviewedBy: null,
+        appliedBy: null,
+        createdAt: "2026-11-21T12:01:00.000Z",
+        reviewedAt: null,
+        appliedAt: null,
+        result: null,
+      };
+      counts.set(COUNT_ID, count);
+      if (loseNextStageResponse) {
+        loseNextStageResponse = false;
+        return json(route, { error: "Synthetic response loss after opening-count commit." }, 500);
+      }
+      return json(route, { outcome: "staged", countId: COUNT_ID, warehouseId: count.warehouseId, rowCount: rows.length, replayed: false, rows }, 201);
+    }
+    const detailMatch = path.match(/^\/api\/v3\/inventory\/opening-counts\/([0-9a-f-]+)$/);
+    if (detailMatch && method === "GET") {
+      const count = counts.get(detailMatch[1]);
+      return count ? json(route, { count }) : json(route, { error: "Not found" }, 404);
+    }
+    const actionMatch = path.match(/^\/api\/v3\/inventory\/opening-counts\/([0-9a-f-]+)\/(review|apply)$/);
+    if (actionMatch && method === "POST") {
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(request.postDataJSON(), {});
+      const count = counts.get(actionMatch[1]);
+      const action = actionMatch[2];
+      const replayed = action === "review" ? count.status !== "staged" : count.status === "applied";
+      if (action === "review" && !replayed) {
+        count.status = "reviewed";
+        count.reviewedBy = STAFF_ID;
+        count.reviewedAt = "2026-11-21T12:02:00.000Z";
+      }
+      if (action === "apply" && !replayed) {
+        assert.equal(count.status, "reviewed", "only a reviewed opening count can be applied");
+        count.status = "applied";
+        count.appliedBy = STAFF_ID;
+        count.appliedAt = "2026-11-21T12:03:00.000Z";
+        count.result = { revision: 1 };
+        applyCount(count);
+      }
+      return json(route, { outcome: action === "review" ? "reviewed" : "applied", countId: count.id, warehouseId: count.warehouseId, rowCount: count.rows.length, replayed });
+    }
+    return json(route, { error: `Unexpected test request: ${method} ${path}` }, 500);
+  });
+  return {
+    counts,
+    requests,
+    inventoryRequests,
+    writes,
+    stock,
+    movements,
+    loseNextStageResponse: () => { loseNextStageResponse = true; },
+  };
+}
+
+test("React inventory creates a warehouse, retries opening counts exactly, applies canonical stock, and locks offline", { timeout: 90_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installInventoryApi(context, baseUrl);
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#inventory`);
+  await page.getByRole("heading", { name: "Inventory", exact: true }).waitFor();
+  await page.getByText("Create a warehouse to begin physical inventory.", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Download opening-count template", exact: true }).getAttribute("download"), "opening-count-template.csv");
+
+  await page.getByLabel("New warehouse name", { exact: true }).fill("Browser Cold Storage");
+  await page.getByRole("button", { name: "Create warehouse", exact: true }).click();
+  await page.getByText(/Warehouse created and available for inventory review\./).waitFor();
+  assert.equal(await page.getByRole("combobox", { name: "Warehouse", exact: true }).inputValue(), WAREHOUSE_ID);
+
+  await page.getByLabel("Opening count CSV", { exact: true }).setInputFiles({ name: "opening.csv", mimeType: "text/csv", buffer: Buffer.from(CSV) });
+  api.loseNextStageResponse();
+  await page.getByRole("button", { name: "Stage opening count", exact: true }).click();
+  await page.getByText(/Retry the same request; its identity prevents duplicate writes/).waitFor();
+  assert.equal(api.counts.size, 1, "the opening-count commit occurred before synthetic response loss");
+  assert.equal(api.stock.size, 0, "staging must not change stock");
+  assert.equal(await page.getByLabel("New warehouse name", { exact: true }).isDisabled(), true, "one unresolved write pauses other inventory writes");
+  const originalRequest = [...api.requests.values()].at(-1);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Retry the same inventory request", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Retry the same inventory request", exact: true }).click();
+  await page.getByText(/Previous request confirmed\. Opening count staged/).waitFor();
+  assert.equal(api.counts.size, 1, "exact retry must not create a second opening count");
+  assert.equal([...api.requests.values()].filter((request) => request.csv).length, 1);
+  assert.deepEqual([...api.requests.values()].find((request) => request.csv), originalRequest);
+  const review = page.getByRole("region", { name: "Opening count review", exact: true });
+  await review.getByText("staged", { exact: true }).waitFor();
+  await review.getByRole("cell", { name: "12.5", exact: true }).waitFor();
+  await review.getByRole("cell", { name: "0", exact: true }).waitFor();
+  assert.equal(api.stock.size, 0, "stored review remains unapplied");
+
+  await page.getByRole("button", { name: "Mark opening count reviewed", exact: true }).click();
+  await page.getByText(/Opening count marked reviewed\. It is ready for explicit Apply\./).waitFor();
+  await review.getByText("reviewed", { exact: true }).waitFor();
+  assert.equal(api.stock.size, 0, "Review must not apply stock");
+  await page.getByRole("button", { name: "Apply opening count", exact: true }).click();
+  await page.getByText(/Opening count applied to warehouse stock\. Canonical history and quantities were reloaded\./).waitFor();
+  await review.getByText("applied", { exact: true }).waitFor();
+  await page.getByRole("region", { name: "Confirmed quantities", exact: true }).getByRole("cell", { name: "12.5", exact: true }).waitFor();
+  assert.equal(api.stock.get("DOUGH-A").quantity, "12.5");
+  assert.equal(api.stock.get("CHEESE-A").quantity, "0");
+  assert.equal(api.movements.length, 2, "Apply must create the append-only opening movements");
+
+  await page.getByRole("button", { name: "Load older movements", exact: true }).click();
+  await page.getByText("Browser opening count DOUGH-A", { exact: true }).waitFor();
+  await page.getByText("Browser opening count CHEESE-A", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Load older movements", exact: true }).count(), 0);
+  await page.getByRole("button", { name: "Use selected warehouse for new runs", exact: true }).click();
+  await page.getByText(/Production warehouse selected for new runs\. Existing runs retain their frozen warehouse\./).waitFor();
+  await page.getByText("Used for new production runs. Existing runs keep their original warehouse snapshot.", { exact: true }).waitFor();
+
+  await page.getByLabel("Opening count CSV", { exact: true }).setInputFiles({ name: "offline-not-retained.csv", mimeType: "text/csv", buffer: Buffer.from(CSV) });
+  const writesBeforeOffline = api.writes.length;
+  await context.setOffline(true);
+  await page.getByText("Loaded values only · no file retained or writes queued", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Opening count CSV", { exact: true }).evaluate((input) => input.files.length), 0);
+  assert.equal(await page.getByRole("button", { name: "Stage opening count", exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Create warehouse", exact: true }).isDisabled(), true);
+  assert.equal(api.writes.length, writesBeforeOffline, "offline inventory mode must not issue writes");
+  await context.setOffline(false);
+  await page.getByText("Canonical facility inventory · manage-inventory", { exact: true }).waitFor();
+
+  await page.reload();
+  await page.getByRole("region", { name: "Confirmed quantities", exact: true }).getByRole("cell", { name: "12.5", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Reopen count 1", exact: true }).click();
+  await page.getByRole("region", { name: "Opening count review", exact: true }).getByText("applied", { exact: true }).waitFor();
+  assert.equal(api.counts.get(COUNT_ID).status, "applied");
+
+  for (const viewport of [
+    { width: 1280, height: 900 },
+    { width: 375, height: 812 },
+    { width: 768, height: 1024 },
+    { width: 1024, height: 768 },
+  ]) {
+    await page.setViewportSize(viewport);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+      `the React inventory page must fit ${viewport.width}x${viewport.height}`);
+  }
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test("React inventory denies non-managers without inventory reads or writes", { timeout: 45_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installInventoryApi(context, baseUrl, { manager: false });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#inventory`);
+  await page.getByRole("heading", { name: "Manager access required", exact: true }).waitFor();
+  await page.getByText(/does not have the manage-inventory capability/).waitFor();
+  assert.deepEqual(api.inventoryRequests, []);
+  assert.deepEqual(api.writes, []);
+  assert.deepEqual(errors, []);
+  await context.close();
+});

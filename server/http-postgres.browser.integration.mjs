@@ -70,6 +70,9 @@ async function main() {
   let loseSetupStageResponse = false;
   let setupImportId;
   let setupStageRequestBody;
+  let loseOpeningStageResponse = false;
+  let openingCountId;
+  let openingStageRequestBody;
   let serverInstance;
   let browser;
   try {
@@ -146,6 +149,23 @@ async function main() {
           status: 500,
           contentType: "application/json",
           body: JSON.stringify({ error: "Synthetic setup staging response loss after the disposable database commit." }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.route("**/api/v3/inventory/opening-counts", async (route) => {
+      if (loseOpeningStageResponse && route.request().method() === "POST") {
+        loseOpeningStageResponse = false;
+        openingStageRequestBody = route.request().postDataJSON();
+        const committed = await route.fetch();
+        assert.equal(committed.status(), 201, await committed.text());
+        openingCountId = (await committed.json()).countId;
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Synthetic opening-count response loss after the disposable database commit." }),
         });
         return;
       }
@@ -576,6 +596,224 @@ async function main() {
         `the React setup page must fit ${viewport.width}x${viewport.height}`);
     }
 
+    await page.getByRole("button", { name: "Inventory", exact: true }).click();
+    await page.getByRole("heading", { name: "Inventory", exact: true }).waitFor();
+    const inventoryProductsResponse = await page.request.get(`${baseUrl}/api/v3/inventory/products`);
+    assert.equal(inventoryProductsResponse.status(), 200);
+    const inventoryProducts = (await inventoryProductsResponse.json()).products;
+    assert.ok(inventoryProducts.length > 0);
+    const countedProduct = inventoryProducts.find((product) => product.code === "CORN");
+    assert.ok(countedProduct, "the run recipe's real inventory ingredient must be active");
+    const openingCsv = [
+      "product_code,quantity",
+      ...inventoryProducts.map((product) => `${product.code},${product.code === countedProduct.code ? "12.5" : "0"}`),
+    ].join("\n") + "\n";
+    const warehouseName = `Browser PostgreSQL Warehouse ${suffix}`;
+    await page.getByLabel("New warehouse name", { exact: true }).fill(warehouseName);
+    const createWarehouseResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/inventory/warehouses" && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Create warehouse", exact: true }).click();
+    const createWarehouseResponse = await createWarehouseResponsePromise;
+    assert.equal(createWarehouseResponse.status(), 201, await createWarehouseResponse.text());
+    const warehouseId = (await createWarehouseResponse.json()).warehouse.id;
+    await page.getByText(/Warehouse created and available for inventory review\./).waitFor();
+    assert.equal(await page.getByRole("combobox", { name: "Warehouse", exact: true }).inputValue(), warehouseId);
+
+    const openingDetailRead = async () => {
+      const response = await page.request.get(`${baseUrl}/api/v3/inventory/opening-counts/${openingCountId}`);
+      assert.equal(response.status(), 200);
+      return (await response.json()).count;
+    };
+    const openingHistoryRead = async () => {
+      const response = await page.request.get(`${baseUrl}/api/v3/inventory/opening-counts?limit=50`);
+      assert.equal(response.status(), 200);
+      return (await response.json()).counts;
+    };
+    await page.getByLabel("Opening count CSV", { exact: true }).setInputFiles({
+      name: "opening-browser-integration.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from(openingCsv),
+    });
+    loseOpeningStageResponse = true;
+    await page.getByRole("button", { name: "Stage opening count", exact: true }).click();
+    await page.getByText(/Retry the same request; its identity prevents duplicate writes/).waitFor();
+    assert.match(openingCountId ?? "", /^[0-9a-f-]{36}$/);
+    let openingDetail = await openingDetailRead();
+    assert.equal(openingDetail.status, "staged");
+    assert.equal(openingDetail.warehouseId, warehouseId);
+    assert.equal(openingDetail.rows.find((row) => row.productCode === countedProduct.code).quantity, "12.5");
+    assert.equal((await openingHistoryRead()).filter((item) => item.id === openingCountId).length, 1);
+    const stagedBalances = await adminPool.query(
+      "SELECT quantity FROM v3.inventory_balances WHERE warehouse_id = $1",
+      [warehouseId],
+    );
+    assert.deepEqual(stagedBalances.rows, [], "opening-count staging must not mutate real stock");
+
+    const retryOpeningResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/inventory/opening-counts"
+      && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Retry the same inventory request", exact: true }).click();
+    const retryOpeningResponse = await retryOpeningResponsePromise;
+    assert.equal(retryOpeningResponse.status(), 200);
+    assert.deepEqual(retryOpeningResponse.request().postDataJSON(), openingStageRequestBody,
+      "the real opening-count retry must preserve request ID, warehouse, and CSV bytes");
+    const retryOpeningBody = await retryOpeningResponse.json();
+    assert.equal(retryOpeningBody.replayed, true);
+    assert.equal(retryOpeningBody.countId, openingCountId);
+    await page.getByText(/Previous request confirmed\. Opening count staged/).waitFor();
+    assert.equal((await openingHistoryRead()).filter((item) => item.id === openingCountId).length, 1,
+      "opening-count exact retry must not create a duplicate PostgreSQL row");
+    const openingReview = page.getByRole("region", { name: "Opening count review", exact: true });
+    await openingReview.getByText("staged", { exact: true }).waitFor();
+    await openingReview.getByRole("cell", { name: "12.5", exact: true }).waitFor();
+
+    const reviewOpeningResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/inventory/opening-counts/${openingCountId}/review`
+      && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Mark opening count reviewed", exact: true }).click();
+    assert.equal((await reviewOpeningResponsePromise).status(), 200);
+    await page.getByText(/Opening count marked reviewed\. It is ready for explicit Apply\./).waitFor();
+    openingDetail = await openingDetailRead();
+    assert.equal(openingDetail.status, "reviewed");
+    const reviewedBalances = await adminPool.query(
+      "SELECT quantity FROM v3.inventory_balances WHERE warehouse_id = $1",
+      [warehouseId],
+    );
+    assert.deepEqual(reviewedBalances.rows, [], "Review must not apply real stock");
+
+    const applyOpeningResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/inventory/opening-counts/${openingCountId}/apply`
+      && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Apply opening count", exact: true }).click();
+    const applyOpeningResponse = await applyOpeningResponsePromise;
+    assert.equal(applyOpeningResponse.status(), 200, await applyOpeningResponse.text());
+    assert.equal((await applyOpeningResponse.json()).outcome, "applied");
+    await page.getByText(/Opening count applied to warehouse stock\. Canonical history and quantities were reloaded\./).waitFor();
+    openingDetail = await openingDetailRead();
+    assert.equal(openingDetail.status, "applied");
+    const appliedBalance = await adminPool.query(
+      `SELECT balance.quantity::text AS quantity
+       FROM v3.inventory_balances AS balance
+       JOIN v3.products AS product
+         ON product.facility_id = balance.facility_id AND product.id = balance.product_id
+       WHERE balance.warehouse_id = $1 AND product.code = $2`,
+      [warehouseId, countedProduct.code],
+    );
+    assert.equal(Number(appliedBalance.rows[0].quantity), 12.5);
+    const stockResponse = await page.request.get(`${baseUrl}/api/v3/inventory/stock?warehouseId=${warehouseId}`);
+    assert.equal(stockResponse.status(), 200);
+    let stockItem = (await stockResponse.json()).stock.find((item) => item.code === countedProduct.code);
+    assert.equal(Number(stockItem.quantity), 12.5);
+    await page.getByRole("region", { name: "Confirmed quantities", exact: true })
+      .getByRole("cell", { name: stockItem.quantity, exact: true }).waitFor();
+    const movementResponse = await page.request.get(`${baseUrl}/api/v3/inventory/movements?warehouseId=${warehouseId}&limit=50`);
+    assert.equal(movementResponse.status(), 200);
+    const movementBody = await movementResponse.json();
+    assert.equal(movementBody.movements.length, 1, "only the nonzero opening quantity creates a movement");
+    assert.equal(movementBody.movements[0].type, "opening_count");
+    await page.getByText(movementBody.movements[0].reason, { exact: true }).waitFor();
+
+    const productionWarehouseResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/inventory/production-warehouse" && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Use selected warehouse for new runs", exact: true }).click();
+    const productionWarehouseResponse = await productionWarehouseResponsePromise;
+    assert.equal(productionWarehouseResponse.status(), 201, await productionWarehouseResponse.text());
+    assert.equal((await productionWarehouseResponse.json()).warehouse.id, warehouseId);
+    await page.getByText(/Production warehouse selected for new runs\. Existing runs retain their frozen warehouse\./).waitFor();
+
+    await page.getByRole("button", { name: "Live run", exact: true }).click();
+    const inventoryRunLabel = `Browser Inventory Consumption ${suffix}`;
+    await page.getByLabel("Imported product").selectOption("DOUGH-A");
+    await page.getByLabel("Run label").fill(inventoryRunLabel);
+    await page.getByLabel("Target cases").fill("1");
+    await page.locator("#run-setup").selectOption("LINE-A");
+    const createInventoryRunResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/runs" && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Prepare run", exact: true }).click();
+    const createInventoryRunResponse = await createInventoryRunResponsePromise;
+    assert.equal(createInventoryRunResponse.status(), 201, await createInventoryRunResponse.text());
+    const inventoryRun = (await createInventoryRunResponse.json()).run;
+    assert.equal(inventoryRun.setupSnapshot.productionPlan.warehouse.id, warehouseId);
+    const startInventoryRunResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/runs/${inventoryRun.id}/commands`
+      && response.request().method() === "POST"
+      && response.request().postDataJSON().commandType === "start");
+    await page.getByRole("button", { name: "start", exact: true }).click();
+    assert.equal((await startInventoryRunResponsePromise).status(), 200);
+    await page.getByRole("tab", { name: "dough", exact: true }).click();
+    await page.getByLabel("Batches Made", { exact: true }).fill("1");
+    await page.getByRole("button", { name: "Save station update", exact: true }).click();
+    await page.getByText("Station change confirmed by the server.").waitFor();
+    const completeInventoryRunResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/runs/${inventoryRun.id}/commands`
+      && response.request().method() === "POST"
+      && response.request().postDataJSON().commandType === "complete");
+    await page.getByRole("button", { name: "complete", exact: true }).click();
+    const completeInventoryRunResponse = await completeInventoryRunResponsePromise;
+    assert.equal(completeInventoryRunResponse.status(), 200, await completeInventoryRunResponse.text());
+    const inventoryCompletion = (await completeInventoryRunResponse.json()).run;
+    assert.equal(inventoryCompletion.status, "completed");
+    const consumptionLine = inventoryCompletion.inventoryConsumption.lines
+      .find((line) => line.productCode === countedProduct.code);
+    assert.equal(Number(consumptionLine.required), 10);
+    assert.equal(Number(consumptionLine.deducted), 10);
+    assert.equal(Number(consumptionLine.shortfall), 0);
+
+    await page.getByRole("button", { name: "Inventory", exact: true }).click();
+    await page.getByRole("heading", { name: "Inventory", exact: true }).waitFor();
+    const postRunStockResponse = await page.request.get(`${baseUrl}/api/v3/inventory/stock?warehouseId=${warehouseId}`);
+    assert.equal(postRunStockResponse.status(), 200);
+    stockItem = (await postRunStockResponse.json()).stock.find((item) => item.code === countedProduct.code);
+    assert.equal(Number(stockItem.quantity), 2.5);
+    await page.getByRole("region", { name: "Confirmed quantities", exact: true })
+      .getByRole("cell", { name: stockItem.quantity, exact: true }).waitFor();
+    const postRunMovementResponse = await page.request.get(`${baseUrl}/api/v3/inventory/movements?warehouseId=${warehouseId}&limit=50`);
+    assert.equal(postRunMovementResponse.status(), 200);
+    const postRunMovementBody = await postRunMovementResponse.json();
+    const runConsumption = postRunMovementBody.movements.find((movement) =>
+      movement.type === "run_consumption" && movement.productCode === countedProduct.code);
+    assert.ok(runConsumption, "completed-run consumption must remain readable by the Inventory client");
+    assert.equal(Number(runConsumption.quantityDelta), -10);
+    assert.equal(runConsumption.reason, "Run completion inventory use");
+    await page.getByText(runConsumption.reason, { exact: true }).waitFor();
+    const consumptionRows = await adminPool.query(
+      `SELECT quantity_delta::text AS quantity_delta
+       FROM v3.inventory_movements
+       WHERE warehouse_id = $1 AND run_id = $2 AND movement_type = 'run_consumption'`,
+      [warehouseId, inventoryRun.id],
+    );
+    assert.equal(consumptionRows.rows.length, 1);
+    assert.equal(Number(consumptionRows.rows[0].quantity_delta), -10);
+
+    await page.getByLabel("Opening count CSV", { exact: true }).setInputFiles({
+      name: "offline-inventory-not-retained.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from(openingCsv),
+    });
+    const writesBeforeInventoryOffline = browserWrites.length;
+    offlineCheckActive = true;
+    await context.setOffline(true);
+    await page.getByText("Loaded values only · no file retained or writes queued", { exact: true }).waitFor();
+    assert.equal(await page.getByLabel("Opening count CSV", { exact: true }).evaluate((input) => input.files.length), 0);
+    assert.equal(await page.getByRole("button", { name: "Stage opening count", exact: true }).isDisabled(), true);
+    assert.equal(browserWrites.length, writesBeforeInventoryOffline, "offline inventory mode must not issue writes");
+    await context.setOffline(false);
+    offlineCheckActive = false;
+    await page.getByText("Canonical facility inventory · manage-inventory", { exact: true }).waitFor();
+    await page.reload();
+    await page.getByRole("button", { name: "Reopen count 1", exact: true }).click();
+    await page.getByRole("region", { name: "Opening count review", exact: true }).getByText("applied", { exact: true }).waitFor();
+    for (const viewport of [
+      { width: 1280, height: 900 },
+      { width: 375, height: 812 },
+      { width: 768, height: 1024 },
+      { width: 1024, height: 768 },
+    ]) {
+      await page.setViewportSize(viewport);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+        `the React inventory page must fit ${viewport.width}x${viewport.height}`);
+    }
+
     await page.getByRole("button", { name: "Staff", exact: true }).click();
     await page.getByRole("heading", { name: "Staff accounts", exact: true }).waitFor();
     const staffUsername = `V3Browser${suffix}`;
@@ -619,8 +857,9 @@ async function main() {
       "500 /api/v3/schedules/commands",
       "409 /api/v3/schedules/commands",
       "500 /api/v3/setup-catalog/imports",
+      "500 /api/v3/inventory/opening-counts",
     ], "only deliberate stale conflicts and injected post-commit response loss should be rejected");
-    console.log("V3 authenticated Chromium/PostgreSQL journey passed: run control; React schedule commands, exact retry, stale conflict, deterministic workbook Apply; setup CSV and source-workbook stage/review/Apply/Undo/reopen with exact retry and real catalog readback; reload persistence, offline write lockout, staff creation, and desktop/phone/tablet layouts.");
+    console.log("V3 authenticated Chromium/PostgreSQL journey passed: run control; React schedule commands, exact retry, stale conflict, deterministic workbook Apply; setup CSV and source-workbook stage/review/Apply/Undo/reopen with exact retry and real catalog readback; inventory warehouse/opening-count exact retry/Review/Apply, stock/movement and production-warehouse readback; reload persistence, offline write lockout, staff creation, and desktop/phone/tablet layouts.");
 
     let webkitBrowser;
     try {
@@ -649,10 +888,22 @@ async function main() {
       await webkitSetupReview.getByLabel(`Values for ${sourceCode}`, { exact: true }).waitFor();
       await webkitSetupReview.getByText(/Source spec-sheets · 1 source row\(s\) · 1 imported · 0 skipped · 0 still unresolved/).waitFor();
       assert.ok(await webkitPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
-      console.log("V3 WebKit/Safari-engine React/PostgreSQL run, schedule, and setup history readback passed.");
+      await webkitPage.getByRole("button", { name: "Inventory", exact: true }).click();
+      await webkitPage.getByRole("heading", { name: "Inventory", exact: true }).waitFor();
+      await webkitPage.getByRole("region", { name: "Confirmed quantities", exact: true })
+        .getByRole("cell", { name: stockItem.quantity, exact: true }).waitFor();
+      await webkitPage.getByText("Run completion inventory use", { exact: true }).waitFor();
+      await webkitPage.getByRole("button", { name: "Reopen count 1", exact: true }).click();
+      await webkitPage.getByRole("region", { name: "Opening count review", exact: true }).getByText("applied", { exact: true }).waitFor();
+      await webkitPage.getByText("Used for new production runs. Existing runs keep their original warehouse snapshot.", { exact: true }).waitFor();
+      assert.ok(await webkitPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+      console.log("V3 WebKit/Safari-engine React/PostgreSQL run, schedule, setup history, inventory stock, opening-count, and production-warehouse readback passed.");
       await webkitBrowser.close();
     } catch (error) {
-      if (webkitBrowser) await webkitBrowser.close();
+      if (webkitBrowser) {
+        await webkitBrowser.close();
+        throw error;
+      }
       console.log(`V3 WebKit/Safari lane BLOCKED: ${error instanceof Error ? error.message.split("\n")[0] : "engine unavailable"}`);
     }
   } finally {

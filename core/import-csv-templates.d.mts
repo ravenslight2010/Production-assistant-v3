@@ -4,4 +4,5 @@ export interface ImportCsvTemplate {
   rows: readonly (readonly string[])[];
 }
 
+export declare const openingCountCsvTemplate: ImportCsvTemplate;
 export declare function renderImportCsvTemplate(template: ImportCsvTemplate): string;

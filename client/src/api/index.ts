@@ -29,6 +29,18 @@ export type SetupCatalogStageRequest = components["schemas"]["SetupCatalogReques
 export type SourceWorkbookFamily = components["schemas"]["SourceWorkbookPreviewRequest"]["family"];
 export type SourceWorkbookPreview = components["schemas"]["SourceWorkbookPreviewResponse"];
 export type SourceImportSummary = components["schemas"]["SourceImportSummary"];
+export type Warehouse = components["schemas"]["Warehouse"];
+export type InventoryProduct = components["schemas"]["InventoryProduct"];
+export type StockItem = components["schemas"]["StockItem"];
+export type InventoryMovement = components["schemas"]["InventoryMovement"];
+export type OpeningCountSummary = components["schemas"]["OpeningCountSummary"];
+export type OpeningCountRecord = components["schemas"]["OpeningCountRecord"];
+export type OpeningCount = components["schemas"]["OpeningCount"];
+export type OpeningCountResult = components["schemas"]["OpeningCountResult"];
+export type CreateWarehouseRequest = components["schemas"]["CreateWarehouseRequest"];
+export type SetProductionWarehouseRequest = components["schemas"]["SetProductionWarehouseRequest"];
+export type OpeningCountRequest = components["schemas"]["OpeningCountRequest"];
+export type InventoryMovementPage = { movements: InventoryMovement[]; nextCursor: { occurredAt: string; id: string } | null };
 export type ScheduleCommandResult = {
   schedule: ProductionSchedule;
   replayed: boolean;
@@ -377,6 +389,184 @@ export async function actOnSetupCatalogImport(
   const expectedOutcome = action === "apply" ? "applied" : "undone";
   if (result.outcome !== expectedOutcome || result.importId !== importId || typeof result.replayed !== "boolean") {
     throw new ApiError("The server did not confirm the setup action. Reload history before retrying.", 502);
+  }
+  return result;
+}
+
+
+const INVENTORY_CODE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u;
+const INVENTORY_QUANTITY = /^-?(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?$/u;
+
+function isWarehouseCreation(
+  value: unknown,
+): value is Omit<Warehouse, "isProduction"> & Partial<Pick<Warehouse, "isProduction">> {
+  return object(value) && UUID.test(String(value.id)) && typeof value.name === "string"
+    && value.name.length > 0 && value.name.length <= 120 && typeof value.active === "boolean"
+    && typeof value.createdAt === "string" && typeof value.openingCountApplied === "boolean";
+}
+
+function isWarehouse(value: unknown): value is Warehouse {
+  return isWarehouseCreation(value) && typeof value.isProduction === "boolean";
+}
+
+function isInventoryProduct(value: unknown): value is InventoryProduct {
+  return object(value) && UUID.test(String(value.id)) && typeof value.code === "string"
+    && INVENTORY_CODE.test(value.code) && typeof value.name === "string" && typeof value.unit === "string"
+    && typeof value.active === "boolean";
+}
+
+function isStockItem(value: unknown): value is StockItem {
+  return object(value) && UUID.test(String(value.productId)) && typeof value.code === "string"
+    && INVENTORY_CODE.test(value.code) && typeof value.name === "string" && typeof value.unit === "string"
+    && typeof value.quantity === "string" && INVENTORY_QUANTITY.test(value.quantity) && !value.quantity.startsWith("-")
+    && Number.isSafeInteger(value.revision) && Number(value.revision) >= 0;
+}
+
+function isInventoryMovement(value: unknown): value is InventoryMovement {
+  return object(value) && UUID.test(String(value.id)) && UUID.test(String(value.movementGroupId))
+    && typeof value.productCode === "string" && INVENTORY_CODE.test(value.productCode)
+    && typeof value.productName === "string" && typeof value.unit === "string"
+    && ["receipt", "adjustment", "transfer_out", "transfer_in", "opening_count", "run_consumption"].includes(String(value.type))
+    && typeof value.quantityDelta === "string" && INVENTORY_QUANTITY.test(value.quantityDelta)
+    && typeof value.reason === "string" && UUID.test(String(value.actorId)) && typeof value.occurredAt === "string";
+}
+
+function isOpeningCountRows(value: unknown): value is OpeningCount["rows"] {
+  return Array.isArray(value) && value.length >= 1 && value.length <= 2000 && value.every((row) =>
+    object(row) && typeof row.productCode === "string" && INVENTORY_CODE.test(row.productCode)
+    && typeof row.quantity === "string" && INVENTORY_QUANTITY.test(row.quantity) && !row.quantity.startsWith("-"));
+}
+
+function isOpeningCountSummary(value: unknown): value is OpeningCountSummary {
+  return object(value) && UUID.test(String(value.id)) && UUID.test(String(value.warehouseId))
+    && typeof value.warehouseName === "string" && ["staged", "reviewed", "applied"].includes(String(value.status))
+    && Number.isSafeInteger(value.rowCount) && Number(value.rowCount) >= 1 && Number(value.rowCount) <= 2000
+    && UUID.test(String(value.createdBy))
+    && (value.reviewedBy === null || UUID.test(String(value.reviewedBy)))
+    && (value.appliedBy === null || UUID.test(String(value.appliedBy)))
+    && typeof value.createdAt === "string"
+    && (value.reviewedAt === null || typeof value.reviewedAt === "string")
+    && (value.appliedAt === null || typeof value.appliedAt === "string");
+}
+
+function isOpeningCountRecord(value: unknown): value is OpeningCountRecord {
+  return object(value) && UUID.test(String(value.id)) && UUID.test(String(value.warehouseId))
+    && ["staged", "reviewed", "applied"].includes(String(value.status)) && isOpeningCountRows(value.rows)
+    && UUID.test(String(value.createdBy))
+    && (value.reviewedBy === null || UUID.test(String(value.reviewedBy)))
+    && (value.appliedBy === null || UUID.test(String(value.appliedBy)))
+    && typeof value.createdAt === "string"
+    && (value.reviewedAt === null || typeof value.reviewedAt === "string")
+    && (value.appliedAt === null || typeof value.appliedAt === "string")
+    && (value.result === null || object(value.result));
+}
+
+function isOpeningCountResult(value: unknown): value is OpeningCountResult {
+  return object(value) && ["reviewed", "applied"].includes(String(value.outcome))
+    && UUID.test(String(value.countId)) && UUID.test(String(value.warehouseId))
+    && Number.isSafeInteger(value.rowCount) && Number(value.rowCount) >= 1 && typeof value.replayed === "boolean";
+}
+
+export async function listInventoryWarehouses(): Promise<Warehouse[]> {
+  const result = await unwrap(await client.GET("/api/v3/inventory/warehouses"));
+  if (!Array.isArray(result.warehouses) || !result.warehouses.every(isWarehouse)) {
+    throw new ApiError("The warehouse list was incomplete. Refresh and retry.", 502);
+  }
+  return result.warehouses;
+}
+
+export async function createInventoryWarehouse(request: CreateWarehouseRequest) {
+  const result = await unwrap(await client.POST("/api/v3/inventory/warehouses", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  if (result.outcome !== "created" || typeof result.replayed !== "boolean" || !isWarehouseCreation(result.warehouse)) {
+    throw new ApiError("The server did not return a complete warehouse confirmation. Retry the same request.", 502);
+  }
+  return result;
+}
+
+export async function setProductionWarehouse(request: SetProductionWarehouseRequest) {
+  const result = await unwrap(await client.POST("/api/v3/inventory/production-warehouse", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  if (result.outcome !== "accepted" || typeof result.replayed !== "boolean"
+    || !isWarehouse(result.warehouse) || result.warehouse.id !== request.warehouseId) {
+    throw new ApiError("The server did not confirm the production warehouse. Retry the same request.", 502);
+  }
+  return result;
+}
+
+export async function listInventoryProducts(): Promise<InventoryProduct[]> {
+  const result = await unwrap(await client.GET("/api/v3/inventory/products"));
+  if (!Array.isArray(result.products) || !result.products.every(isInventoryProduct)) {
+    throw new ApiError("The inventory product list was incomplete. Refresh and retry.", 502);
+  }
+  return result.products;
+}
+
+export async function listWarehouseStock(warehouseId: string): Promise<StockItem[]> {
+  const result = await unwrap(await client.GET("/api/v3/inventory/stock", { params: { query: { warehouseId } } }));
+  if (!Array.isArray(result.stock) || !result.stock.every(isStockItem)) {
+    throw new ApiError("The warehouse stock was incomplete. Refresh and retry.", 502);
+  }
+  return result.stock;
+}
+
+export async function listInventoryMovements(
+  warehouseId: string,
+  cursor?: { occurredAt: string; id: string },
+): Promise<InventoryMovementPage> {
+  const result = await unwrap(await client.GET("/api/v3/inventory/movements", {
+    params: { query: { warehouseId, limit: 50, ...(cursor ? { beforeAt: cursor.occurredAt, beforeId: cursor.id } : {}) } },
+  }));
+  const cursorValid = result.nextCursor === null || (object(result.nextCursor)
+    && typeof result.nextCursor.occurredAt === "string" && UUID.test(String(result.nextCursor.id)));
+  if (!Array.isArray(result.movements) || !result.movements.every(isInventoryMovement) || !cursorValid) {
+    throw new ApiError("The movement history was incomplete. Refresh and retry.", 502);
+  }
+  return { movements: result.movements, nextCursor: result.nextCursor };
+}
+
+export async function listOpeningCounts(): Promise<OpeningCountSummary[]> {
+  const result = await unwrap(await client.GET("/api/v3/inventory/opening-counts", { params: { query: { limit: 50 } } }));
+  if (!Array.isArray(result.counts) || !result.counts.every(isOpeningCountSummary)) {
+    throw new ApiError("The physical-count history was incomplete. Refresh and retry.", 502);
+  }
+  return result.counts;
+}
+
+export async function stageOpeningCount(request: OpeningCountRequest): Promise<OpeningCount> {
+  const result = await unwrap(await client.POST("/api/v3/inventory/opening-counts", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  if (result.outcome !== "staged" || !UUID.test(result.countId) || result.warehouseId !== request.warehouseId
+    || !Number.isSafeInteger(result.rowCount) || typeof result.replayed !== "boolean"
+    || !isOpeningCountRows(result.rows) || result.rows.length !== result.rowCount) {
+    throw new ApiError("The server did not return a complete physical-count review. Retry the same request.", 502);
+  }
+  return result;
+}
+
+export async function getOpeningCount(countId: string): Promise<OpeningCountRecord> {
+  const result = await unwrap(await client.GET("/api/v3/inventory/opening-counts/{countId}", {
+    params: { path: { countId } },
+  }));
+  if (!isOpeningCountRecord(result.count) || result.count.id !== countId) {
+    throw new ApiError("The stored physical count was incomplete. Reload history and retry.", 502);
+  }
+  return result.count;
+}
+
+export async function actOnOpeningCount(countId: string, action: "review" | "apply"): Promise<OpeningCountResult> {
+  const path = action === "review"
+    ? "/api/v3/inventory/opening-counts/{countId}/review"
+    : "/api/v3/inventory/opening-counts/{countId}/apply";
+  const result = await unwrap(await client.POST(path, {
+    params: { path: { countId }, header: mutationHeaders() }, body: {},
+  }));
+  const expectedOutcome = action === "review" ? "reviewed" : "applied";
+  if (result.outcome !== expectedOutcome || result.countId !== countId || !isOpeningCountResult(result)) {
+    throw new ApiError("The server did not confirm the physical-count action. Retry the same request.", 502);
   }
   return result;
 }
