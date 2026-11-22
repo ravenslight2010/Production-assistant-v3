@@ -1324,8 +1324,8 @@ paths:
   /api/v3/inventory/warehouse-guidance:
     get:
       operationId: getWarehouseGuidance
-      summary: Read cycle-count and scheduled freezer-pull guidance
-      description: Available to every signed-in staff member; contains no stock balances or physical-inventory writes.
+      summary: Read server-owned warehouse operations guidance
+      description: Available to every signed-in staff member. Advisory stock-derived quantities do not change physical inventory.
       responses:
         "200":
           description: Server-dated warehouse guidance
@@ -1336,6 +1336,35 @@ paths:
         "401":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: saveWarehouseGuidanceSettings
+      summary: Save manager-owned reorder points and expiry guidance window
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaveWarehouseGuidanceSettingsRequest"
+      responses:
+        "200":
+          description: Saved or exactly replayed guidance settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SaveWarehouseGuidanceSettingsResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
   /api/v3/inventory/cycle-counts/mark:
     post:
@@ -3339,23 +3368,183 @@ components:
         effectiveTargetCases: { type: integer, minimum: 0 }
     WarehouseGuidance:
       type: object
-      required: [factoryDate, cycleCounts, freezerPull]
+      required: [factoryDate, cycleCounts, freezerPull, settings, reorder, useFirst, warehouseNeeds, transferGuidance, switchovers]
       properties:
-        factoryDate:
-          type: string
-          format: date
+        factoryDate: { type: string, format: date }
         cycleCounts:
           type: array
-          items:
-            $ref: "#/components/schemas/CycleCountSchedule"
+          items: { $ref: "#/components/schemas/CycleCountSchedule" }
         freezerPull:
           type: object
           required: [groups]
           properties:
             groups:
               type: array
+              items: { $ref: "#/components/schemas/FreezerPullGroup" }
+        settings: { $ref: "#/components/schemas/WarehouseGuidanceSettings" }
+        reorder:
+          type: array
+          items: { $ref: "#/components/schemas/ReorderGuidance" }
+        useFirst:
+          type: array
+          items: { $ref: "#/components/schemas/UseFirstGuidance" }
+        warehouseNeeds: { $ref: "#/components/schemas/WarehouseNeeds" }
+        transferGuidance:
+          type: array
+          items: { $ref: "#/components/schemas/TransferGuidance" }
+        switchovers:
+          type: array
+          items: { $ref: "#/components/schemas/SwitchoverGuidance" }
+    WarehouseReorderPoint:
+      type: object
+      required: [productId, productCode, productName, unit, threshold]
+      properties:
+        productId: { type: string, format: uuid }
+        productCode: { type: string }
+        productName: { type: string }
+        unit: { type: string }
+        threshold: { type: string, pattern: '^(0|[1-9][0-9]{0,11})(\.[0-9]{1,6})?$' }
+    WarehouseGuidanceSettings:
+      type: object
+      required: [expirySoonDays, revision, reorderPoints]
+      properties:
+        expirySoonDays: { type: integer, minimum: 0, maximum: 365 }
+        revision: { type: integer, minimum: 0 }
+        reorderPoints:
+          type: array
+          items: { $ref: "#/components/schemas/WarehouseReorderPoint" }
+    SaveWarehouseGuidanceSettingsRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, expirySoonDays, reorderPoints, expectedRevision]
+      properties:
+        requestId: { type: string, minLength: 1, maxLength: 200 }
+        expirySoonDays: { type: integer, minimum: 0, maximum: 365 }
+        reorderPoints:
+          type: array
+          maxItems: 2000
+          items:
+            type: object
+            additionalProperties: false
+            required: [productId, threshold]
+            properties:
+              productId: { type: string, format: uuid }
+              threshold: { type: string, pattern: '^(0|[1-9][0-9]{0,11})(\.[0-9]{1,6})?$' }
+        expectedRevision: { type: integer, minimum: 0 }
+    SaveWarehouseGuidanceSettingsResponse:
+      type: object
+      required: [outcome, replayed, revision]
+      properties:
+        outcome: { type: string, enum: [saved] }
+        replayed: { type: boolean }
+        revision: { type: integer, minimum: 1 }
+    ReorderGuidance:
+      type: object
+      required: [productId, productCode, productName, unit, onHand, scheduledDemand, projectedOnHand, threshold, suggestedQuantity]
+      properties:
+        productId: { type: string, format: uuid }
+        productCode: { type: string }
+        productName: { type: string }
+        unit: { type: string }
+        onHand: { type: string }
+        scheduledDemand: { type: string }
+        projectedOnHand: { type: string }
+        threshold: { type: string }
+        suggestedQuantity: { type: string }
+    UseFirstGuidance:
+      type: object
+      required: [lotId, productId, productCode, productName, unit, warehouseId, warehouseName, lotNumber, quantity, expiresOn, daysLeft, expired, demandedToday]
+      properties:
+        lotId: { type: string, format: uuid }
+        productId: { type: string, format: uuid }
+        productCode: { type: string }
+        productName: { type: string }
+        unit: { type: string }
+        warehouseId: { type: string, format: uuid }
+        warehouseName: { type: string }
+        lotNumber: { type: string }
+        quantity: { type: string }
+        expiresOn: { type: string, format: date }
+        daysLeft: { type: integer }
+        expired: { type: boolean }
+        demandedToday: { type: boolean }
+    WarehouseNeeds:
+      type: object
+      required: [groups, warnings]
+      properties:
+        groups:
+          type: array
+          items:
+            type: object
+            required: [area, items]
+            properties:
+              area: { type: string }
               items:
-                $ref: "#/components/schemas/FreezerPullGroup"
+                type: array
+                items:
+                  type: object
+                  required: [productId, productCode, productName, unit, quantity, resolved, runs]
+                  properties:
+                    productId: { type: string, format: uuid }
+                    productCode: { type: string }
+                    productName: { type: string }
+                    unit: { type: [string, "null"] }
+                    quantity: { type: [string, "null"] }
+                    resolved: { type: boolean }
+                    runs:
+                      type: array
+                      items:
+                        type: object
+                        required: [scheduleRunId, productionDate, runLabel, quantity, resolved, warning]
+                        properties:
+                          scheduleRunId: { type: string, format: uuid }
+                          productionDate: { type: string, format: date }
+                          runLabel: { type: string }
+                          quantity: { type: [string, "null"] }
+                          resolved: { type: boolean }
+                          warning: { type: [string, "null"] }
+        warnings:
+          type: array
+          items: { type: string }
+    TransferGuidance:
+      type: object
+      required: [warehouseId, warehouseName, productId, productCode, productName, unit, needed, onSite, offSite, shortfall, suggestedQuantity, sources]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        warehouseName: { type: string }
+        productId: { type: string, format: uuid }
+        productCode: { type: string }
+        productName: { type: string }
+        unit: { type: string }
+        needed: { type: string }
+        onSite: { type: string }
+        offSite: { type: string }
+        shortfall: { type: string }
+        suggestedQuantity: { type: string }
+        sources:
+          type: array
+          items:
+            type: object
+            required: [warehouseId, warehouseName, quantity]
+            properties:
+              warehouseId: { type: string, format: uuid }
+              warehouseName: { type: string }
+              quantity: { type: string }
+    SwitchoverGuidance:
+      type: object
+      required: [runId, runLabel, pressCasesLeft, skidsLeft, packagingStage, shortRun, pressStopAt, lineClearAt, nextRunLabels]
+      properties:
+        runId: { type: string, format: uuid }
+        runLabel: { type: string }
+        pressCasesLeft: { type: string }
+        skidsLeft: { type: number, minimum: 0 }
+        packagingStage: { type: boolean }
+        shortRun: { type: boolean }
+        pressStopAt: { type: string, format: date-time }
+        lineClearAt: { type: string, format: date-time }
+        nextRunLabels:
+          type: array
+          items: { type: string }
     CycleCountSchedule:
       type: object
       required: [section, cadenceDays, enabled, lastCountedOn, revision, due, overdueDays]
@@ -3381,7 +3570,7 @@ components:
           minimum: 0
     FreezerPullGroup:
       type: object
-      required: [productionDate, runId, productCode, targetCases, items]
+      required: [productionDate, runId, productCode, targetCases, effectiveTargetCases, items]
       properties:
         productionDate:
           type: string
@@ -3394,6 +3583,9 @@ components:
         targetCases:
           type: integer
           minimum: 1
+        effectiveTargetCases:
+          type: integer
+          minimum: 0
         items:
           type: array
           items:

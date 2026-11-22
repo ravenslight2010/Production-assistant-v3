@@ -19,6 +19,7 @@ import {
   recordInventoryMovement,
   setProductionWarehouse,
   saveCycleCountSchedule,
+  saveWarehouseGuidanceSettings,
   stageOpeningCount,
   transferInventory,
   type AdjustFreezerSurplusRequest,
@@ -32,6 +33,7 @@ import {
   type InventoryTransferRequest,
   type MarkCycleCountedRequest,
   type SaveCycleCountScheduleRequest,
+  type SaveWarehouseGuidanceSettingsRequest,
   type WarehouseGuidance,
   type OpeningCountRecord,
   type OpeningCountRequest,
@@ -49,6 +51,7 @@ import { OpeningCountPanel } from "../components/OpeningCountPanel";
 import { FreezerSurplusPanel } from "../components/FreezerSurplusPanel";
 import { InventoryMovementPanel } from "../components/InventoryMovementPanel";
 import { WarehouseGuidancePanel } from "../components/WarehouseGuidancePanel";
+import { WarehouseOperationsPanel } from "../components/WarehouseOperationsPanel";
 
 function message(cause: unknown, fallback: string): string {
   return cause instanceof Error ? cause.message : fallback;
@@ -198,6 +201,10 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
         const result = await saveCycleCountSchedule(request.payload);
         replayed = result.replayed;
         confirmation = `${result.schedule.section} cycle-count schedule saved and reloaded.`;
+      } else if (request.kind === "guidance-settings") {
+        const result = await saveWarehouseGuidanceSettings(request.payload);
+        replayed = result.replayed;
+        confirmation = `Reorder points and the ${request.payload.expirySoonDays}-day use-first window were saved and reloaded.`;
       } else if (request.kind === "surplus-confirm") {
         const result = await confirmFreezerSurplus(request.payload);
         replayed = result.replayed;
@@ -285,11 +292,11 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
     return <div><div className="page-heading"><div><p className="eyebrow">Warehouse guidance</p><h1>Inventory</h1><p>Cycle-count reminders and scheduled freezer pull. Physical stock and configuration remain manager-controlled.</p></div><button type="button" className="button-secondary" disabled={!online || busy !== null} onClick={() => void loadCanonical()}><RefreshCw className="h-4 w-4" />Refresh guidance</button></div>
       {pending ? <div className="notice-banner" role="status"><span>An inventory response is unresolved. Retry the identical request before another write.</span><button type="button" className="button-secondary ml-auto" disabled={!online || busy !== null || pending.kind !== "cycle-count-mark"} onClick={() => void sendPending(pending)}>Retry the same request</button></div> : null}
       {error ? <div className="error-banner mt-4" role="alert">{error}</div> : null}{notice ? <div className="notice-banner" role="status">{notice}</div> : null}
-      {guidance ? <WarehouseGuidancePanel guidance={guidance} canManage={false} disabled={!online || busy !== null || pending !== null} onMark={async (request: MarkCycleCountedRequest) => {
+      {guidance ? <><WarehouseGuidancePanel guidance={guidance} canManage={false} disabled={!online || busy !== null || pending !== null} onMark={async (request: MarkCycleCountedRequest) => {
         if (!online || busy !== null || pending !== null) return false;
         const pendingRequest: PendingInventoryRequest = { kind: "cycle-count-mark", payload: request };
         return persistPending(pendingRequest) && sendPending(pendingRequest);
-      }} onSave={async () => false} /> : <section className="panel mt-6"><p className="text-sm text-muted-foreground">{online ? "Loading warehouse guidance…" : "Offline read-only view. Reconnect to load guidance."}</p></section>}
+      }} onSave={async () => false} /><WarehouseOperationsPanel guidance={guidance} products={[]} canManage={false} disabled={!online || busy !== null || pending !== null} onSaveSettings={async () => false} /></> : <section className="panel mt-6"><p className="text-sm text-muted-foreground">{online ? "Loading warehouse guidance…" : "Offline read-only view. Reconnect to load guidance."}</p></section>}
     </div>;
   }
 
@@ -312,6 +319,13 @@ export function InventoryPage({ session, online }: { session: AuthSession; onlin
         }} onSave={async (request: SaveCycleCountScheduleRequest) => {
           if (!online || busy !== null || pending !== null) return false;
           const pendingRequest: PendingInventoryRequest = { kind: "cycle-count-schedule", payload: request };
+          return persistPending(pendingRequest) && sendPending(pendingRequest);
+        }} /> : null}
+
+      {guidance ? <WarehouseOperationsPanel guidance={guidance} products={products} canManage disabled={writeDisabled}
+        onSaveSettings={async (request: SaveWarehouseGuidanceSettingsRequest) => {
+          if (writeDisabled) return false;
+          const pendingRequest: PendingInventoryRequest = { kind: "guidance-settings", payload: request };
           return persistPending(pendingRequest) && sendPending(pendingRequest);
         }} /> : null}
 

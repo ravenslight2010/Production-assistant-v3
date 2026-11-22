@@ -80,7 +80,7 @@ function json(route, body, status = 200) {
   return route.fulfill({ status, contentType: "application/json", headers: { "Cache-Control": "no-store" }, body: JSON.stringify(body) });
 }
 
-async function installInventoryApi(context, baseUrl, { manager = true, established = false, surplus = false } = {}) {
+async function installInventoryApi(context, baseUrl, { manager = true, established = false, surplus = false, malformedGuidance = false } = {}) {
   const warehouses = [];
   const counts = new Map();
   const requests = new Map();
@@ -96,10 +96,21 @@ async function installInventoryApi(context, baseUrl, { manager = true, establish
   const guidance = {
     factoryDate: "2026-11-21",
     cycleCounts: [{ section: "Dry storage", cadenceDays: 7, enabled: true, lastCountedOn: null, revision: 1, due: true, overdueDays: null }],
-    freezerPull: { groups: [{ productionDate: "2026-11-23", runId: "76000000-0000-4000-8000-000000000051", productCode: "PIZZA-A", targetCases: 10, items: [
+    freezerPull: { groups: [{ productionDate: "2026-11-23", runId: "76000000-0000-4000-8000-000000000051", productCode: "PIZZA-A", targetCases: 10, effectiveTargetCases: 6, items: [
       { code: "FREEZER-FLOUR", ingredientName: "Browser Dough", productCode: "DOUGH-A", quantity: "20", unit: "lb", resolved: true, warning: null },
       { code: "FREEZER-SAUCE", ingredientName: "Browser Sauce", productCode: "SAUCE-A", quantity: null, unit: "lb", resolved: false, warning: "Scheduled quantity is unresolved; check station capacity." },
     ] }] },
+    settings: { expirySoonDays: 7, revision: 2, reorderPoints: [
+      { productId: PRODUCT_IDS[0], productCode: "DOUGH-A", productName: "Browser Dough", unit: "lb", threshold: "10" },
+    ] },
+    reorder: [{ productId: PRODUCT_IDS[0], productCode: "DOUGH-A", productName: "Browser Dough", unit: "lb", onHand: "55", scheduledDemand: "50", projectedOnHand: "5", threshold: "10", suggestedQuantity: "5" }],
+    useFirst: [{ lotId: "76000000-0000-4000-8000-000000000071", productId: PRODUCT_IDS[0], productCode: "DOUGH-A", productName: "Browser Dough", unit: "lb", warehouseId: WAREHOUSE_ID, warehouseName: "Browser Source", lotNumber: "LOT-EXPIRING", quantity: "5", expiresOn: "2026-11-22", daysLeft: 1, expired: false, demandedToday: true }],
+    warehouseNeeds: { warnings: ["Run 2: Browser Cheese has no resolved recipe quantity."], groups: [{ area: "Dough", items: [
+      { productId: PRODUCT_IDS[0], productCode: "DOUGH-A", productName: "Browser Dough", unit: "lb", quantity: "50", resolved: true, runs: [{ scheduleRunId: "76000000-0000-4000-8000-000000000051", productionDate: "2026-11-23", runLabel: "Run 1 — Pizza", quantity: "30", resolved: true, warning: null }] },
+      { productId: PRODUCT_IDS[1], productCode: "CHEESE-A", productName: "Browser Cheese", unit: null, quantity: null, resolved: false, runs: [{ scheduleRunId: "76000000-0000-4000-8000-000000000051", productionDate: "2026-11-23", runLabel: "Run 2 — Pizza", quantity: null, resolved: false, warning: "Browser Cheese has no resolved recipe quantity." }] },
+    ] }] },
+    transferGuidance: [{ warehouseId: WAREHOUSE_ID, warehouseName: "Browser Source", productId: PRODUCT_IDS[0], productCode: "DOUGH-A", productName: "Browser Dough", unit: "lb", needed: "30", onSite: "5", offSite: "50", shortfall: "25", suggestedQuantity: "25", sources: [{ warehouseId: TARGET_WAREHOUSE_ID, warehouseName: "Browser Target", quantity: "50" }] }],
+    switchovers: [{ runId: "76000000-0000-4000-8000-000000000072", runLabel: "Running Pizza", pressCasesLeft: "2", skidsLeft: 0.4, packagingStage: true, shortRun: false, pressStopAt: "2026-11-21T15:00:00.000Z", lineClearAt: "2026-11-21T15:20:00.000Z", nextRunLabels: ["Run 2 — Next Pizza"] }],
   };
   const surplusLedger = {
     lots: [],
@@ -115,6 +126,7 @@ async function installInventoryApi(context, baseUrl, { manager = true, establish
   let loseNextMovementResponse = false;
   let loseNextCountResponse = false;
   let loseNextSurplusResponse = false;
+  let loseNextSettingsResponse = false;
   let nextMovementId = 40;
   const newMovementId = () => `76000000-0000-4000-8000-${String(nextMovementId++).padStart(12, "0")}`;
   const changeStock = (warehouseId, code, delta) => {
@@ -201,7 +213,34 @@ async function installInventoryApi(context, baseUrl, { manager = true, establish
     if (path === "/api/v3/auth/bootstrap-status" && method === "GET") return json(route, { available: false });
     if (path.startsWith("/api/v3/inventory/")) inventoryRequests.push(`${method} ${path}`);
     if (!["GET", "HEAD", "OPTIONS"].includes(method)) writes.push(`${method} ${path}`);
-    if (path === "/api/v3/inventory/warehouse-guidance" && method === "GET") return json(route, guidance);
+    if (path === "/api/v3/inventory/warehouse-guidance" && method === "GET") return json(route, malformedGuidance ? { factoryDate: guidance.factoryDate, cycleCounts: [], freezerPull: { groups: [] } } : guidance);
+    if (path === "/api/v3/inventory/warehouse-guidance" && method === "POST") {
+      if (!manager) return json(route, { error: "Forbidden" }, 403);
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(Object.keys(body).sort(), ["expectedRevision", "expirySoonDays", "reorderPoints", "requestId"]);
+      const prior = requests.get(body.requestId);
+      if (prior) {
+        assert.deepEqual(body, prior, "settings retry must preserve the exact payload and request identity");
+        return json(route, { ...commandResults.get(body.requestId), replayed: true });
+      }
+      requests.set(body.requestId, body);
+      assert.equal(body.expectedRevision, guidance.settings.revision);
+      guidance.settings = {
+        expirySoonDays: body.expirySoonDays, revision: guidance.settings.revision + 1,
+        reorderPoints: body.reorderPoints.filter((point) => Number(point.threshold) > 0).map((point) => {
+          const product = PRODUCTS.find((item) => item.id === point.productId);
+          return { productId: point.productId, productCode: product.code, productName: product.name, unit: product.unit, threshold: point.threshold };
+        }),
+      };
+      const result = { outcome: "saved", replayed: false, revision: guidance.settings.revision };
+      commandResults.set(body.requestId, result);
+      if (loseNextSettingsResponse) {
+        loseNextSettingsResponse = false;
+        return json(route, { error: "Synthetic response loss after settings commit." }, 500);
+      }
+      return json(route, result);
+    }
     if (path === "/api/v3/inventory/cycle-counts/mark" && method === "POST") {
       const body = request.postDataJSON();
       assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
@@ -503,6 +542,7 @@ async function installInventoryApi(context, baseUrl, { manager = true, establish
     loseNextMovementResponse: () => { loseNextMovementResponse = true; },
     loseNextCountResponse: () => { loseNextCountResponse = true; },
     loseNextSurplusResponse: () => { loseNextSurplusResponse = true; },
+    loseNextSettingsResponse: () => { loseNextSettingsResponse = true; },
   };
 }
 
@@ -768,6 +808,71 @@ test("React freezer surplus retries exact decisions and separates carry-in histo
   await context.close();
 });
 
+test("React rejects incomplete warehouse guidance instead of adopting empty operations", { timeout: 45_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  await installInventoryApi(context, baseUrl, { malformedGuidance: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#inventory`);
+  await page.getByText("Warehouse guidance was incomplete. Refresh and retry.", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("heading", { name: "Reorder review", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("heading", { name: "Confirmed quantities", exact: true }).count(), 1);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test("React warehouse operations stay read-only and settings retry exactly after response loss", { timeout: 60_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installInventoryApi(context, baseUrl);
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#inventory`);
+  await page.getByRole("heading", { name: "Switchover warning", exact: true }).waitFor();
+  await page.getByText("Running Pizza", { exact: true }).waitFor();
+  await page.getByText("0.4 skids left", { exact: true }).waitFor();
+  await page.getByText("6 new cases after carry-in", { exact: false }).waitFor();
+
+  const reorder = page.getByRole("region", { name: "Reorder review", exact: true });
+  await reorder.getByText("5 lb", { exact: true }).last().waitFor();
+  await reorder.getByText("55 on hand · 50 scheduled", { exact: false }).waitFor();
+  const useFirst = page.getByRole("region", { name: "Use first", exact: true });
+  await useFirst.getByText("LOT-EXPIRING · Needed today", { exact: true }).waitFor();
+  const needs = page.getByRole("region", { name: "Warehouse needs", exact: true });
+  await needs.getByText("Some scheduled demand is unresolved.", { exact: true }).waitFor();
+  await needs.getByText("50 lb", { exact: true }).waitFor();
+  await needs.getByText("Scheduled runs (1)", { exact: true }).first().click();
+  await needs.getByText(/Run 1 — Pizza: 30 lb/u).waitFor();
+  const transfer = page.getByRole("region", { name: "Transfer guidance", exact: true });
+  await transfer.getByText("25 lb", { exact: true }).waitFor();
+  await transfer.getByText("Sources: Browser Target (50)", { exact: true }).waitFor();
+  assert.equal(await transfer.getByRole("button").count(), 0, "transfer advice must not create a physical write");
+
+  await page.getByLabel("Use-first expiry window (days)", { exact: true }).fill("14");
+  await page.getByLabel("Reorder threshold for Browser Dough", { exact: true }).fill("12.5");
+  api.loseNextSettingsResponse();
+  await page.getByRole("button", { name: "Save guidance settings", exact: true }).click();
+  await page.getByText(/Retry the same request; its identity prevents duplicate writes/u).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Add schedule", exact: true }).isDisabled(), true);
+  const original = [...api.requests.values()].find((request) => Array.isArray(request.reorderPoints));
+  await page.reload();
+  await page.getByRole("button", { name: "Retry the same inventory request", exact: true }).click();
+  await page.getByText(/Previous request confirmed\. Reorder points and the 14-day use-first window were saved and reloaded/u).waitFor();
+  assert.equal(await page.getByLabel("Use-first expiry window (days)", { exact: true }).inputValue(), "14");
+  assert.equal(await page.getByLabel("Reorder threshold for Browser Dough", { exact: true }).inputValue(), "12.5");
+  assert.deepEqual([...api.requests.values()].find((request) => Array.isArray(request.reorderPoints)), original);
+  assert.equal(api.writes.filter((path) => path === "POST /api/v3/inventory/warehouse-guidance").length, 2);
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 375, height: 812 }, { width: 768, height: 1024 }]) {
+    await page.setViewportSize(viewport);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+  }
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
 test("React managers configure cycle-count cadence and availability from canonical guidance", { timeout: 45_000 }, async (t) => {
   const baseUrl = await serveDist(t);
   const context = await openBrowser(t);
@@ -806,6 +911,12 @@ test("React staff guidance marks counts with exact retry while stock and configu
   await page.getByRole("heading", { name: "Freezer pull", exact: true }).waitFor();
   await page.getByText("20 lb", { exact: true }).waitFor();
   await page.getByText(/Scheduled quantity is unresolved; check station capacity/u).waitFor();
+  await page.getByRole("heading", { name: "Reorder review", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Use first", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Warehouse needs", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Transfer guidance", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Switchover warning", exact: true }).waitFor();
+  assert.equal(await page.getByRole("heading", { name: "Reorder and expiry settings", exact: true }).count(), 0);
   assert.equal(await page.getByRole("button", { name: "Configure", exact: true }).count(), 0);
   assert.equal(await page.getByRole("heading", { name: "Confirmed quantities", exact: true }).count(), 0);
 

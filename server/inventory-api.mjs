@@ -432,6 +432,43 @@ export function createInventoryApi({ pool, authenticate, verifyCsrf, logger = ()
         return true;
       }
 
+      if (url.pathname === WAREHOUSE_GUIDANCE_PATH && request.method === "POST") {
+        operation = "save_warehouse_guidance_settings";
+        const body = await readJsonBody(request);
+        requireKeys(body, ["requestId", "expirySoonDays", "reorderPoints", "expectedRevision"]);
+        const requestId = validateRequestId(body.requestId);
+        if (!Number.isSafeInteger(body.expirySoonDays) || body.expirySoonDays < 0 || body.expirySoonDays > 365
+          || !Array.isArray(body.reorderPoints) || body.reorderPoints.length > 2000
+          || !Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) {
+          throw new InventoryApiError(400, "Submit a valid expiry window, reorder-point list, and current revision.");
+        }
+        const seenProducts = new Set();
+        const reorderPoints = body.reorderPoints.map((point) => {
+          if (!point || typeof point !== "object" || Array.isArray(point)) {
+            throw new InventoryApiError(400, "Review each reorder point and try again.");
+          }
+          requireKeys(point, ["productId", "threshold"]);
+          const productId = validateUuid(point.productId, "Product ID").toLowerCase();
+          if (typeof point.threshold !== "string" || !POSITIVE_QUANTITY.test(point.threshold)
+            || seenProducts.has(productId)) {
+            throw new InventoryApiError(400, "Use one non-negative decimal threshold per product.");
+          }
+          seenProducts.add(productId);
+          return { productId, threshold: point.threshold };
+        });
+        const payload = {
+          expirySoonDays: body.expirySoonDays,
+          reorderPoints,
+          expectedRevision: body.expectedRevision,
+        };
+        const result = await pool.query(
+          "SELECT v3.save_warehouse_guidance_settings($1::uuid, $2::uuid, $3::text, $4::text, $5::integer, $6::jsonb, $7::bigint) AS result",
+          [...scope, actor, requestId, hashRequest(payload), body.expirySoonDays, JSON.stringify(reorderPoints), body.expectedRevision],
+        );
+        sendJson(response, 200, resultValue(result));
+        return true;
+      }
+
       if (url.pathname === CYCLE_COUNT_MARK_PATH && request.method === "POST") {
         operation = "mark_cycle_counted";
         const body = await readJsonBody(request);

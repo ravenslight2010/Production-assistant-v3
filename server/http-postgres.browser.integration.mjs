@@ -624,6 +624,25 @@ async function main() {
     assert.ok(inventoryProducts.length > 0);
     const countedProduct = inventoryProducts.find((product) => product.code === "CORN");
     assert.ok(countedProduct, "the run recipe's real inventory ingredient must be active");
+    for (const heading of ["Reorder review", "Use first", "Warehouse needs", "Transfer guidance", "Reorder and expiry settings"]) {
+      await page.getByRole("heading", { name: heading, exact: true }).waitFor();
+    }
+    const guidanceBeforeSettings = await (await page.request.get(`${baseUrl}/api/v3/inventory/warehouse-guidance`)).json();
+    const previousSettingsRevision = guidanceBeforeSettings.settings.revision;
+    await page.getByLabel("Use-first expiry window (days)", { exact: true }).fill("9");
+    await page.getByLabel(`Reorder threshold for ${countedProduct.name}`, { exact: true }).fill("2.5");
+    const guidanceSettingsResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/inventory/warehouse-guidance" && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Save guidance settings", exact: true }).click();
+    const guidanceSettingsResponse = await guidanceSettingsResponsePromise;
+    assert.equal(guidanceSettingsResponse.status(), 200, await guidanceSettingsResponse.text());
+    await page.getByText(/Reorder points and the 9-day use-first window were saved and reloaded/u).waitFor();
+    const configuredGuidanceResponse = await page.request.get(`${baseUrl}/api/v3/inventory/warehouse-guidance`);
+    const configuredGuidance = await configuredGuidanceResponse.json();
+    assert.equal(configuredGuidance.settings.expirySoonDays, 9);
+    assert.equal(configuredGuidance.settings.revision, previousSettingsRevision + 1);
+    assert.equal(configuredGuidance.settings.reorderPoints[0].productId, countedProduct.id);
+    assert.equal(configuredGuidance.settings.reorderPoints[0].threshold, "2.5");
     const openingCsv = [
       "product_code,quantity",
       ...inventoryProducts.map((product) => `${product.code},${product.code === countedProduct.code ? "12.5" : "0"}`),
@@ -1005,6 +1024,11 @@ async function main() {
       assert.ok(await webkitPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
       await webkitPage.getByRole("button", { name: "Inventory", exact: true }).click();
       await webkitPage.getByRole("heading", { name: "Inventory", exact: true }).waitFor();
+      for (const heading of ["Reorder review", "Use first", "Warehouse needs", "Transfer guidance", "Reorder and expiry settings"]) {
+        await webkitPage.getByRole("heading", { name: heading, exact: true }).waitFor();
+      }
+      await webkitPage.getByLabel("Use-first expiry window (days)", { exact: true }).waitFor();
+      assert.equal(await webkitPage.getByLabel("Use-first expiry window (days)", { exact: true }).inputValue(), "9");
       await webkitPage.getByRole("region", { name: "Confirmed quantities", exact: true })
         .getByRole("cell", { name: stockItem.quantity, exact: true }).waitFor();
       await webkitPage.getByText("Run completion inventory use", { exact: true }).waitFor();

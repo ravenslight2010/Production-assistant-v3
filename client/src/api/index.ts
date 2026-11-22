@@ -46,6 +46,7 @@ export type WarehouseGuidance = components["schemas"]["WarehouseGuidance"];
 export type CycleCountSchedule = components["schemas"]["CycleCountSchedule"];
 export type MarkCycleCountedRequest = components["schemas"]["MarkCycleCountedRequest"];
 export type SaveCycleCountScheduleRequest = components["schemas"]["SaveCycleCountScheduleRequest"];
+export type SaveWarehouseGuidanceSettingsRequest = components["schemas"]["SaveWarehouseGuidanceSettingsRequest"];
 export type FreezerSurplusLedger = components["schemas"]["FreezerSurplusLedger"];
 export type FreezerSurplusLot = components["schemas"]["FreezerSurplusLot"];
 export type FreezerSurplusEvent = components["schemas"]["FreezerSurplusEvent"];
@@ -490,19 +491,113 @@ function isCycleCountSchedule(value: unknown): value is CycleCountSchedule {
     && (value.overdueDays === null || (Number.isSafeInteger(value.overdueDays) && Number(value.overdueDays) >= 0));
 }
 
-export async function getWarehouseGuidance(): Promise<WarehouseGuidance> {
-  const result = await unwrap(await client.GET("/api/v3/inventory/warehouse-guidance"));
-  const groups = result.freezerPull.groups;
-  const validGroups = groups.every((group) => UUID.test(group.runId)
-    && CALENDAR_DATE.test(group.productionDate) && INVENTORY_CODE.test(group.productCode)
-    && Number.isSafeInteger(group.targetCases) && group.targetCases >= 1
-    && group.items.every((item) => INVENTORY_CODE.test(item.code) && item.ingredientName.length > 0
-      && INVENTORY_CODE.test(item.productCode) && typeof item.resolved === "boolean"
-      && (item.quantity === null || (INVENTORY_QUANTITY.test(item.quantity) && !item.quantity.startsWith("-")))
-      && (item.unit === null || item.unit.length > 0) && (item.warning === null || item.warning.length > 0)
+function isUnsignedQuantity(value: unknown): value is string {
+  return typeof value === "string" && INVENTORY_QUANTITY.test(value) && !value.startsWith("-");
+}
+
+function isNullableUnsignedQuantity(value: unknown): value is string | null {
+  return value === null || isUnsignedQuantity(value);
+}
+
+function hasWarehouseReorderPointFields(value: Record<string, unknown>): boolean {
+  return UUID.test(String(value.productId)) && INVENTORY_CODE.test(String(value.productCode))
+    && typeof value.productName === "string" && value.productName.length > 0 && typeof value.unit === "string"
+    && value.unit.length > 0 && isUnsignedQuantity(value.threshold);
+}
+
+function isWarehouseReorderPoint(value: unknown): value is WarehouseGuidance["settings"]["reorderPoints"][number] {
+  return object(value) && hasWarehouseReorderPointFields(value);
+}
+
+function isReorderGuidance(value: unknown): value is WarehouseGuidance["reorder"][number] {
+  return object(value) && hasWarehouseReorderPointFields(value) && isUnsignedQuantity(value.onHand)
+    && isUnsignedQuantity(value.scheduledDemand) && typeof value.projectedOnHand === "string"
+    && INVENTORY_QUANTITY.test(value.projectedOnHand) && isUnsignedQuantity(value.suggestedQuantity);
+}
+
+function isUseFirstGuidance(value: unknown): value is WarehouseGuidance["useFirst"][number] {
+  return object(value) && UUID.test(String(value.lotId)) && UUID.test(String(value.productId))
+    && UUID.test(String(value.warehouseId)) && INVENTORY_CODE.test(String(value.productCode))
+    && typeof value.productName === "string" && value.productName.length > 0
+    && typeof value.unit === "string" && value.unit.length > 0 && typeof value.warehouseName === "string"
+    && value.warehouseName.length > 0 && typeof value.lotNumber === "string" && value.lotNumber.length > 0
+    && isUnsignedQuantity(value.quantity) && typeof value.expiresOn === "string" && CALENDAR_DATE.test(value.expiresOn)
+    && Number.isSafeInteger(value.daysLeft) && typeof value.expired === "boolean" && typeof value.demandedToday === "boolean";
+}
+
+function isWarehouseNeeds(value: unknown): value is WarehouseGuidance["warehouseNeeds"] {
+  return object(value) && Array.isArray(value.warnings) && value.warnings.every((warning) => typeof warning === "string" && warning.length > 0)
+    && Array.isArray(value.groups) && value.groups.every((group) => object(group) && typeof group.area === "string"
+      && ["Dough", "Sauce", "Frontline", "Packaging"].includes(group.area) && Array.isArray(group.items)
+      && group.items.every((item) => object(item) && UUID.test(String(item.productId))
+        && INVENTORY_CODE.test(String(item.productCode)) && typeof item.productName === "string" && item.productName.length > 0
+        && (item.unit === null || (typeof item.unit === "string" && item.unit.length > 0))
+        && isNullableUnsignedQuantity(item.quantity) && typeof item.resolved === "boolean" && Array.isArray(item.runs)
+        && item.runs.every((run) => object(run) && UUID.test(String(run.scheduleRunId))
+          && typeof run.productionDate === "string" && CALENDAR_DATE.test(run.productionDate)
+          && typeof run.runLabel === "string" && isNullableUnsignedQuantity(run.quantity) && typeof run.resolved === "boolean"
+          && (run.warning === null || (typeof run.warning === "string" && run.warning.length > 0))
+          && (run.resolved ? run.warning === null : run.warning !== null))));
+}
+
+function isTransferGuidance(value: unknown): value is WarehouseGuidance["transferGuidance"][number] {
+  return object(value) && UUID.test(String(value.warehouseId)) && UUID.test(String(value.productId))
+    && INVENTORY_CODE.test(String(value.productCode)) && typeof value.warehouseName === "string" && value.warehouseName.length > 0
+    && typeof value.productName === "string" && value.productName.length > 0 && typeof value.unit === "string" && value.unit.length > 0
+    && isUnsignedQuantity(value.needed) && isUnsignedQuantity(value.onSite) && isUnsignedQuantity(value.offSite)
+    && isUnsignedQuantity(value.shortfall) && isUnsignedQuantity(value.suggestedQuantity) && Array.isArray(value.sources)
+    && value.sources.every((source) => object(source) && UUID.test(String(source.warehouseId))
+      && typeof source.warehouseName === "string" && source.warehouseName.length > 0 && isUnsignedQuantity(source.quantity));
+}
+
+function isSwitchoverGuidance(value: unknown): value is WarehouseGuidance["switchovers"][number] {
+  return object(value) && UUID.test(String(value.runId)) && typeof value.runLabel === "string" && value.runLabel.length > 0
+    && isUnsignedQuantity(value.pressCasesLeft) && typeof value.skidsLeft === "number" && Number.isFinite(value.skidsLeft)
+    && value.skidsLeft >= 0 && value.skidsLeft <= 2 && typeof value.packagingStage === "boolean" && typeof value.shortRun === "boolean"
+    && isTimestamp(value.pressStopAt) && isTimestamp(value.lineClearAt) && Array.isArray(value.nextRunLabels)
+    && value.nextRunLabels.every((label) => typeof label === "string" && label.length > 0);
+}
+
+function isWarehouseGuidance(value: unknown): value is WarehouseGuidance {
+  if (!object(value) || typeof value.factoryDate !== "string" || !CALENDAR_DATE.test(value.factoryDate)
+    || !Array.isArray(value.cycleCounts) || !value.cycleCounts.every(isCycleCountSchedule)
+    || !object(value.freezerPull) || !Array.isArray(value.freezerPull.groups)
+    || !object(value.settings) || !Number.isSafeInteger(value.settings.expirySoonDays)
+    || Number(value.settings.expirySoonDays) < 0 || Number(value.settings.expirySoonDays) > 365
+    || !Number.isSafeInteger(value.settings.revision) || Number(value.settings.revision) < 0
+    || !Array.isArray(value.settings.reorderPoints) || !value.settings.reorderPoints.every(isWarehouseReorderPoint)
+    || !Array.isArray(value.reorder) || !value.reorder.every(isReorderGuidance)
+    || !Array.isArray(value.useFirst) || !value.useFirst.every(isUseFirstGuidance)
+    || !isWarehouseNeeds(value.warehouseNeeds) || !Array.isArray(value.transferGuidance)
+    || !value.transferGuidance.every(isTransferGuidance) || !Array.isArray(value.switchovers)
+    || !value.switchovers.every(isSwitchoverGuidance)) return false;
+  return value.freezerPull.groups.every((group) => object(group) && UUID.test(String(group.runId))
+    && typeof group.productionDate === "string" && CALENDAR_DATE.test(group.productionDate)
+    && INVENTORY_CODE.test(String(group.productCode)) && Number.isSafeInteger(group.targetCases)
+    && Number(group.targetCases) >= 1 && Number.isSafeInteger(group.effectiveTargetCases)
+    && Number(group.effectiveTargetCases) >= 0 && Number(group.effectiveTargetCases) <= Number(group.targetCases)
+    && Array.isArray(group.items) && group.items.every((item) => object(item) && INVENTORY_CODE.test(String(item.code))
+      && typeof item.ingredientName === "string" && item.ingredientName.length > 0
+      && INVENTORY_CODE.test(String(item.productCode)) && typeof item.resolved === "boolean"
+      && isNullableUnsignedQuantity(item.quantity)
+      && (item.unit === null || (typeof item.unit === "string" && item.unit.length > 0))
+      && (item.warning === null || (typeof item.warning === "string" && item.warning.length > 0))
       && (item.resolved ? item.quantity !== null && item.unit !== null && item.warning === null : item.warning !== null)));
-  if (!CALENDAR_DATE.test(result.factoryDate) || !result.cycleCounts.every(isCycleCountSchedule) || !validGroups) {
-    throw new ApiError("Warehouse guidance was incomplete. Refresh and retry.", 502);
+}
+
+export async function getWarehouseGuidance(): Promise<WarehouseGuidance> {
+  const result: unknown = await unwrap(await client.GET("/api/v3/inventory/warehouse-guidance"));
+  if (!isWarehouseGuidance(result)) throw new ApiError("Warehouse guidance was incomplete. Refresh and retry.", 502);
+  return result;
+}
+
+export async function saveWarehouseGuidanceSettings(request: SaveWarehouseGuidanceSettingsRequest) {
+  const result = await unwrap(await client.POST("/api/v3/inventory/warehouse-guidance", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  if (result.outcome !== "saved" || typeof result.replayed !== "boolean"
+    || !Number.isSafeInteger(result.revision) || result.revision !== request.expectedRevision + 1) {
+    throw new ApiError("The server did not confirm the warehouse guidance settings. Retry the same request.", 502);
   }
   return result;
 }

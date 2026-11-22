@@ -122,6 +122,46 @@ test("staff receive only guidance and mark-counted access while managers configu
   assert.deepEqual(manager.calls[0].values.slice(4), ["Dry storage", 7, true, 0]);
 });
 
+test("warehouse guidance settings are strict, manager-only, and server hashed", async (t) => {
+  const productId = "10000000-0000-4000-8000-000000000030";
+  const api = await withApi(t, { query: async () => ({ rows: [{ result: { outcome: "saved", replayed: false, revision: 4 } }] }) });
+  const staff = await withApi(t, { auth: { ...MANAGER, capabilities: [] } });
+  const body = {
+    requestId: "guidance-settings-1", expirySoonDays: 14,
+    reorderPoints: [{ productId, threshold: "12.500" }], expectedRevision: 3,
+  };
+  const denied = await send(staff.baseUrl, "/api/v3/inventory/warehouse-guidance", { method: "POST", body });
+  assert.equal(denied.status, 403);
+  assert.equal(staff.calls.length, 0);
+  const saved = await send(api.baseUrl, "/api/v3/inventory/warehouse-guidance", { method: "POST", body });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(await saved.json(), { outcome: "saved", replayed: false, revision: 4 });
+  assert.match(api.calls[0].text, /save_warehouse_guidance_settings/u);
+  assert.deepEqual(api.calls[0].values.slice(4), [14, JSON.stringify(body.reorderPoints), 3]);
+  const hashed = createHash("sha256").update(JSON.stringify({
+    expirySoonDays: 14, reorderPoints: body.reorderPoints, expectedRevision: 3,
+  })).digest("hex");
+  assert.equal(api.calls[0].values[3], hashed);
+
+  const malformed = [
+    { ...body, requestId: "guidance-extra", extra: true },
+    { ...body, requestId: "guidance-days", expirySoonDays: 366 },
+    { ...body, requestId: "guidance-revision", expectedRevision: -1 },
+    { ...body, requestId: "guidance-negative", reorderPoints: [{ productId, threshold: "-1" }] },
+    { ...body, requestId: "guidance-number", reorderPoints: [{ productId, threshold: 12 }] },
+    { ...body, requestId: "guidance-duplicate", reorderPoints: [{ productId, threshold: "1" }, { productId: productId.toUpperCase(), threshold: "2" }] },
+  ];
+  for (const candidate of malformed) {
+    const response = await send(api.baseUrl, "/api/v3/inventory/warehouse-guidance", { method: "POST", body: candidate });
+    assert.equal(response.status, 400);
+  }
+  assert.equal(api.calls.length, 1);
+  const noCsrf = await withApi(t, { csrf: false });
+  const csrfDenied = await send(noCsrf.baseUrl, "/api/v3/inventory/warehouse-guidance", { method: "POST", csrf: false, body });
+  assert.equal(csrfDenied.status, 403);
+  assert.equal(noCsrf.calls.length, 0);
+});
+
 test("freezer surplus APIs are strict, manager-only, and server hashed", async (t) => {
   const runId = "10000000-0000-4000-8000-000000000020";
   const lotId = "10000000-0000-4000-8000-000000000021";

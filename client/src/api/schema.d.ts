@@ -629,12 +629,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read cycle-count and scheduled freezer-pull guidance
-         * @description Available to every signed-in staff member; contains no stock balances or physical-inventory writes.
+         * Read server-owned warehouse operations guidance
+         * @description Available to every signed-in staff member. Advisory stock-derived quantities do not change physical inventory.
          */
         get: operations["getWarehouseGuidance"];
         put?: never;
-        post?: never;
+        /** Save manager-owned reorder points and expiry guidance window */
+        post: operations["saveWarehouseGuidanceSettings"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1586,6 +1587,132 @@ export interface components {
             freezerPull: {
                 groups: components["schemas"]["FreezerPullGroup"][];
             };
+            settings: components["schemas"]["WarehouseGuidanceSettings"];
+            reorder: components["schemas"]["ReorderGuidance"][];
+            useFirst: components["schemas"]["UseFirstGuidance"][];
+            warehouseNeeds: components["schemas"]["WarehouseNeeds"];
+            transferGuidance: components["schemas"]["TransferGuidance"][];
+            switchovers: components["schemas"]["SwitchoverGuidance"][];
+        };
+        WarehouseReorderPoint: {
+            /** Format: uuid */
+            productId: string;
+            productCode: string;
+            productName: string;
+            unit: string;
+            threshold: string;
+        };
+        WarehouseGuidanceSettings: {
+            expirySoonDays: number;
+            revision: number;
+            reorderPoints: components["schemas"]["WarehouseReorderPoint"][];
+        };
+        SaveWarehouseGuidanceSettingsRequest: {
+            requestId: string;
+            expirySoonDays: number;
+            reorderPoints: {
+                /** Format: uuid */
+                productId: string;
+                threshold: string;
+            }[];
+            expectedRevision: number;
+        };
+        SaveWarehouseGuidanceSettingsResponse: {
+            /** @enum {string} */
+            outcome: "saved";
+            replayed: boolean;
+            revision: number;
+        };
+        ReorderGuidance: {
+            /** Format: uuid */
+            productId: string;
+            productCode: string;
+            productName: string;
+            unit: string;
+            onHand: string;
+            scheduledDemand: string;
+            projectedOnHand: string;
+            threshold: string;
+            suggestedQuantity: string;
+        };
+        UseFirstGuidance: {
+            /** Format: uuid */
+            lotId: string;
+            /** Format: uuid */
+            productId: string;
+            productCode: string;
+            productName: string;
+            unit: string;
+            /** Format: uuid */
+            warehouseId: string;
+            warehouseName: string;
+            lotNumber: string;
+            quantity: string;
+            /** Format: date */
+            expiresOn: string;
+            daysLeft: number;
+            expired: boolean;
+            demandedToday: boolean;
+        };
+        WarehouseNeeds: {
+            groups: {
+                area: string;
+                items: {
+                    /** Format: uuid */
+                    productId: string;
+                    productCode: string;
+                    productName: string;
+                    unit: string | null;
+                    quantity: string | null;
+                    resolved: boolean;
+                    runs: {
+                        /** Format: uuid */
+                        scheduleRunId: string;
+                        /** Format: date */
+                        productionDate: string;
+                        runLabel: string;
+                        quantity: string | null;
+                        resolved: boolean;
+                        warning: string | null;
+                    }[];
+                }[];
+            }[];
+            warnings: string[];
+        };
+        TransferGuidance: {
+            /** Format: uuid */
+            warehouseId: string;
+            warehouseName: string;
+            /** Format: uuid */
+            productId: string;
+            productCode: string;
+            productName: string;
+            unit: string;
+            needed: string;
+            onSite: string;
+            offSite: string;
+            shortfall: string;
+            suggestedQuantity: string;
+            sources: {
+                /** Format: uuid */
+                warehouseId: string;
+                warehouseName: string;
+                quantity: string;
+            }[];
+        };
+        SwitchoverGuidance: {
+            /** Format: uuid */
+            runId: string;
+            runLabel: string;
+            pressCasesLeft: string;
+            skidsLeft: number;
+            packagingStage: boolean;
+            shortRun: boolean;
+            /** Format: date-time */
+            pressStopAt: string;
+            /** Format: date-time */
+            lineClearAt: string;
+            nextRunLabels: string[];
         };
         CycleCountSchedule: {
             section: string;
@@ -1604,6 +1731,7 @@ export interface components {
             runId: string;
             productCode: string;
             targetCases: number;
+            effectiveTargetCases: number;
             items: components["schemas"]["FreezerPullItem"][];
         };
         FreezerPullItem: {
@@ -3294,6 +3422,36 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+        };
+    };
+    saveWarehouseGuidanceSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveWarehouseGuidanceSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved or exactly replayed guidance settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SaveWarehouseGuidanceSettingsResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     markCycleCounted: {

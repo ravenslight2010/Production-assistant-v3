@@ -235,6 +235,26 @@ async function main() {
     const staffGuidance = await jsonResponse(staffGuidanceResponse);
     assert.equal(staffGuidance.cycleCounts[0].due, true);
     assert.ok(staffGuidance.freezerPull && Array.isArray(staffGuidance.freezerPull.groups));
+    assert.deepEqual(staffGuidance.settings, { expirySoonDays: 7, revision: 0, reorderPoints: [] });
+    for (const key of ["reorder", "useFirst", "transferGuidance", "switchovers"]) {
+      assert.ok(Array.isArray(staffGuidance[key]), `${key} must be a staff-readable advisory list`);
+    }
+    assert.deepEqual(staffGuidance.warehouseNeeds, { groups: [], warnings: [] });
+    const guidanceSettingsRequest = {
+      requestId: "73000000-0000-4000-8000-0000000001f0", expirySoonDays: 14,
+      reorderPoints: [], expectedRevision: 0,
+    };
+    const savedGuidanceSettings = await managerPost("/api/v3/inventory/warehouse-guidance", guidanceSettingsRequest);
+    assert.equal(savedGuidanceSettings.status, 200, await savedGuidanceSettings.clone().text());
+    assert.deepEqual(await jsonResponse(savedGuidanceSettings), { outcome: "saved", replayed: false, revision: 1 });
+    const replayedGuidanceSettings = await managerPost("/api/v3/inventory/warehouse-guidance", guidanceSettingsRequest);
+    assert.equal((await jsonResponse(replayedGuidanceSettings)).replayed, true);
+    const staleGuidanceSettings = await managerPost("/api/v3/inventory/warehouse-guidance", {
+      ...guidanceSettingsRequest, requestId: "73000000-0000-4000-8000-0000000001ef",
+    });
+    assert.equal(staleGuidanceSettings.status, 409, "stale settings revisions must require canonical reload");
+    const staffGuidanceSettings = await sessionPost(operator, "/api/v3/inventory/warehouse-guidance", guidanceSettingsRequest);
+    assert.equal(staffGuidanceSettings.status, 403, "staff must not change manager-owned guidance settings");
     const markRequest = { requestId: "73000000-0000-4000-8000-0000000001f2", section: "Integration dry storage" };
     const firstMark = await sessionPost(operator, "/api/v3/inventory/cycle-counts/mark", markRequest);
     assert.equal(firstMark.status, 200, await firstMark.clone().text());
@@ -248,6 +268,8 @@ async function main() {
       headers: { Cookie: operator.cookieHeader },
     }));
     assert.equal(countedGuidance.cycleCounts[0].due, false);
+    assert.equal(countedGuidance.settings.expirySoonDays, 14);
+    assert.equal(countedGuidance.settings.revision, 1);
 
     const initialWarehouseResponse = await fetch(`${baseUrl}/api/v3/inventory/warehouses`, {
       headers: { Cookie: manager.cookieHeader, Accept: "application/json" },

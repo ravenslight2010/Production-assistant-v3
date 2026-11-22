@@ -8,6 +8,7 @@ import type {
   OpeningCountRequest,
   MarkCycleCountedRequest,
   SaveCycleCountScheduleRequest,
+  SaveWarehouseGuidanceSettingsRequest,
   SetProductionWarehouseRequest,
 } from "../api";
 
@@ -21,6 +22,7 @@ export type PendingInventoryRequest =
   | { kind: "opening-apply"; countId: string }
   | { kind: "cycle-count-mark"; payload: MarkCycleCountedRequest }
   | { kind: "cycle-count-schedule"; payload: SaveCycleCountScheduleRequest }
+  | { kind: "guidance-settings"; payload: SaveWarehouseGuidanceSettingsRequest }
   | { kind: "surplus-confirm"; payload: ConfirmFreezerSurplusRequest }
   | { kind: "surplus-allocation"; payload: AllocateFreezerSurplusRequest }
   | { kind: "surplus-adjustment"; payload: AdjustFreezerSurplusRequest };
@@ -136,6 +138,31 @@ function parse(value: unknown): PendingInventoryRequest | null {
       return { kind: candidate.kind, payload: {
         requestId: body.requestId, section: body.section, cadenceDays: body.cadenceDays as number,
         enabled: body.enabled, expectedRevision: body.expectedRevision as number,
+      } };
+    }
+  }
+  if (candidate.kind === "guidance-settings" && payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const body = payload as Record<string, unknown>;
+    const points = body.reorderPoints;
+    const validPoints = Array.isArray(points) && points.length <= 2000 && points.every((point) => {
+      if (!point || typeof point !== "object" || Array.isArray(point)) return false;
+      const candidatePoint = point as Record<string, unknown>;
+      return Object.keys(candidatePoint).sort().join(",") === "productId,threshold"
+        && typeof candidatePoint.productId === "string" && UUID.test(candidatePoint.productId)
+        && typeof candidatePoint.threshold === "string"
+        && /^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?$/u.test(candidatePoint.threshold);
+    });
+    const uniqueProducts = validPoints && new Set(points.map((point) => String((point as { productId: string }).productId).toLowerCase())).size === points.length;
+    if (requestId(body.requestId) && Number.isSafeInteger(body.expirySoonDays)
+      && Number(body.expirySoonDays) >= 0 && Number(body.expirySoonDays) <= 365 && validPoints && uniqueProducts
+      && Number.isSafeInteger(body.expectedRevision) && Number(body.expectedRevision) >= 0) {
+      return { kind: candidate.kind, payload: {
+        requestId: body.requestId, expirySoonDays: body.expirySoonDays as number,
+        reorderPoints: points.map((point) => {
+          const candidatePoint = point as { productId: string; threshold: string };
+          return { productId: candidatePoint.productId, threshold: candidatePoint.threshold };
+        }),
+        expectedRevision: body.expectedRevision as number,
       } };
     }
   }
