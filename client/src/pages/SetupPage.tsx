@@ -7,6 +7,8 @@ import {
   ApiError,
   getSetupCatalogImport,
   listSetupCatalogImports,
+  saveReviewedDieDefault,
+  stageSetupCatalogEdit,
   stageSetupCatalogImport,
   type AuthSession,
   type SetupCatalogActionResult,
@@ -17,10 +19,13 @@ import {
 } from "../api";
 import {
   clearPendingSetupCatalogImport,
+  type PendingSetupCatalogRequest,
   readPendingSetupCatalogImport,
   writePendingSetupCatalogImport,
 } from "../components/setup-catalog-storage";
 import { SourceWorkbookImport } from "../components/SourceWorkbookImport";
+import { CatalogRecordEditor } from "../components/CatalogRecordEditor";
+import { ReviewedDieDefaults } from "../components/ReviewedDieDefaults";
 
 const FAMILY_LABELS: Record<SetupCatalogFamily, string> = {
   ingredients: "Ingredients",
@@ -53,7 +58,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
   const [family, setFamily] = useState<SetupCatalogFamily>("ingredients");
   const [history, setHistory] = useState<SetupCatalogHistoryItem[]>([]);
   const [review, setReview] = useState<SetupCatalogDetail | null>(null);
-  const [pending, setPending] = useState<SetupCatalogStageRequest | null>(null);
+  const [pending, setPending] = useState<PendingSetupCatalogRequest | null>(null);
   const [busy, setBusy] = useState<"history" | "stage" | "apply" | "undo" | "reopen" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -124,7 +129,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
     if (fileInput.current) fileInput.current.value = "";
   }
 
-  function persistPending(request: SetupCatalogStageRequest): boolean {
+  function persistPending(request: PendingSetupCatalogRequest): boolean {
     try {
       writePendingSetupCatalogImport(userId, request);
       setPending(request);
@@ -161,20 +166,32 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
     }
   }
 
-  async function sendPending(request: SetupCatalogStageRequest): Promise<boolean> {
+  async function sendPending(request: PendingSetupCatalogRequest): Promise<boolean> {
     if (!online || !canManage) return false;
     setBusy("stage");
     setError(null);
-    setNotice("Staging the reviewed setup records. Nothing will be applied yet.");
+    setNotice("dieCode" in request
+      ? "Saving the reviewed die defaults with its current revision…"
+      : "Staging the reviewed setup records. Nothing will be applied yet.");
     try {
-      const result = await stageSetupCatalogImport(request);
+      if ("dieCode" in request) {
+        const saved = await saveReviewedDieDefault(request);
+        clearPendingSetupCatalogImport(userId);
+        setPending(null);
+        window.dispatchEvent(new Event("fieldline:v3:die-defaults-changed"));
+        setNotice(`${saved.replayed ? "Previous die-default save confirmed. " : ""}Reviewed defaults for ${saved.dieCode} are now ${saved.status} at revision ${saved.revision}.`);
+        return true;
+      }
+      const result = "csv" in request
+        ? await stageSetupCatalogImport(request)
+        : await stageSetupCatalogEdit(request);
       clearPendingSetupCatalogImport(userId);
       setPending(null);
       clearFile();
       const reloaded = await loadCanonical(result.importId, true);
       setNotice(result.replayed
         ? `The previous staging request was confirmed. ${reloaded ? "The canonical setup review has been reloaded." : "Canonical review reload failed; refresh before applying."}`
-        : `${request.sourceSummary ? "Reviewed source records" : "CSV"} staged. Review the stored records; no setup values have been applied.${reloaded ? "" : " Canonical review reload failed; refresh before applying."}`);
+        : `${"csv" in request ? (request.sourceSummary ? "Reviewed source records" : "CSV") : "Typed edit"} staged. Review the stored records; no setup values have been applied.${reloaded ? "" : " Canonical review reload failed; refresh before applying."}`);
       return true;
     } catch (cause) {
       const status = cause instanceof ApiError ? cause.status : 0;
@@ -228,6 +245,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       setBusy(null);
     }
     const reloaded = await loadCanonical(importId, true);
+    window.dispatchEvent(new Event("fieldline:v3:setup-catalog-changed"));
     setNotice(action === "apply"
       ? `${result.replayed ? "Previous Apply confirmed. " : ""}${result.createdCount ?? 0} setup rows created and ${result.updatedCount ?? 0} updated. ${reloaded ? "Canonical history reloaded." : "Canonical reload failed; refresh history."}`
       : `${result.replayed ? "Previous Undo confirmed. " : ""}Setup import undone. Server dependency and later-edit rules were enforced. ${reloaded ? "Canonical history reloaded." : "Canonical reload failed; refresh history."}`);
@@ -274,19 +292,33 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
         </div>
       ) : null}
 
+      <section className="panel mt-6" aria-labelledby="setup-family-heading">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div><p className="eyebrow">Shared setup family</p><h2 id="setup-family-heading" className="mt-1 text-lg font-semibold">Choose records to edit or import</h2></div>
+          <label className="block min-w-0 text-xs font-medium sm:w-80" htmlFor="setup-catalog-family">Setup family
+            <select id="setup-catalog-family" className="field mt-1.5" value={family} disabled={!canManage || busy !== null || pending !== null} onChange={(event) => changeFamily(event.target.value as SetupCatalogFamily)}>
+              {Object.entries(FAMILY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+        </div>
+      </section>
+
       <div className="mt-6 grid items-start gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,1fr)]">
         <div className="min-w-0 space-y-5">
+          <CatalogRecordEditor family={family} online={online} disabled={writeDisabled} onStage={async (request) => {
+            if (writeDisabled || !persistPending(request)) return false;
+            return sendPending(request);
+          }} />
+          <ReviewedDieDefaults online={online} disabled={writeDisabled} onSave={async (request) => {
+            if (writeDisabled || !persistPending(request)) return false;
+            return sendPending(request);
+          }} />
           <section className="panel" aria-labelledby="setup-stage-heading">
             <div className="panel-heading">
               <div><p className="eyebrow">Deterministic CSV import</p><h2 id="setup-stage-heading" className="mt-1 text-lg font-semibold">Stage records for review</h2></div>
               <span className="status-pill">CSV · 1 MiB · 2,000 rows maximum</span>
             </div>
             <form className="mt-5 space-y-4" onSubmit={(event) => void stage(event)}>
-              <label className="block text-xs font-medium" htmlFor="setup-catalog-family">Setup family
-                <select id="setup-catalog-family" className="field mt-1.5" value={family} disabled={!canManage || busy !== null || pending !== null} onChange={(event) => changeFamily(event.target.value as SetupCatalogFamily)}>
-                  {Object.entries(FAMILY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </label>
               <div className="rounded-lg border border-border/70 bg-background/40 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <p className="text-xs font-medium">Required columns, in order</p>
@@ -319,6 +351,11 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
               </div>
               <p className="mt-3 text-sm text-muted-foreground">{reviewLabel(review.status)} · {FAMILY_LABELS[review.family as SetupCatalogFamily] ?? review.family} · {review.rowCount} row(s)</p>
               {review.sourceSummary ? <p className="mt-2 text-xs text-muted-foreground">Source {review.sourceSummary.sourceFamily} · {review.sourceSummary.sourceRows} source row(s) · {review.sourceSummary.importedRows} imported · {review.sourceSummary.skippedRows} skipped · {review.sourceSummary.unresolvedRows} still unresolved · SHA-256 {review.sourceSummary.sourceSha256.slice(0, 12)}…</p> : null}
+              {review.editorBefore ? <div className="mt-5 rounded-lg border border-border/70 bg-background/40 p-4">
+                <p className="eyebrow">Typed edit · canonical before</p>
+                <h3 className="mt-1 text-sm font-semibold">{review.editorBefore.name}</h3>
+                <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-background/70 p-3 font-mono text-[11px] leading-5 text-muted-foreground" aria-label={`Before values for ${review.editorBefore.code}`}>{JSON.stringify(review.editorBefore.data, null, 2)}</pre>
+              </div> : null}
               <div className="mt-5 space-y-4">
                 {review.records.map((record, index) => (
                   <article key={`${record.code}-${index}`} className="rounded-lg border border-border/70 bg-background/40 p-4" aria-label={`Setup record ${index + 1}`}>

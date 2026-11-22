@@ -107,6 +107,8 @@ function safeRouteName(url) {
   if (url.pathname === "/api/v3/schedules/commands") return "schedules.command";
   if (url.pathname === "/api/v3/schedules/import-preview") return "schedules.import_preview";
   if (url.pathname === "/api/v3/imports") return "imports.collection";
+  if (url.pathname === "/api/v3/setup-catalog/records") return "setup_catalog_records.collection";
+  if (url.pathname === "/api/v3/setup-catalog/edits") return "setup_catalog_edits.collection";
   if (url.pathname === "/api/v3/setup-catalog/imports") return "setup_catalog_imports.collection";
   if (/^\/api\/v3\/setup-catalog\/imports\/[^/]+$/.test(url.pathname)) return "setup_catalog_imports.detail";
   if (/^\/api\/v3\/setup-catalog\/imports\/[^/]+\/(apply|undo)$/.test(url.pathname)) return "setup_catalog_imports.action";

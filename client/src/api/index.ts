@@ -26,6 +26,15 @@ export type SetupCatalogDetail = components["schemas"]["SetupCatalogDetail"];
 export type SetupCatalogStageResponse = components["schemas"]["SetupCatalogStageResponse"];
 export type SetupCatalogActionResult = components["schemas"]["SetupCatalogActionResult"];
 export type SetupCatalogStageRequest = components["schemas"]["SetupCatalogRequest"];
+export type SetupCatalogEditRequest = components["schemas"]["SetupCatalogEditRequest"];
+export type SetupCatalogRecordPage = components["schemas"]["SetupCatalogRecordPage"];
+export type SetupCatalogListedRecord = components["schemas"]["SetupCatalogListedRecord"];
+export type ReviewedDieDefault = components["schemas"]["ReviewedDieDefault"];
+export type ReviewedDieLineSettings = components["schemas"]["ReviewedDieLineSettings"];
+export type DieDefaultHistoryItem = components["schemas"]["DieDefaultHistoryItem"];
+export type DieDefaultSaveRequest = components["schemas"]["DieDefaultSaveRequest"];
+export type DieDefaultSaveResult = components["schemas"]["DieDefaultSaveResult"];
+export type ReviewedDieDefaults = { defaults: ReviewedDieDefault[]; history: DieDefaultHistoryItem[] };
 export type SourceWorkbookFamily = components["schemas"]["SourceWorkbookPreviewRequest"]["family"];
 export type SourceWorkbookPreview = components["schemas"]["SourceWorkbookPreviewResponse"];
 export type SourceImportSummary = components["schemas"]["SourceImportSummary"];
@@ -286,6 +295,44 @@ function isSetupCatalogRecord(value: unknown): value is SetupCatalogRecord {
   return object(value) && typeof value.code === "string" && typeof value.name === "string" && object(value.data);
 }
 
+function isSetupCatalogListedRecord(value: unknown): value is SetupCatalogListedRecord {
+  const candidate = value as (SetupCatalogRecord & { fingerprint?: unknown }) | null;
+  return isSetupCatalogRecord(candidate) && typeof candidate.fingerprint === "string"
+    && /^[0-9a-f]{64}$/u.test(candidate.fingerprint);
+}
+
+const DIE_DEFAULT_FIELDS = [
+  "crustsPerCycle", "cycleSpeed", "speedAdjustment", "freezerTime", "casesPerLayer",
+  "preTunnelMin", "postTunnelMin", "pressOvenMin", "frontlineMin",
+] as const;
+const REQUIRED_DIE_DEFAULT_FIELDS = new Set<string>(DIE_DEFAULT_FIELDS.slice(0, 5));
+
+function isReviewedDieLineSettings(value: unknown): value is ReviewedDieLineSettings {
+  return object(value) && Object.keys(value).length === DIE_DEFAULT_FIELDS.length
+    && DIE_DEFAULT_FIELDS.every((key) => {
+      const item = value[key];
+      return (typeof item === "number" && Number.isFinite(item) && item >= 0)
+        || (item === null && !REQUIRED_DIE_DEFAULT_FIELDS.has(key));
+    });
+}
+
+function isReviewedDieDefault(value: unknown): value is ReviewedDieDefault {
+  return object(value) && typeof value.code === "string" && typeof value.name === "string"
+    && ["active", "disabled", "unreviewed"].includes(String(value.status))
+    && Number.isSafeInteger(value.revision) && Number(value.revision) >= 0
+    && (value.defaults === null || isReviewedDieLineSettings(value.defaults))
+    && (value.suggestedDefaults === null || isReviewedDieLineSettings(value.suggestedDefaults));
+}
+
+function isDieDefaultHistoryItem(value: unknown): value is DieDefaultHistoryItem {
+  return object(value) && typeof value.id === "string" && UUID.test(value.id)
+    && typeof value.dieCode === "string" && typeof value.actorId === "string" && UUID.test(value.actorId)
+    && ["created", "updated", "retired", "re-enabled"].includes(String(value.action))
+    && Number.isSafeInteger(value.revision) && Number(value.revision) >= 1
+    && (value.before === null || object(value.before)) && object(value.after)
+    && typeof value.occurredAt === "string";
+}
+
 export function isSourceImportSummary(value: unknown): value is SourceImportSummary {
   return object(value)
     && SOURCE_WORKBOOK_FAMILIES.includes(value.sourceFamily as SourceWorkbookFamily)
@@ -324,8 +371,12 @@ function isSetupCatalogHistoryItem(value: unknown): value is SetupCatalogHistory
 
 function isSetupCatalogDetail(value: unknown): value is SetupCatalogDetail {
   if (!isSetupCatalogHistoryItem(value)) return false;
-  const records = (value as unknown as { records?: unknown }).records;
-  return Array.isArray(records) && records.length === value.rowCount && records.every(isSetupCatalogRecord);
+  const candidate = value as SetupCatalogHistoryItem & Partial<SetupCatalogDetail>;
+  return Array.isArray(candidate.records) && candidate.records.length === value.rowCount
+    && candidate.records.every(isSetupCatalogRecord)
+    && (candidate.editorBefore === null || isSetupCatalogRecord(candidate.editorBefore))
+    && (candidate.before === null || (Array.isArray(candidate.before) && candidate.before.every(object)))
+    && (candidate.after === null || (Array.isArray(candidate.after) && candidate.after.every(object)));
 }
 
 export async function previewSourceWorkbook(input: {
@@ -354,6 +405,37 @@ export async function listSetupCatalogImports(): Promise<SetupCatalogHistoryItem
     throw new ApiError("The server returned incomplete setup import history. Refresh and retry.", 502);
   }
   return result.imports;
+}
+
+export async function listSetupCatalogRecords(
+  family: SetupCatalogFamily,
+  after: string | null = null,
+): Promise<SetupCatalogRecordPage> {
+  const result = await unwrap(await client.GET("/api/v3/setup-catalog/records", {
+    params: { query: { family, limit: 100, ...(after ? { after } : {}) } },
+  }));
+  if (result.family !== family || !Array.isArray(result.records) || result.records.length > 100
+    || !result.records.every(isSetupCatalogListedRecord)
+    || (result.nextCursor !== null
+      && (typeof result.nextCursor !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(result.nextCursor)))) {
+    throw new ApiError("The server returned an incomplete setup catalog page. Refresh and retry.", 502);
+  }
+  return result;
+}
+
+export async function stageSetupCatalogEdit(
+  request: SetupCatalogEditRequest,
+): Promise<SetupCatalogStageResponse> {
+  const result = await unwrap(await client.POST("/api/v3/setup-catalog/edits", {
+    params: { header: mutationHeaders() },
+    body: request,
+  }));
+  if (result.outcome !== "staged" || !UUID.test(result.importId) || result.family !== request.family
+    || result.rowCount !== 1 || typeof result.replayed !== "boolean"
+    || !Array.isArray(result.records) || result.records.length !== 1 || !isSetupCatalogRecord(result.records[0])) {
+    throw new ApiError("The server did not return a complete typed setup review. Retry the same request.", 502);
+  }
+  return result;
 }
 
 export async function getSetupCatalogImport(importId: string): Promise<SetupCatalogDetail> {
@@ -406,6 +488,33 @@ export async function actOnSetupCatalogImport(
   return result;
 }
 
+export async function listReviewedDieDefaults(): Promise<ReviewedDieDefaults> {
+  const result = await unwrap(await client.GET("/api/v3/inventory/die-defaults", {
+    params: { query: { limit: 50 } },
+  }));
+  if (!Array.isArray(result.defaults) || !result.defaults.every(isReviewedDieDefault)
+    || !Array.isArray(result.history) || !result.history.every(isDieDefaultHistoryItem)) {
+    throw new ApiError("The reviewed die defaults were incomplete. Refresh and retry.", 502);
+  }
+  return result;
+}
+
+export async function saveReviewedDieDefault(
+  request: DieDefaultSaveRequest,
+): Promise<DieDefaultSaveResult> {
+  const result = await unwrap(await client.POST("/api/v3/inventory/die-defaults", {
+    params: { header: mutationHeaders() },
+    body: request,
+  }));
+  if (!["created", "updated", "retired", "re-enabled"].includes(result.outcome)
+    || result.dieCode.toLocaleLowerCase("en-US") !== request.dieCode.toLocaleLowerCase("en-US")
+    || result.revision !== request.expectedRevision + 1
+    || result.status !== (request.enabled ? "active" : "disabled")
+    || !isReviewedDieLineSettings(result.defaults) || typeof result.replayed !== "boolean") {
+    throw new ApiError("The server did not confirm the reviewed die default. Reload before retrying.", 502);
+  }
+  return result;
+}
 
 const INVENTORY_CODE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u;
 const INVENTORY_QUANTITY = /^-?(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?$/u;

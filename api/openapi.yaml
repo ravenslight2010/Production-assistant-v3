@@ -770,6 +770,85 @@ paths:
           $ref: "#/components/responses/Error"
         "415":
           $ref: "#/components/responses/Error"
+  /api/v3/setup-catalog/records:
+    get:
+      operationId: listSetupCatalogRecords
+      summary: Read one bounded page of canonical setup catalog records
+      description: Manager-only. Fingerprints identify the exact server record used as a typed editor's optimistic-concurrency base.
+      parameters:
+        - name: family
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [ingredients, mixes, die-types, die-line-defaults, production-rules, freezer-pull-items, run-templates, manager-lists, aliases]
+        - $ref: "#/components/parameters/Limit"
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+      responses:
+        "200":
+          description: Canonical records and an optional forward cursor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupCatalogRecordPage"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v3/setup-catalog/edits:
+    post:
+      operationId: stageSetupCatalogEdit
+      summary: Stage one typed setup record against its canonical base fingerprint
+      description: >
+        Manager-only. The record uses the same strict family parser as CSV imports.
+        A null fingerprint stages a creation only while the code remains absent.
+        The fingerprint is checked at staging and again under record locks at Apply.
+        Retry an uncertain response with the identical requestId and body.
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetupCatalogEditRequest"
+      responses:
+        "201":
+          description: Typed edit staged for review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupCatalogStageResponse"
+        "200":
+          description: Previously staged typed edit confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupCatalogStageResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
   /api/v3/setup-catalog/imports:
     get:
       operationId: listSetupCatalogImports
@@ -1182,25 +1261,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: false
-              required: [requestId, dieCode, expectedRevision, defaults, enabled]
-              properties:
-                requestId:
-                  type: string
-                  minLength: 1
-                  maxLength: 200
-                dieCode:
-                  type: string
-                  pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
-                expectedRevision:
-                  type: integer
-                  minimum: 0
-                  maximum: 9007199254740991
-                defaults:
-                  $ref: "#/components/schemas/ReviewedDieLineSettings"
-                enabled:
-                  type: boolean
+              $ref: "#/components/schemas/DieDefaultSaveRequest"
       responses:
         "200":
           description: Die defaults revised, re-enabled, retired, or previously saved change confirmed by retry
@@ -2210,6 +2271,26 @@ components:
             - type: "null"
     RunDieType:
       $ref: "#/components/schemas/ReviewedDieDefault"
+    DieDefaultSaveRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, dieCode, expectedRevision, defaults, enabled]
+      properties:
+        requestId:
+          type: string
+          minLength: 1
+          maxLength: 200
+        dieCode:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+        expectedRevision:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        defaults:
+          $ref: "#/components/schemas/ReviewedDieLineSettings"
+        enabled:
+          type: boolean
     DieDefaultSaveResult:
       type: object
       required: [outcome, dieCode, revision, status, defaults, replayed]
@@ -2645,6 +2726,48 @@ components:
         csv:
           type: string
           maxLength: 1048576
+    SetupCatalogEditRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, family, record, expectedFingerprint]
+      properties:
+        requestId:
+          type: string
+          minLength: 1
+          maxLength: 200
+        family:
+          type: string
+          enum: [ingredients, mixes, die-types, die-line-defaults, production-rules, freezer-pull-items, run-templates, manager-lists, aliases]
+        record:
+          $ref: "#/components/schemas/SetupCatalogRecord"
+        expectedFingerprint:
+          type: [string, "null"]
+          pattern: "^[0-9a-f]{64}$"
+    SetupCatalogListedRecord:
+      allOf:
+        - $ref: "#/components/schemas/SetupCatalogRecord"
+        - type: object
+          required: [fingerprint]
+          properties:
+            fingerprint:
+              type: string
+              pattern: "^[0-9a-f]{64}$"
+    SetupCatalogRecordPage:
+      type: object
+      additionalProperties: false
+      required: [family, records, nextCursor]
+      properties:
+        family:
+          type: string
+          enum: [ingredients, mixes, die-types, die-line-defaults, production-rules, freezer-pull-items, run-templates, manager-lists, aliases]
+        records:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/SetupCatalogListedRecord"
+        nextCursor:
+          type: [string, "null"]
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
     SetupCatalogRequest:
       type: object
       additionalProperties: false
@@ -2885,13 +3008,30 @@ components:
       allOf:
         - $ref: "#/components/schemas/SetupCatalogHistoryItem"
         - type: object
-          required: [records]
+          required: [records, editorBefore, before, after]
           properties:
             records:
               type: array
               maxItems: 2000
               items:
                 $ref: "#/components/schemas/SetupCatalogRecord"
+            editorBefore:
+              oneOf:
+                - $ref: "#/components/schemas/SetupCatalogRecord"
+                - type: "null"
+              description: Exact canonical base for a typed edit; null for creation and bulk imports.
+            before:
+              type: [array, "null"]
+              items:
+                type: object
+                additionalProperties: true
+              description: Canonical pre-Apply snapshots; null while staged.
+            after:
+              type: [array, "null"]
+              items:
+                type: object
+                additionalProperties: true
+              description: Canonical post-Apply snapshots; null while staged.
     SetupCatalogActionResult:
       type: object
       required: [outcome, importId, family, replayed]

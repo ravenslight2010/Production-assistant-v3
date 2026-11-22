@@ -67,6 +67,9 @@ function detail(importItem) {
     sourceSummary: importItem.sourceSummary ?? null,
     createdCount: importItem.createdCount ?? null,
     updatedCount: importItem.updatedCount ?? null,
+    editorBefore: importItem.editorBefore ?? null,
+    before: importItem.before ?? null,
+    after: importItem.after ?? null,
   };
 }
 
@@ -96,9 +99,22 @@ async function installSetupApi(context, baseUrl, { manager = true } = {}) {
     if (path === "/api/v3/setup-catalog/imports" && method === "GET") {
       assert.equal(url.searchParams.get("limit"), "50");
       return json(route, { imports: [...imports.values()].map((item) => {
-        const { records: _records, ...historyItem } = detail(item);
+        const { records: _records, editorBefore: _editorBefore, before: _before, after: _after, ...historyItem } = detail(item);
         return historyItem;
       }) });
+    }
+    if (path === "/api/v3/setup-catalog/records" && method === "GET") {
+      const family = url.searchParams.get("family");
+      return json(route, {
+        family,
+        records: family === "ingredients" ? [...appliedRecords.values()].map((record) => ({
+          ...record, fingerprint: "d".repeat(64),
+        })) : [],
+        nextCursor: null,
+      });
+    }
+    if (path === "/api/v3/inventory/die-defaults" && method === "GET") {
+      return json(route, { defaults: [], history: [] });
     }
     if (path === "/api/v3/setup-catalog/imports/workbooks/preview" && method === "POST") {
       const body = request.postDataJSON();
@@ -173,6 +189,8 @@ async function installSetupApi(context, baseUrl, { manager = true } = {}) {
           item.appliedAt = "2026-11-21T12:01:00.000Z";
           item.createdCount = 1;
           item.updatedCount = 0;
+          item.before = item.records.map((record) => ({ code: record.code, data: null }));
+          item.after = item.records.map((record) => ({ code: record.code, data: record }));
           for (const record of item.records) appliedRecords.set(record.code, record);
         }
         return json(route, { outcome: "applied", importId: item.id, family: item.family, rowCount: 1, createdCount: 1, updatedCount: 0, appliedAt: item.appliedAt, replayed });

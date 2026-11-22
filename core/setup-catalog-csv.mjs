@@ -6,6 +6,7 @@ import {
   parseImportObjectJson,
   validateCsvHeaders,
 } from "./import-csv.mjs";
+import { renderImportCsvTemplate } from "./import-csv-templates.mjs";
 
 const value = (fileName, headers, rows = []) => Object.freeze({
   fileName,
@@ -349,6 +350,71 @@ export function parseSetupCatalogCsv(family, csv) {
   if (records.length > 2000) fail("CSV files may contain at most 2,000 data rows.");
   return records;
 }
+
+function recordCells(family, record) {
+  const { code, name, data } = record;
+  switch (family) {
+    case "ingredients":
+      return [code, name, JSON.stringify(data.categories), JSON.stringify(data.allergens),
+        String(data.allergensReviewed), data.mergedIntoCode ?? "", String(data.enabled)];
+    case "mixes":
+      return [code, name, data.brand, data.flavor, data.batchSizeLbs ?? "", data.daysEarly ?? "",
+        data.notes, String(data.isPrep), String(data.enabled), JSON.stringify(data.components)];
+    case "die-types":
+      return [code, name];
+    case "die-line-defaults":
+      return [code, data.crusts_per_cycle, data.cycle_speed, data.speed_adjustment,
+        data.freezer_time, data.cases_per_layer, data.pre_tunnel_min ?? "", data.post_tunnel_min ?? "",
+        data.press_oven_min ?? "", data.frontline_min ?? ""];
+    case "production-rules":
+      return [code, name, data.type, data.enforcement, String(data.enabled), data.field ?? "",
+        data.min ?? "", data.max ?? "", data.attribute ?? "", data.before ?? "", data.after ?? "",
+        JSON.stringify(data.bypass), JSON.stringify(data.checklist)];
+    case "freezer-pull-items":
+      return [code, data.ingredientName, data.ingredientCode ?? "", data.daysEarly, String(data.enabled)];
+    case "run-templates":
+      return [code, name, data.brand ?? "", data.flavor ?? "", JSON.stringify(data.values)];
+    case "manager-lists":
+      return [code, JSON.stringify({ value: data.value })];
+    case "aliases":
+      return [code, data.aliasType, data.kind, data.externalName, data.canonicalName,
+        data.context ?? "", data.brand ?? ""];
+    default:
+      fail("Choose a supported setup family.");
+  }
+}
+
+function canonicalValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalValue(value[key])]));
+  }
+  return value;
+}
+
+/** Validate one typed editor record through the exact same family parser used by CSV imports. */
+export function parseSetupCatalogRecord(family, value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).sort().join("\u0000") !== "code\u0000data\u0000name") {
+    fail("A setup record must contain exactly code, name, and family-specific data.", 2);
+  }
+  const definition = FAMILY_DEFINITIONS[family];
+  if (!definition) fail("Choose a supported setup family.", 2);
+  const cells = recordCells(family, value);
+  const csv = renderImportCsvTemplate({ fileName: definition.fileName, headers: definition.headers, rows: [cells] });
+  const [record] = parseSetupCatalogCsv(family, csv);
+  if (JSON.stringify(canonicalValue(record)) !== JSON.stringify(canonicalValue(value))) {
+    fail("The setup record contains unsupported or non-canonical values.", 2);
+  }
+  return record;
+}
+
+export const setupCatalogRunTemplateFields = Object.freeze([...TEMPLATE_FIELDS].map((key) => Object.freeze({
+  key,
+  kind: key.endsWith("Recipe") && !key.endsWith("RecipeName")
+    ? "recipe"
+    : TEMPLATE_NUMBERS.has(key) ? "number" : key === "cartoned" ? "boolean" : "text",
+})));
 
 export const setupCatalogCsvLimits = Object.freeze({
   families: JSON_FAMILIES,

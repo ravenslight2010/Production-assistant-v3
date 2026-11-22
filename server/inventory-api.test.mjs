@@ -439,6 +439,55 @@ test("approved setup catalogs are manager-only, strict, and staged with a server
   assert.equal(api.calls[0].values[4], "ingredients");
 });
 
+test("typed catalog reads and edits are bounded, strict, and server hashed", async (t) => {
+  const record = { code: "DIE-1", name: "12 inch", data: {} };
+  const fingerprint = "a".repeat(64);
+  const staged = {
+    outcome: "staged", importId: "10000000-0000-4000-8000-000000000005",
+    family: "die-types", rowCount: 1, replayed: false,
+  };
+  const api = await withApi(t, {
+    query: async (sql) => ({ rows: [{ result: sql.includes("list_setup_catalog_records")
+      ? { family: "die-types", records: [{ ...record, fingerprint }], nextCursor: null }
+      : staged }] }),
+  });
+  const page = await send(api.baseUrl, "/api/v3/setup-catalog/records?family=die-types&limit=100");
+  assert.equal(page.status, 200);
+  assert.deepEqual(await page.json(), { family: "die-types", records: [{ ...record, fingerprint }], nextCursor: null });
+  assert.deepEqual(api.calls[0].values.slice(1), ["die-types", 100, null]);
+
+  const invalidPage = await send(api.baseUrl, "/api/v3/setup-catalog/records?family=die-types&after=bad%20cursor");
+  assert.equal(invalidPage.status, 400);
+  const invalidEdit = await send(api.baseUrl, "/api/v3/setup-catalog/edits", {
+    method: "POST",
+    body: { requestId: "typed-invalid", family: "die-types", record: { ...record, extra: true }, expectedFingerprint: fingerprint },
+  });
+  assert.equal(invalidEdit.status, 400);
+  assert.equal(api.calls.length, 1);
+
+  const response = await send(api.baseUrl, "/api/v3/setup-catalog/edits", {
+    method: "POST",
+    body: { requestId: "typed-1", family: "die-types", record, expectedFingerprint: fingerprint },
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), { ...staged, records: [record] });
+  const call = api.calls[1];
+  assert.match(call.text, /stage_setup_catalog_edit/u);
+  assert.deepEqual(call.values.slice(4), ["die-types", JSON.stringify(record), fingerprint]);
+  assert.equal(call.values[3], createHash("sha256").update(JSON.stringify({
+    family: "die-types", record, expectedFingerprint: fingerprint,
+  })).digest("hex"));
+
+  const operator = await withApi(t, { auth: { ...MANAGER, capabilities: [] } });
+  assert.equal((await send(operator.baseUrl, "/api/v3/setup-catalog/records?family=die-types")).status, 403);
+  const noCsrf = await withApi(t, { csrf: false });
+  assert.equal((await send(noCsrf.baseUrl, "/api/v3/setup-catalog/edits", {
+    method: "POST", csrf: false,
+    body: { requestId: "typed-no-csrf", family: "die-types", record, expectedFingerprint: fingerprint },
+  })).status, 403);
+  assert.equal(operator.calls.length + noCsrf.calls.length, 0);
+});
+
 test("setup catalog history and writes stay manager-only and CSRF protected", async (t) => {
   const operator = await withApi(t, { auth: { ...MANAGER, capabilities: [] } });
   const read = await send(operator.baseUrl, "/api/v3/setup-catalog/imports");

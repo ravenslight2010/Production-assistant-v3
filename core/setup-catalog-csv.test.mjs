@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderImportCsvTemplate } from "./import-csv-templates.mjs";
-import { parseSetupCatalogCsv, setupCatalogCsvTemplates } from "./setup-catalog-csv.mjs";
+import { parseSetupCatalogCsv, parseSetupCatalogRecord, setupCatalogCsvTemplates } from "./setup-catalog-csv.mjs";
 
 test("every approved setup family template parses as a strict synthetic fixture", () => {
   for (const [family, template] of Object.entries(setupCatalogCsvTemplates)) {
@@ -74,4 +74,19 @@ test("case-insensitive duplicate identity and unsupported fields are rejected", 
     () => parseSetupCatalogCsv("die-types", "name,code\nDie,DIE\n"),
     /exactly these CSV columns/u,
   );
+});
+
+test("typed editor records round-trip through every strict family parser", () => {
+  for (const [family, template] of Object.entries(setupCatalogCsvTemplates)) {
+    const [record] = parseSetupCatalogCsv(family, renderImportCsvTemplate(template));
+    assert.deepEqual(parseSetupCatalogRecord(family, record), record, family);
+  }
+  assert.throws(() => parseSetupCatalogRecord("die-types", {
+    code: "DIE-1", name: "Die", data: { unexpected: true },
+  }), /non-canonical/u);
+  assert.throws(() => parseSetupCatalogRecord("ingredients", {
+    code: "ING-1", name: "Flour", data: {
+      categories: [], allergens: [], allergensReviewed: true, mergedIntoCode: null, enabled: true,
+    }, extra: true,
+  }), /exactly code, name/u);
 });

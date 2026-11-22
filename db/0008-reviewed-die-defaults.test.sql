@@ -70,7 +70,8 @@ BEGIN
     'DIE-REVIEW-TEST', 0, v_values, true
   );
   IF v_result->>'replayed' <> 'true'
-     OR (SELECT count(*) FROM v3.die_default_events WHERE facility_id = v_facility) <> 1 THEN
+     OR (SELECT count(*) FROM v3.die_default_events
+         WHERE facility_id = v_facility AND die_code = 'DIE-REVIEW-TEST') <> 1 THEN
     RAISE EXCEPTION 'Die-default write retry duplicated history or was not confirmed';
   END IF;
   IF (SELECT count(*) FROM v3.die_default_events
@@ -146,7 +147,8 @@ BEGIN
     'DIE-REVIEW-TEST', 2, v_changed, false
   );
   IF v_result->>'status' <> 'disabled' OR v_result->>'outcome' <> 'retired'
-     OR (SELECT count(*) FROM v3.die_default_events WHERE facility_id = v_facility) <> 3 THEN
+     OR (SELECT count(*) FROM v3.die_default_events
+         WHERE facility_id = v_facility AND die_code = 'DIE-REVIEW-TEST') <> 3 THEN
     RAISE EXCEPTION 'Retirement did not disable defaults and append attributed history';
   END IF;
   v_result := v3.create_planned_run(
@@ -194,7 +196,12 @@ BEGIN
   END;
   IF NOT v_rejected THEN RAISE EXCEPTION 'A bought-crust run accepted an inapplicable die'; END IF;
 
-  IF jsonb_array_length(v3.list_die_default_events(v_facility, 50)) <> 3 THEN
+  IF NOT EXISTS (
+    SELECT 1 FROM jsonb_array_elements(v3.list_die_default_events(v_facility, 50)) AS event(value)
+    WHERE event.value->>'dieCode' = 'DIE-REVIEW-TEST'
+    GROUP BY event.value->>'dieCode'
+    HAVING count(*) = 3
+  ) THEN
     RAISE EXCEPTION 'Die-default history is incomplete';
   END IF;
   RAISE NOTICE 'Reviewed V3 die defaults and immutable run snapshots passed';

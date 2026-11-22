@@ -716,7 +716,12 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0011-cycle-counts-freezer-pull.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0012-freezer-surplus.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0013-warehouse-operations.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0014-setup-catalog-editors.sql" >/dev/null
 "${PSQL[@]}" -c "
+  GRANT EXECUTE ON FUNCTION v3.list_setup_catalog_records(uuid, text, integer, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.stage_setup_catalog_edit(uuid, uuid, text, text, text, jsonb, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.apply_setup_catalog_import(uuid, uuid, uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.get_setup_catalog_import(uuid, uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.warehouse_guidance(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.mark_cycle_counted(uuid, uuid, text, text, text) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.save_cycle_count_schedule(uuid, uuid, text, text, text, integer, boolean, bigint) TO v3_api_test;
@@ -776,6 +781,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0011-cycle-counts-freezer-pull.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0012-freezer-surplus.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0013-warehouse-operations.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0014-setup-catalog-editors.test.sql"
 ENCODED_DB_USER="$(python3 - "$DB_USER" <<'PY'
 import sys
 import urllib.parse

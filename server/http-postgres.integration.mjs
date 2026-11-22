@@ -355,6 +355,100 @@ async function main() {
       `/api/v3/setup-catalog/imports/${stagedIngredient.importId}/apply`, {},
     ))).replayed, true);
 
+    const createSetupManager = await fetch(`${baseUrl}/api/v3/auth/staff`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: manager.cookieHeader,
+        "X-CSRF-Token": manager.csrfToken,
+        Origin: baseUrl,
+        "Sec-Fetch-Site": "same-origin",
+      },
+      body: JSON.stringify({
+        username: "V3IntegrationSetupManager",
+        password: "v3-test-setup-manager-password",
+        roleName: "manager",
+      }),
+    });
+    assert.equal(createSetupManager.status, 201, await createSetupManager.clone().text());
+    const setupManager = await signIn(baseUrl, "V3IntegrationSetupManager", "v3-test-setup-manager-password");
+    const setupManagerPost = async (path, body) => {
+      const response = await sessionPost(setupManager, path, body);
+      assert.notEqual(response.status, 429, "the separate setup-manager fixture must remain inside the real upload-rate budget");
+      return response;
+    };
+
+    const operatorRecords = await fetch(`${baseUrl}/api/v3/setup-catalog/records?family=die-types`, {
+      headers: { Cookie: operator.cookieHeader, Accept: "application/json" },
+    });
+    assert.equal(operatorRecords.status, 403, "operators must not read typed setup records");
+    const typedCreateRequest = {
+      requestId: "73000000-0000-4000-8000-000000000217",
+      family: "die-types",
+      record: { code: "TYPED-DIE", name: "Typed integration die", data: {} },
+      expectedFingerprint: null,
+    };
+    const typedCreateResponse = await setupManagerPost("/api/v3/setup-catalog/edits", typedCreateRequest);
+    assert.equal(typedCreateResponse.status, 201, await typedCreateResponse.clone().text());
+    const typedCreate = await jsonResponse(typedCreateResponse);
+    assert.equal(typedCreate.rowCount, 1);
+    assert.equal((await jsonResponse(await setupManagerPost("/api/v3/setup-catalog/edits", typedCreateRequest))).replayed, true);
+    const typedCreateDetail = await (await fetch(`${baseUrl}/api/v3/setup-catalog/imports/${typedCreate.importId}`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    })).json();
+    assert.equal(typedCreateDetail.editorBefore, null);
+    assert.equal(typedCreateDetail.before, null);
+    assert.equal(typedCreateDetail.after, null);
+    assert.equal((await managerPost(`/api/v3/setup-catalog/imports/${typedCreate.importId}/apply`, {})).status, 200);
+    const typedPageResponse = await fetch(`${baseUrl}/api/v3/setup-catalog/records?family=die-types&limit=100`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    });
+    assert.equal(typedPageResponse.status, 200);
+    const typedPage = await jsonResponse(typedPageResponse);
+    const typedRecord = typedPage.records.find((record) => record.code === "TYPED-DIE");
+    assert.match(typedRecord.fingerprint, /^[0-9a-f]{64}$/);
+    const typedUpdate = async (requestId, name) => {
+      const response = await setupManagerPost("/api/v3/setup-catalog/edits", {
+        requestId, family: "die-types", expectedFingerprint: typedRecord.fingerprint,
+        record: { code: "TYPED-DIE", name, data: {} },
+      });
+      assert.equal(response.status, 201, await response.clone().text());
+      return jsonResponse(response);
+    };
+    const typedCurrent = await typedUpdate("73000000-0000-4000-8000-000000000218", "Typed integration die revised");
+    const typedStale = await typedUpdate("73000000-0000-4000-8000-000000000219", "Stale typed overwrite");
+    const typedDetailResponse = await fetch(`${baseUrl}/api/v3/setup-catalog/imports/${typedCurrent.importId}`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    });
+    const typedDetail = await jsonResponse(typedDetailResponse);
+    assert.equal(typedDetail.editorBefore.name, "Typed integration die");
+    assert.equal((await managerPost(`/api/v3/setup-catalog/imports/${typedCurrent.importId}/apply`, {})).status, 200);
+    const staleApply = await managerPost(`/api/v3/setup-catalog/imports/${typedStale.importId}/apply`, {});
+    assert.equal(staleApply.status, 409, "a stale typed Apply must not overwrite the newer revision");
+
+    const reviewedDefaultsResponse = await fetch(`${baseUrl}/api/v3/inventory/die-defaults?limit=50`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    });
+    assert.equal(reviewedDefaultsResponse.status, 200);
+    const reviewedDefaults = await jsonResponse(reviewedDefaultsResponse);
+    assert.equal(reviewedDefaults.defaults.find((item) => item.code === "TYPED-DIE").status, "unreviewed");
+    const dieSaveRequest = {
+      requestId: "73000000-0000-4000-8000-000000000220",
+      dieCode: "TYPED-DIE", expectedRevision: 0, enabled: true,
+      defaults: {
+        crustsPerCycle: 2, cycleSpeed: 10, speedAdjustment: 1, freezerTime: 20, casesPerLayer: 4,
+        preTunnelMin: null, postTunnelMin: null, pressOvenMin: null, frontlineMin: null,
+      },
+    };
+    const dieSavedResponse = await managerPost("/api/v3/inventory/die-defaults", dieSaveRequest);
+    assert.equal(dieSavedResponse.status, 201, await dieSavedResponse.clone().text());
+    assert.equal((await jsonResponse(dieSavedResponse)).revision, 1);
+    assert.equal((await jsonResponse(await managerPost("/api/v3/inventory/die-defaults", dieSaveRequest))).replayed, true);
+    const staleDieSave = await managerPost("/api/v3/inventory/die-defaults", {
+      ...dieSaveRequest, requestId: "73000000-0000-4000-8000-000000000221",
+    });
+    assert.equal(staleDieSave.status, 409, "reviewed die defaults must reject stale revisions");
+
     const mixComponents = JSON.stringify([{
       ingredientName: "Catalog Fixture Flour",
       ingredientCode: "CAT-ING",

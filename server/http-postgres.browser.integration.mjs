@@ -605,6 +605,143 @@ async function main() {
     await setupReview.getByText(sourceCode, { exact: true }).waitFor();
     await setupReview.getByText(/Source spec-sheets · 1 source row\(s\) · 1 imported · 0 skipped · 0 still unresolved/).waitFor();
 
+    const typedCode = `TYPED-${suffix}`;
+    const typedOriginalName = `Typed browser die ${suffix}`;
+    const typedRevisedName = `${typedOriginalName} revised`;
+    const typedStaleName = `${typedOriginalName} stale overwrite`;
+    const typedCatalog = page.locator('section[aria-labelledby="typed-catalog-heading"]');
+    const reviewedDefaultsPanel = page.locator('section[aria-labelledby="reviewed-die-defaults-heading"]');
+    const typedRecordsRead = async () => {
+      const response = await page.request.get(`${baseUrl}/api/v3/setup-catalog/records?family=die-types&limit=100`);
+      assert.equal(response.status(), 200);
+      return (await response.json()).records;
+    };
+    const reopenSetupImport = async (importId) => {
+      const imports = await setupHistoryRead();
+      const index = imports.findIndex((item) => item.id === importId);
+      assert.ok(index >= 0, "the typed edit must be discoverable in canonical setup history");
+      await page.getByRole("article", { name: `Setup import history ${index + 1}`, exact: true })
+        .getByRole("button").click();
+      await page.getByText("Canonical import details reloaded. Review the preserved values before acting.").waitFor();
+    };
+
+    await page.locator("#setup-catalog-family").selectOption("die-types");
+    await typedCatalog.getByRole("button", { name: "Create record", exact: true }).click();
+    await typedCatalog.getByLabel("Code", { exact: true }).fill(typedCode);
+    await typedCatalog.getByLabel("Name", { exact: true }).fill(typedOriginalName);
+    const typedCreateResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/setup-catalog/edits" && response.request().method() === "POST");
+    await typedCatalog.getByRole("button", { name: "Stage typed edit", exact: true }).click();
+    const typedCreateResponse = await typedCreateResponsePromise;
+    assert.equal(typedCreateResponse.status(), 201, await typedCreateResponse.text());
+    const typedCreateId = (await typedCreateResponse.json()).importId;
+    await page.getByText(/Typed edit staged\. Review the stored records; no setup values have been applied\./).waitFor();
+    await setupReview.getByText(typedOriginalName, { exact: true }).waitFor();
+    await setupReview.getByLabel(`Values for ${typedCode}`, { exact: true }).waitFor();
+    assert.equal(await setupReview.getByLabel(`Before values for ${typedCode}`, { exact: true }).count(), 0,
+      "a typed creation has no canonical before record");
+    assert.equal((await typedRecordsRead()).some((record) => record.code === typedCode), false,
+      "typed staging must not mutate the canonical catalog");
+    const applyTypedCreatePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/setup-catalog/imports/${typedCreateId}/apply`
+      && response.request().method() === "POST");
+    await setupReview.getByRole("button", { name: "Apply reviewed import", exact: true }).click();
+    assert.equal((await applyTypedCreatePromise).status(), 200);
+    await page.getByText(/1 setup rows created and 0 updated\. Canonical history reloaded\./).waitFor();
+    await typedCatalog.getByRole("heading", { name: typedOriginalName, exact: true }).waitFor();
+    const typedCreatedRecord = (await typedRecordsRead()).find((record) => record.code === typedCode);
+    assert.match(typedCreatedRecord?.fingerprint ?? "", /^[0-9a-f]{64}$/);
+
+    const stageTypedUpdate = async (name) => {
+      const card = typedCatalog.getByRole("article").filter({ hasText: typedCode });
+      await card.getByRole("button", { name: "Edit", exact: true }).click();
+      await typedCatalog.getByLabel("Name", { exact: true }).fill(name);
+      const responsePromise = page.waitForResponse((response) =>
+        new URL(response.url()).pathname === "/api/v3/setup-catalog/edits" && response.request().method() === "POST");
+      await typedCatalog.getByRole("button", { name: "Stage typed edit", exact: true }).click();
+      const response = await responsePromise;
+      assert.equal(response.status(), 201, await response.text());
+      return (await response.json()).importId;
+    };
+    const typedCurrentId = await stageTypedUpdate(typedRevisedName);
+    await setupReview.getByText(typedRevisedName, { exact: true }).waitFor();
+    await setupReview.getByText("Typed edit · canonical before", { exact: true }).waitFor();
+    await setupReview.getByRole("heading", { name: typedOriginalName, exact: true }).waitFor();
+    await setupReview.getByLabel(`Before values for ${typedCode}`, { exact: true }).waitFor();
+    await setupReview.getByLabel(`Values for ${typedCode}`, { exact: true }).waitFor();
+    await page.screenshot({ path: "/tmp/v3-setup-typed-review.png", fullPage: true });
+    const typedStaleId = await stageTypedUpdate(typedStaleName);
+    assert.notEqual(typedCurrentId, typedStaleId, "each typed edit needs its own staged review");
+    await setupReview.getByText(typedStaleName, { exact: true }).waitFor();
+
+    await reopenSetupImport(typedCurrentId);
+    await setupReview.getByText(typedRevisedName, { exact: true }).waitFor();
+    const applyTypedCurrentPromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/setup-catalog/imports/${typedCurrentId}/apply`
+      && response.request().method() === "POST");
+    await setupReview.getByRole("button", { name: "Apply reviewed import", exact: true }).click();
+    assert.equal((await applyTypedCurrentPromise).status(), 200);
+    await page.getByText(/0 setup rows created and 1 updated\. Canonical history reloaded\./).waitFor();
+    assert.equal((await typedRecordsRead()).find((record) => record.code === typedCode)?.name, typedRevisedName);
+
+    await reopenSetupImport(typedStaleId);
+    await setupReview.getByText(typedStaleName, { exact: true }).waitFor();
+    const applyTypedStalePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/setup-catalog/imports/${typedStaleId}/apply`
+      && response.request().method() === "POST");
+    await setupReview.getByRole("button", { name: "Apply reviewed import", exact: true }).click();
+    assert.equal((await applyTypedStalePromise).status(), 409);
+    await page.getByText(/Canonical details were reloaded; review them before retrying\./).waitFor();
+    await setupReview.getByText("staged", { exact: true }).waitFor();
+    await typedCatalog.getByRole("button", { name: "Refresh records", exact: true }).click();
+    await typedCatalog.getByRole("heading", { name: typedRevisedName, exact: true }).waitFor();
+    assert.equal(await typedCatalog.getByText(typedStaleName, { exact: true }).count(), 0,
+      "a stale typed Apply must not overwrite the newer catalog value");
+
+    await reviewedDefaultsPanel.getByRole("button", { name: "Refresh", exact: true }).click();
+    const typedDieCard = reviewedDefaultsPanel.getByRole("article").filter({ hasText: `${typedCode} · revision` });
+    await typedDieCard.getByText("unreviewed", { exact: true }).waitFor();
+    await typedDieCard.getByRole("button", { name: "Review suggestion", exact: true }).click();
+    const reviewedValues = {
+      "Crusts per cycle": "2",
+      "Cycle speed": "10",
+      "Speed adjustment": "1",
+      "Freezer time": "20",
+      "Cases per layer": "4",
+      "Pre-tunnel minutes": "1.5",
+      "Post-tunnel minutes": "2.5",
+      "Press oven minutes": "3.5",
+      "Frontline minutes": "4.5",
+    };
+    for (const [label, value] of Object.entries(reviewedValues)) {
+      await typedDieCard.getByLabel(label, { exact: true }).fill(value);
+    }
+    const saveReviewedDefaultsPromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/inventory/die-defaults" && response.request().method() === "POST");
+    await typedDieCard.getByRole("button", { name: "Save reviewed defaults", exact: true }).click();
+    const saveReviewedDefaultsResponse = await saveReviewedDefaultsPromise;
+    assert.equal(saveReviewedDefaultsResponse.status(), 201, await saveReviewedDefaultsResponse.text());
+    await page.getByText(new RegExp(`Reviewed defaults for ${typedCode} are now active at revision 1\\.`)).waitFor();
+    await typedDieCard.getByText(`${typedCode} · revision 1`, { exact: true }).waitFor();
+    await typedDieCard.getByText("active", { exact: true }).waitFor();
+    await reviewedDefaultsPanel.getByText(`${typedCode} · created · revision 1`, { exact: true }).waitFor();
+    await page.screenshot({ path: "/tmp/v3-setup-reviewed-defaults.png", fullPage: true });
+
+    const writesBeforeTypedOffline = browserWrites.length;
+    offlineCheckActive = true;
+    await context.setOffline(true);
+    await page.getByText("Loaded values only · no file retained or writes queued", { exact: true }).waitFor();
+    assert.equal(await typedCatalog.getByRole("button", { name: "Create record", exact: true }).isDisabled(), true);
+    assert.equal(await typedCatalog.getByRole("button", { name: "Refresh records", exact: true }).isDisabled(), true);
+    assert.equal(await typedCatalog.getByRole("article").filter({ hasText: typedCode })
+      .getByRole("button", { name: "Edit", exact: true }).isDisabled(), true);
+    assert.equal(await reviewedDefaultsPanel.getByRole("button", { name: "Refresh", exact: true }).isDisabled(), true);
+    assert.equal(await typedDieCard.getByRole("button", { name: "Edit reviewed defaults", exact: true }).isDisabled(), true);
+    assert.equal(browserWrites.length, writesBeforeTypedOffline, "offline typed setup and reviewed defaults must not issue writes");
+    await context.setOffline(false);
+    offlineCheckActive = false;
+    await page.getByText("Server-owned import lifecycle · manage-inventory", { exact: true }).waitFor();
+
     for (const viewport of [
       { width: 1280, height: 900 },
       { width: 375, height: 812 },
@@ -987,10 +1124,11 @@ async function main() {
       "500 /api/v3/schedules/commands",
       "409 /api/v3/schedules/commands",
       "500 /api/v3/setup-catalog/imports",
+      `409 /api/v3/setup-catalog/imports/${typedStaleId}/apply`,
       "500 /api/v3/inventory/opening-counts",
       "500 /api/v3/inventory/freezer-surplus/confirm",
     ], "only deliberate stale conflicts and injected post-commit response loss should be rejected");
-    console.log("V3 authenticated Chromium/PostgreSQL journey passed: run control; React schedule commands, exact retry, stale conflict, deterministic workbook Apply; setup CSV and source-workbook stage/review/Apply/Undo/reopen with exact retry and real catalog readback; inventory warehouse/opening-count exact retry/Review/Apply, stock/movement and production-warehouse readback; freezer-surplus exact replay, single-lot carry-in, schedule projection, physical damage, and no repeat ingredient deduction; reload persistence, offline write lockout, staff creation, and desktop/phone/tablet layouts.");
+    console.log("V3 authenticated Chromium/PostgreSQL journey passed: run control; React schedule commands, exact retry, stale conflict, deterministic workbook Apply; setup CSV/source-workbook lifecycle, typed create/edit/before-review/Apply, stale-Apply recovery, reviewed die defaults/history, and offline lockout with real catalog readback; inventory warehouse/opening-count exact retry/Review/Apply, stock/movement and production-warehouse readback; freezer-surplus exact replay, single-lot carry-in, schedule projection, physical damage, and no repeat ingredient deduction; reload persistence, staff creation, and desktop/phone/tablet layouts.");
 
     let webkitBrowser;
     try {
@@ -998,6 +1136,7 @@ async function main() {
       const webkitContext = await webkitBrowser.newContext({ viewport: { width: 1024, height: 768 }, serviceWorkers: "block" });
       await authenticateBrowserContext(baseUrl, webkitContext);
       const webkitPage = await webkitContext.newPage();
+      observePage(webkitPage);
       await webkitPage.goto(baseUrl);
       await webkitPage.getByRole("heading", { name: "Run control", exact: true }).waitFor();
       await selectRun(webkitPage, createdRun.id, runLabel);
@@ -1014,7 +1153,28 @@ async function main() {
       assert.ok(await webkitPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
       await webkitPage.getByRole("button", { name: "Setup", exact: true }).click();
       await webkitPage.getByRole("heading", { name: "Setup and master data", exact: true }).waitFor();
-      await webkitPage.getByRole("button", { name: "Reopen import 1", exact: true }).click();
+      await webkitPage.locator("#setup-catalog-family").selectOption("die-types");
+      const webkitTypedCatalog = webkitPage.locator('section[aria-labelledby="typed-catalog-heading"]');
+      const webkitTypedCard = webkitTypedCatalog.getByRole("article").filter({ hasText: typedCode });
+      await webkitTypedCard.getByRole("heading", { name: typedRevisedName, exact: true }).waitFor();
+      await webkitTypedCard.getByRole("button", { name: "Edit", exact: true }).click();
+      const webkitTypedForm = webkitTypedCatalog.locator("form");
+      await webkitTypedForm.waitFor();
+      assert.equal(await webkitTypedForm.locator("input").first().isDisabled(), true);
+      assert.equal(await webkitTypedForm.locator("input").nth(1).inputValue(), typedRevisedName);
+      await webkitTypedForm.getByRole("button", { name: "Cancel", exact: true }).click();
+      const webkitReviewedPanel = webkitPage.locator('section[aria-labelledby="reviewed-die-defaults-heading"]');
+      const webkitTypedDie = webkitReviewedPanel.getByRole("article").filter({ hasText: `${typedCode} · revision 1` });
+      await webkitTypedDie.getByText("active", { exact: true }).waitFor();
+      await webkitTypedDie.getByRole("button", { name: "Edit reviewed defaults", exact: true }).click();
+      for (const [label, expected] of Object.entries(reviewedValues)) {
+        assert.equal(await webkitTypedDie.getByLabel(label, { exact: true }).inputValue(), expected);
+      }
+      assert.equal(await webkitTypedDie.getByLabel("Enabled for future run defaults", { exact: true }).isChecked(), true);
+      await webkitTypedDie.getByRole("button", { name: "Cancel", exact: true }).click();
+      await webkitReviewedPanel.getByText(`${typedCode} · created · revision 1`, { exact: true }).waitFor();
+      await webkitPage.getByRole("article").filter({ hasText: "Source spec-sheets" })
+        .getByRole("button", { name: /^Reopen import / }).click();
       await webkitPage.getByText("Canonical import details reloaded. Review the preserved values before acting.").waitFor();
       const webkitSetupReview = webkitPage.getByRole("region", { name: "Setup import review" });
       await webkitSetupReview.getByText("applied", { exact: true }).waitFor();
@@ -1039,7 +1199,7 @@ async function main() {
       await webkitSurplus.getByText("0 / 2 cases", { exact: true }).waitFor();
       await webkitSurplus.getByText("Real browser freezer damage", { exact: true }).waitFor();
       assert.ok(await webkitPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
-      console.log("V3 WebKit/Safari-engine React/PostgreSQL run, schedule carry-in, setup history, inventory stock, opening-count, production-warehouse, and freezer-surplus readback passed.");
+      console.log("V3 WebKit/Safari-engine React/PostgreSQL run, schedule carry-in, typed setup edit/readback, reviewed die defaults/history, setup history, inventory stock, opening-count, production-warehouse, and freezer-surplus readback passed.");
       await webkitBrowser.close();
     } catch (error) {
       if (webkitBrowser) {

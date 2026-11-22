@@ -337,6 +337,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/setup-catalog/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one bounded page of canonical setup catalog records
+         * @description Manager-only. Fingerprints identify the exact server record used as a typed editor's optimistic-concurrency base.
+         */
+        get: operations["listSetupCatalogRecords"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/setup-catalog/edits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stage one typed setup record against its canonical base fingerprint
+         * @description Manager-only. The record uses the same strict family parser as CSV imports. A null fingerprint stages a creation only while the code remains absent. The fingerprint is checked at staging and again under record locks at Apply. Retry an uncertain response with the identical requestId and body.
+         */
+        post: operations["stageSetupCatalogEdit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/setup-catalog/imports": {
         parameters: {
             query?: never;
@@ -986,6 +1026,13 @@ export interface components {
             suggestedDefaults: components["schemas"]["ReviewedDieLineSettings"] | null;
         };
         RunDieType: components["schemas"]["ReviewedDieDefault"];
+        DieDefaultSaveRequest: {
+            requestId: string;
+            dieCode: string;
+            expectedRevision: number;
+            defaults: components["schemas"]["ReviewedDieLineSettings"];
+            enabled: boolean;
+        };
         DieDefaultSaveResult: {
             /** @enum {string} */
             outcome: "created" | "updated" | "retired" | "re-enabled";
@@ -1203,6 +1250,22 @@ export interface components {
             kind: "products" | "recipes" | "production-setups";
             csv: string;
         };
+        SetupCatalogEditRequest: {
+            requestId: string;
+            /** @enum {string} */
+            family: "ingredients" | "mixes" | "die-types" | "die-line-defaults" | "production-rules" | "freezer-pull-items" | "run-templates" | "manager-lists" | "aliases";
+            record: components["schemas"]["SetupCatalogRecord"];
+            expectedFingerprint: string | null;
+        };
+        SetupCatalogListedRecord: components["schemas"]["SetupCatalogRecord"] & {
+            fingerprint: string;
+        };
+        SetupCatalogRecordPage: {
+            /** @enum {string} */
+            family: "ingredients" | "mixes" | "die-types" | "die-line-defaults" | "production-rules" | "freezer-pull-items" | "run-templates" | "manager-lists" | "aliases";
+            records: components["schemas"]["SetupCatalogListedRecord"][];
+            nextCursor: string | null;
+        };
         SetupCatalogRequest: {
             requestId: string;
             /** @enum {string} */
@@ -1303,6 +1366,16 @@ export interface components {
         };
         SetupCatalogDetail: components["schemas"]["SetupCatalogHistoryItem"] & {
             records: components["schemas"]["SetupCatalogRecord"][];
+            /** @description Exact canonical base for a typed edit; null for creation and bulk imports. */
+            editorBefore: components["schemas"]["SetupCatalogRecord"] | null;
+            /** @description Canonical pre-Apply snapshots; null while staged. */
+            before: {
+                [key: string]: unknown;
+            }[] | null;
+            /** @description Canonical post-Apply snapshots; null while staged. */
+            after: {
+                [key: string]: unknown;
+            }[] | null;
         };
         SetupCatalogActionResult: {
             /** @enum {string} */
@@ -2868,6 +2941,75 @@ export interface operations {
             415: components["responses"]["Error"];
         };
     };
+    listSetupCatalogRecords: {
+        parameters: {
+            query: {
+                family: "ingredients" | "mixes" | "die-types" | "die-line-defaults" | "production-rules" | "freezer-pull-items" | "run-templates" | "manager-lists" | "aliases";
+                limit?: components["parameters"]["Limit"];
+                after?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical records and an optional forward cursor */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupCatalogRecordPage"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    stageSetupCatalogEdit: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupCatalogEditRequest"];
+            };
+        };
+        responses: {
+            /** @description Previously staged typed edit confirmed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupCatalogStageResponse"];
+                };
+            };
+            /** @description Typed edit staged for review */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupCatalogStageResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
     listSetupCatalogImports: {
         parameters: {
             query?: {
@@ -3259,13 +3401,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    requestId: string;
-                    dieCode: string;
-                    expectedRevision: number;
-                    defaults: components["schemas"]["ReviewedDieLineSettings"];
-                    enabled: boolean;
-                };
+                "application/json": components["schemas"]["DieDefaultSaveRequest"];
             };
         };
         responses: {
