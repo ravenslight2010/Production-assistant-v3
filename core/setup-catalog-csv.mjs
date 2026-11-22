@@ -95,6 +95,15 @@ const STRING_LIST_DIRECTORY_KEYS = new Set(DIRECTORY_KEYS.filter((key) =>
 const RECIPE_DIRECTORY_KEYS = new Set([
   "run-calc-dough-recipe-presets", "run-calc-frontline-recipe-presets", "run-calc-cheese-recipe-presets",
 ]);
+export const setupAllergenOptions = Object.freeze([
+  "milk", "eggs", "fish", "crustacean shellfish", "tree nuts", "peanuts", "wheat", "soybeans", "sesame",
+]);
+const ALLERGEN_OPTIONS = new Set(setupAllergenOptions);
+const RECIPE_FIELDS = new Set([
+  "rows", "doughballWeightOz", "doughballsPerTray", "brand", "flavors", "notes", "enabled",
+  "isPremadeCrust", "doughballVariants",
+]);
+const DOUGH_ONLY_FIELDS = new Set(["isPremadeCrust", "doughballVariants"]);
 const JSON_FAMILIES = Object.freeze(Object.keys(FAMILY_DEFINITIONS));
 
 function fail(message, row, field) {
@@ -156,6 +165,57 @@ function validateRecipeRows(rows, row, field) {
   }
 }
 
+function optionalPositiveNumber(value) {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1_000_000);
+}
+
+function optionalText(value, maximum, { empty = true } = {}) {
+  return value === undefined || (typeof value === "string" && value.length <= maximum
+    && (empty || value.trim().length > 0) && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value));
+}
+
+function validateRecipePreset(recipe, listKey, row) {
+  if (!recipe || typeof recipe !== "object" || Array.isArray(recipe)
+    || Object.keys(recipe).some((field) => !RECIPE_FIELDS.has(field)
+      || (DOUGH_ONLY_FIELDS.has(field) && listKey !== "run-calc-dough-recipe-presets"))
+    || !Array.isArray(recipe.rows) || recipe.rows.length > 500) {
+    fail("A recipe preset has an unsupported shape.", row, "value_json");
+  }
+  validateRecipeRows(recipe.rows, row, "value_json");
+  if (!optionalPositiveNumber(recipe.doughballWeightOz)
+    || !optionalPositiveNumber(recipe.doughballsPerTray)
+    || (recipe.doughballsPerTray !== undefined && !Number.isSafeInteger(recipe.doughballsPerTray))
+    || !optionalText(recipe.brand, 200) || !optionalText(recipe.notes, 2000)
+    || (recipe.enabled !== undefined && typeof recipe.enabled !== "boolean")
+    || (recipe.isPremadeCrust !== undefined && typeof recipe.isPremadeCrust !== "boolean")
+    || (recipe.flavors !== undefined && (!Array.isArray(recipe.flavors) || recipe.flavors.length > 100
+      || recipe.flavors.some((flavor) => typeof flavor !== "string" || !flavor.trim() || flavor.length > 200)))) {
+    fail("Recipe metadata, doughball values, and enabled state are invalid.", row, "value_json");
+  }
+  if (recipe.doughballVariants === undefined) return;
+  if (!Array.isArray(recipe.doughballVariants) || recipe.doughballVariants.length > 100) {
+    fail("Doughball variants must be a bounded list.", row, "value_json");
+  }
+  const labels = new Set();
+  for (const variant of recipe.doughballVariants) {
+    if (!variant || typeof variant !== "object" || Array.isArray(variant)
+      || Object.keys(variant).some((field) => !["label", "weightOz", "perTray", "customers"].includes(field))
+      || typeof variant.label !== "string" || !variant.label.trim() || variant.label.length > 120
+      || !optionalPositiveNumber(variant.weightOz) || !optionalPositiveNumber(variant.perTray)
+      || (variant.perTray !== undefined && !Number.isSafeInteger(variant.perTray))
+      || (variant.customers !== undefined && (!Array.isArray(variant.customers) || variant.customers.length > 500
+        || variant.customers.some((customer) => !customer || typeof customer !== "object" || Array.isArray(customer)
+          || Object.keys(customer).sort().join("\u0000") !== "brand\u0000flavor"
+          || typeof customer.brand !== "string" || !customer.brand.trim() || customer.brand.length > 200
+          || typeof customer.flavor !== "string" || !customer.flavor.trim() || customer.flavor.length > 200)))) {
+      fail("Each doughball variant needs a label, positive optional values, and valid customer pairings.", row, "value_json");
+    }
+    const label = variant.label.normalize("NFKC").replace(/\s+/gu, " ").trim().toLocaleLowerCase("en-US");
+    if (labels.has(label)) fail("Doughball variant labels must be distinct.", row, "value_json");
+    labels.add(label);
+  }
+}
+
 function validateRunTemplate(values, row) {
   for (const key of Object.keys(values)) {
     if (!TEMPLATE_FIELDS.has(key)) fail(`Run templates cannot include the "${key}" field.`, row, "values_json");
@@ -198,12 +258,11 @@ function parseRecord(family, cells, row) {
       if (!listValue || typeof listValue !== "object" || Array.isArray(listValue)) {
         fail("Recipe presets must be an object keyed by recipe name.", row, "value_json");
       }
-      for (const recipe of Object.values(listValue)) {
-        if (!recipe || typeof recipe !== "object" || Array.isArray(recipe)
-          || Object.keys(recipe).some((entry) => !["rows", "doughballWeightOz"].includes(entry))
-          || !Array.isArray(recipe.rows)) fail("A recipe preset has an unsupported shape.", row, "value_json");
-        validateRecipeRows(recipe.rows, row, "value_json");
+      if (Object.keys(listValue).length > 2000
+        || Object.keys(listValue).some((name) => !name.trim() || name.length > 200)) {
+        fail("Recipe preset names must be non-empty and bounded.", row, "value_json");
       }
+      for (const recipe of Object.values(listValue)) validateRecipePreset(recipe, key, row);
     } else if (typeof listValue !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/u.test(listValue)) {
       fail("Shift and production start times must use HH:MM.", row, "value_json");
     }
@@ -247,7 +306,11 @@ function parseRecord(family, cells, row) {
     if (new Set(allergens.map((item) => item.toLocaleLowerCase("en-US"))).size !== allergens.length) {
       fail("An allergen may appear only once.", row, "allergens_json");
     }
-    return { code, name, data: { categories, allergens, allergensReviewed: parseBoolean(pick.allergens_reviewed, row, "allergens_reviewed"), mergedIntoCode: pick.merged_into_code.trim() ? parseImportCode(pick.merged_into_code, row, "merged_into_code") : null, enabled: parseBoolean(pick.enabled, row, "enabled") } };
+    const allergensReviewed = parseBoolean(pick.allergens_reviewed, row, "allergens_reviewed");
+    if (allergensReviewed && allergens.some((item) => !ALLERGEN_OPTIONS.has(item))) {
+      fail("A reviewed allergen mapping may contain only the fixed nine allergen options.", row, "allergens_json");
+    }
+    return { code, name, data: { categories, allergens, allergensReviewed, mergedIntoCode: pick.merged_into_code.trim() ? parseImportCode(pick.merged_into_code, row, "merged_into_code") : null, enabled: parseBoolean(pick.enabled, row, "enabled") } };
   }
   if (family === "mixes") {
     const code = parseImportCode(pick.code, row);

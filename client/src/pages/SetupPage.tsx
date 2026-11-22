@@ -4,18 +4,25 @@ import { parseSetupCatalogCsv, setupCatalogCsvTemplates } from "../../../core/se
 import { renderImportCsvTemplate } from "../../../core/import-csv-templates.mjs";
 import {
   actOnSetupCatalogImport,
+  actOnSetupImport,
   ApiError,
   getSetupCatalogImport,
+  getSetupImport,
   listSetupCatalogImports,
+  listSetupImports,
   saveReviewedDieDefault,
   stageSetupCatalogEdit,
   stageSetupCatalogImport,
+  stageSetupMasterEdit,
   type AuthSession,
   type SetupCatalogActionResult,
   type SetupCatalogDetail,
   type SetupCatalogFamily,
   type SetupCatalogHistoryItem,
   type SetupCatalogStageRequest,
+  type SetupImportActionResult,
+  type SetupImportDetail,
+  type SetupImportHistoryItem,
 } from "../api";
 import {
   clearPendingSetupCatalogImport,
@@ -24,19 +31,25 @@ import {
   writePendingSetupCatalogImport,
 } from "../components/setup-catalog-storage";
 import { SourceWorkbookImport } from "../components/SourceWorkbookImport";
-import { CatalogRecordEditor } from "../components/CatalogRecordEditor";
+import { CatalogRecordEditor, MasterRecordEditor } from "../components/CatalogRecordEditor";
 import { ReviewedDieDefaults } from "../components/ReviewedDieDefaults";
 
 const FAMILY_LABELS: Record<SetupCatalogFamily, string> = {
-  ingredients: "Ingredients",
-  mixes: "Mixes",
+  ingredients: "Ingredients and allergens",
+  mixes: "Premixes and mixes",
   "die-types": "Die types",
   "die-line-defaults": "Die line defaults",
   "production-rules": "Production rules",
   "freezer-pull-items": "Freezer pull items",
-  "run-templates": "Run templates",
-  "manager-lists": "Manager lists",
+  "run-templates": "Production and shipping guides",
+  "manager-lists": "Named recipes and directories",
   aliases: "Aliases",
+};
+
+const MASTER_KIND_LABELS: Record<SetupImportHistoryItem["kind"], string> = {
+  products: "Products",
+  recipes: "Product dough yield",
+  "production-setups": "Shipping case capacity",
 };
 
 type CsvTemplate = { fileName: string; headers: readonly string[]; rows: readonly (readonly string[])[] };
@@ -58,6 +71,8 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
   const [family, setFamily] = useState<SetupCatalogFamily>("ingredients");
   const [history, setHistory] = useState<SetupCatalogHistoryItem[]>([]);
   const [review, setReview] = useState<SetupCatalogDetail | null>(null);
+  const [masterHistory, setMasterHistory] = useState<SetupImportHistoryItem[]>([]);
+  const [masterReview, setMasterReview] = useState<SetupImportDetail | null>(null);
   const [pending, setPending] = useState<PendingSetupCatalogRequest | null>(null);
   const [busy, setBusy] = useState<"history" | "stage" | "apply" | "undo" | "reopen" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +87,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
 
   useEffect(() => () => URL.revokeObjectURL(templateUrl), [templateUrl]);
 
-  async function loadCanonical(importId?: string, quiet = false): Promise<boolean> {
+  async function loadCanonical(importId?: string, quiet = false, store: "catalog" | "master" = "catalog"): Promise<boolean> {
     if (!online || !canManage) return false;
     const generation = ++loadGeneration.current;
     if (!quiet) {
@@ -80,15 +95,22 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       setError(null);
     }
     try {
-      const [nextHistory, nextReview] = await Promise.all([
+      const [nextHistory, nextMasterHistory, nextReview] = await Promise.all([
         listSetupCatalogImports(),
-        importId ? getSetupCatalogImport(importId) : Promise.resolve(null),
+        listSetupImports(),
+        importId ? (store === "catalog" ? getSetupCatalogImport(importId) : getSetupImport(importId)) : Promise.resolve(null),
       ]);
       if (generation !== loadGeneration.current) return false;
       setHistory(nextHistory);
+      setMasterHistory(nextMasterHistory);
       setHistoryLoaded(true);
-      if (nextReview) setReview(nextReview);
-      else if (review && !nextHistory.some((item) => item.id === review.id)) setReview(null);
+      if (nextReview) {
+        if (store === "catalog") setReview(nextReview as SetupCatalogDetail);
+        else setMasterReview(nextReview as SetupImportDetail);
+      } else if (!importId) {
+        if (review && !nextHistory.some((item) => item.id === review.id)) setReview(null);
+        if (masterReview && !nextMasterHistory.some((item) => item.id === masterReview.id)) setMasterReview(null);
+      }
       return true;
     } catch (cause) {
       if (generation !== loadGeneration.current) return false;
@@ -109,6 +131,8 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
     if (!canManage) {
       setHistory([]);
       setReview(null);
+      setMasterHistory([]);
+      setMasterReview(null);
       setHistoryLoaded(false);
       return;
     }
@@ -182,16 +206,21 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
         setNotice(`${saved.replayed ? "Previous die-default save confirmed. " : ""}Reviewed defaults for ${saved.dieCode} are now ${saved.status} at revision ${saved.revision}.`);
         return true;
       }
-      const result = "csv" in request
-        ? await stageSetupCatalogImport(request)
-        : await stageSetupCatalogEdit(request);
+      const isMasterEdit = "kind" in request;
+      const result = isMasterEdit
+        ? await stageSetupMasterEdit(request)
+        : "csv" in request
+          ? await stageSetupCatalogImport(request)
+          : await stageSetupCatalogEdit(request);
       clearPendingSetupCatalogImport(userId);
       setPending(null);
       clearFile();
-      const reloaded = await loadCanonical(result.importId, true);
+      const reloaded = await loadCanonical(result.importId, true, isMasterEdit ? "master" : "catalog");
+      const stagedDescription = isMasterEdit ? "Typed product capacity edit"
+        : "csv" in request ? (request.sourceSummary ? "Reviewed source records" : "CSV") : "Typed edit";
       setNotice(result.replayed
         ? `The previous staging request was confirmed. ${reloaded ? "The canonical setup review has been reloaded." : "Canonical review reload failed; refresh before applying."}`
-        : `${"csv" in request ? (request.sourceSummary ? "Reviewed source records" : "CSV") : "Typed edit"} staged. Review the stored records; no setup values have been applied.${reloaded ? "" : " Canonical review reload failed; refresh before applying."}`);
+        : `${stagedDescription} staged. Review the stored records; no setup values have been applied.${reloaded ? "" : " Canonical review reload failed; refresh before applying."}`);
       return true;
     } catch (cause) {
       const status = cause instanceof ApiError ? cause.status : 0;
@@ -251,6 +280,46 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       : `${result.replayed ? "Previous Undo confirmed. " : ""}Setup import undone. Server dependency and later-edit rules were enforced. ${reloaded ? "Canonical history reloaded." : "Canonical reload failed; refresh history."}`);
   }
 
+  async function reopenMaster(item: SetupImportHistoryItem) {
+    if (!online || !canManage || busy) return;
+    setError(null);
+    setNotice(null);
+    const loaded = await loadCanonical(item.id, false, "master");
+    if (loaded) setNotice("Canonical product setup details reloaded. Review the preserved values before acting.");
+  }
+
+  async function actMaster(action: "apply" | "undo") {
+    if (!masterReview || !online || !canManage || busy || pending) return;
+    if (action === "apply" && masterReview.status !== "staged") return;
+    if (action === "undo" && masterReview.status !== "applied") return;
+    if (action === "undo" && !window.confirm("Undo this product setup import? Later edits or dependent records may block it.")) return;
+    const importId = masterReview.id;
+    setBusy(action);
+    setError(null);
+    setNotice(action === "apply" ? "Applying the reviewed product setup import…" : "Undoing the applied product setup import…");
+    let result: SetupImportActionResult;
+    try {
+      result = await actOnSetupImport(importId, action);
+    } catch (cause) {
+      const status = cause instanceof ApiError ? cause.status : 0;
+      setNotice(null);
+      if (status === 409) {
+        const reloaded = await loadCanonical(importId, true, "master");
+        setError(`${message(cause, "The product setup changed before this action.")} ${reloaded ? "Canonical details were reloaded; review them before retrying." : "Canonical reload also failed; refresh history before retrying."}`);
+      } else {
+        setError(`${message(cause, "The product setup action was not confirmed.")} Reload the canonical import before retrying.`);
+      }
+      return;
+    } finally {
+      setBusy(null);
+    }
+    const reloaded = await loadCanonical(importId, true, "master");
+    window.dispatchEvent(new Event("fieldline:v3:setup-master-changed"));
+    setNotice(action === "apply"
+      ? `${result.replayed ? "Previous Apply confirmed. " : ""}Product setup import applied. Catalog records were not changed by this action. ${reloaded ? "Canonical history reloaded." : "Canonical reload failed; refresh history."}`
+      : `${result.replayed ? "Previous Undo confirmed. " : ""}Product setup import undone. Server dependency and later-edit rules were enforced. ${reloaded ? "Canonical history reloaded." : "Canonical reload failed; refresh history."}`);
+  }
+
   if (!canManage) {
     return (
       <div>
@@ -273,7 +342,10 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
           <h1>Setup and master data</h1>
           <p>Stage strict CSV records, review their stored values, then explicitly apply or undo them. Staging alone changes no setup catalog.</p>
         </div>
-        <button type="button" className="button-secondary" disabled={!online || busy !== null} onClick={() => void loadCanonical(review?.id)}>
+        <button type="button" className="button-secondary" disabled={!online || busy !== null} onClick={() => void (async () => {
+          await loadCanonical(review?.id);
+          if (masterReview) await loadCanonical(masterReview.id, true, "master");
+        })()}>
           <RefreshCw className={`h-4 w-4 ${busy === "history" || busy === "reopen" ? "animate-spin" : ""}`} />Refresh history
         </button>
       </div>
@@ -306,6 +378,10 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       <div className="mt-6 grid items-start gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,1fr)]">
         <div className="min-w-0 space-y-5">
           <CatalogRecordEditor family={family} online={online} disabled={writeDisabled} onStage={async (request) => {
+            if (writeDisabled || !persistPending(request)) return false;
+            return sendPending(request);
+          }} />
+          <MasterRecordEditor online={online} disabled={writeDisabled} onStage={async (request) => {
             if (writeDisabled || !persistPending(request)) return false;
             return sendPending(request);
           }} />
@@ -374,8 +450,41 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
               </div>
             </section>
           ) : null}
+
+          {masterReview ? (
+            <section className="panel" aria-labelledby="product-setup-review-heading">
+              <div className="panel-heading">
+                <div><p className="eyebrow">Independent product setup review</p><h2 id="product-setup-review-heading" className="mt-1 text-lg font-semibold">Product setup review</h2></div>
+                <span className={`status-pill ${masterReview.status === "applied" ? "status-running" : masterReview.status === "staged" ? "status-paused" : ""}`}>{masterReview.status}</span>
+              </div>
+              <p className="mt-3 text-sm text-muted-foreground">{reviewLabel(masterReview.status)} · {MASTER_KIND_LABELS[masterReview.kind]} · {masterReview.rowCount} row(s)</p>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">This Apply changes only the product setup store. Catalog records, packaging guides, and other capacity records require their own review.</p>
+              {masterReview.editorBefore ? <div className="mt-5 rounded-lg border border-border/70 bg-background/40 p-4">
+                <p className="eyebrow">Typed capacity edit · canonical before</p>
+                <h3 className="mt-1 text-sm font-semibold">{masterReview.editorBefore.name}</h3>
+                <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-background/70 p-3 font-mono text-[11px] leading-5 text-muted-foreground" aria-label={`Before product values for ${masterReview.editorBefore.code}`}>{JSON.stringify(masterReview.editorBefore.data, null, 2)}</pre>
+              </div> : null}
+              <div className="mt-5 space-y-4">
+                {masterReview.records.map((record, index) => (
+                  <article key={`${record.code}-${index}`} className="rounded-lg border border-border/70 bg-background/40 p-4" aria-label={`Product setup record ${index + 1}`}>
+                    <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0"><h3 className="break-words text-sm font-semibold">{record.name}</h3><p className="mt-1 break-all font-mono text-xs text-amber-300">{record.code}</p>{("productCode" in record) ? <p className="mt-1 text-xs text-muted-foreground">Product {record.productCode}</p> : null}</div>
+                      <span className="status-pill">Record {index + 1}</span>
+                    </div>
+                    <pre className="mt-4 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-background/70 p-3 font-mono text-[11px] leading-5 text-muted-foreground" aria-label={`Product values for ${record.code}`}>{JSON.stringify("data" in record ? record.data : { unit: record.unit }, null, 2)}</pre>
+                  </article>
+                ))}
+              </div>
+              <div className="mt-5 flex flex-wrap gap-3 border-t border-border/70 pt-5">
+                {masterReview.status === "staged" ? <button type="button" className="button-primary" disabled={writeDisabled} onClick={() => void actMaster("apply")}>Apply reviewed product setup</button> : null}
+                {masterReview.status === "applied" ? <button type="button" className="button-secondary" disabled={writeDisabled} onClick={() => void actMaster("undo")}><RotateCcw className="h-4 w-4" />Undo applied product setup</button> : null}
+                {masterReview.status === "undone" ? <p className="text-xs leading-5 text-muted-foreground">This product setup import is undone. Its preserved values are read-only; stage a new edit for another change.</p> : null}
+              </div>
+            </section>
+          ) : null}
         </div>
 
+        <div className="min-w-0 space-y-5">
         <section className="panel min-w-0" aria-labelledby="setup-history-heading">
           <div className="panel-heading">
             <div><p className="eyebrow">Persisted server history</p><h2 id="setup-history-heading" className="mt-1 text-lg font-semibold">Import history</h2></div>
@@ -397,6 +506,27 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
             {history.length === 0 ? <p className="rounded-lg border border-dashed border-border p-4 text-sm leading-6 text-muted-foreground">{busy === "history" ? "Loading canonical import history…" : online ? "No setup catalog imports have been staged." : "Reconnect to load setup import history."}</p> : null}
           </div>
         </section>
+
+        <section className="panel min-w-0" aria-labelledby="product-setup-history-heading">
+          <div className="panel-heading">
+            <div><p className="eyebrow">Independent product history</p><h2 id="product-setup-history-heading" className="mt-1 text-lg font-semibold">Product setup history</h2></div>
+            <span className="status-pill">Latest {masterHistory.length}</span>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-muted-foreground">Reopen product, dough-yield, or shipping-capacity imports. Their Apply and Undo actions never apply a catalog review.</p>
+          <div className="mt-5 space-y-3">
+            {masterHistory.map((item, index) => (
+              <article key={item.id} className="rounded-lg border border-border/70 bg-background/40 p-4" aria-label={`Product setup history ${index + 1}`}>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div><h3 className="text-sm font-semibold">{MASTER_KIND_LABELS[item.kind]}</h3><p className="mt-1 text-xs text-muted-foreground">{item.rowCount} row(s) · {new Date(item.createdAt).toLocaleString()}</p></div>
+                  <span className={`status-pill ${item.status === "applied" ? "status-running" : item.status === "staged" ? "status-paused" : ""}`}>{item.status}</span>
+                </div>
+                <button type="button" className="button-secondary mt-4 w-full" disabled={!online || busy !== null} onClick={() => void reopenMaster(item)}>{masterReview?.id === item.id ? "Reload canonical product review" : `Reopen product import ${index + 1}`}</button>
+              </article>
+            ))}
+            {masterHistory.length === 0 ? <p className="rounded-lg border border-dashed border-border p-4 text-sm leading-6 text-muted-foreground">{busy === "history" ? "Loading canonical product history…" : online ? "No product setup imports have been staged." : "Reconnect to load product setup history."}</p> : null}
+          </div>
+        </section>
+        </div>
       </div>
     </div>
   );

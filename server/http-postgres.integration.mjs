@@ -520,6 +520,47 @@ async function main() {
     const appliedShipping = await managerPost(`/api/v3/imports/${stagedShipping.importId}/apply`, {});
     assert.equal(appliedShipping.status, 200);
 
+    const masterPageResponse = await fetch(`${baseUrl}/api/v3/imports/records?kind=recipes&limit=100`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    });
+    assert.equal(masterPageResponse.status, 200, await masterPageResponse.clone().text());
+    const masterPage = await jsonResponse(masterPageResponse);
+    const listedMaster = masterPage.records.find((record) => record.code === stagedDough.records[0].code);
+    assert.ok(listedMaster, "the applied dough workbook record must be available to the typed editor");
+    assert.match(listedMaster.fingerprint, /^[0-9a-f]{64}$/u);
+    const { fingerprint: masterFingerprint, ...masterRecord } = listedMaster;
+    const typedMasterRequest = {
+      requestId: "73000000-0000-4000-8000-000000000222",
+      kind: "recipes",
+      record: { ...masterRecord, data: { ...masterRecord.data, doughballYield: 700 } },
+      expectedFingerprint: masterFingerprint,
+    };
+    const typedMasterResponse = await setupManagerPost("/api/v3/imports/edits", typedMasterRequest);
+    assert.equal(typedMasterResponse.status, 201, await typedMasterResponse.clone().text());
+    const typedMaster = await jsonResponse(typedMasterResponse);
+    assert.equal(typedMaster.records[0].data.doughballYield, 700);
+    assert.equal((await jsonResponse(await setupManagerPost("/api/v3/imports/edits", typedMasterRequest))).replayed, true);
+    const typedMasterDetailResponse = await fetch(`${baseUrl}/api/v3/imports/${typedMaster.importId}`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    });
+    assert.equal(typedMasterDetailResponse.status, 200);
+    const typedMasterDetail = await jsonResponse(typedMasterDetailResponse);
+    assert.equal(typedMasterDetail.import.editorBefore.data.doughballYield, 645.19);
+    assert.equal(typedMasterDetail.import.before, null);
+    assert.equal(typedMasterDetail.import.after, null);
+    const appliedMasterResponse = await managerPost(`/api/v3/imports/${typedMaster.importId}/apply`, {});
+    assert.equal(appliedMasterResponse.status, 200, await appliedMasterResponse.clone().text());
+    const appliedMasterPage = await jsonResponse(await fetch(`${baseUrl}/api/v3/imports/records?kind=recipes&limit=100`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    }));
+    assert.equal(appliedMasterPage.records.find((record) => record.code === masterRecord.code).data.doughballYield, 700);
+    const undoneMasterResponse = await managerPost(`/api/v3/imports/${typedMaster.importId}/undo`, {});
+    assert.equal(undoneMasterResponse.status, 200, await undoneMasterResponse.clone().text());
+    const undoneMasterPage = await jsonResponse(await fetch(`${baseUrl}/api/v3/imports/records?kind=recipes&limit=100`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    }));
+    assert.equal(undoneMasterPage.records.find((record) => record.code === masterRecord.code).data.doughballYield, 645.19);
+
     const rehearsalRecipe = cutoverBatch.recipes[0];
     const recipeImport = await managerPost("/api/v3/imports", {
       requestId: "73000000-0000-4000-8000-000000000212",

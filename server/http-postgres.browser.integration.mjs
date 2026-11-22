@@ -605,6 +605,120 @@ async function main() {
     await setupReview.getByText(sourceCode, { exact: true }).waitFor();
     await setupReview.getByText(/Source spec-sheets · 1 source row\(s\) · 1 imported · 0 skipped · 0 still unresolved/).waitFor();
 
+    const masterRecordsRead = async () => {
+      const response = await page.request.get(`${baseUrl}/api/v3/imports/records?kind=recipes&limit=100`);
+      assert.equal(response.status(), 200);
+      return (await response.json()).records;
+    };
+    const eligibleMasterRecords = await masterRecordsRead();
+    assert.equal(eligibleMasterRecords.some((record) => record.code === "DOUGH-A-RECIPE"), false,
+      "legacy ingredient recipes must not open in the dough-capacity editor");
+    assert.ok(eligibleMasterRecords.every((record) => record.data.sourceFamily === "dough-procedure"));
+    const initialMasterRecord = eligibleMasterRecords.find((record) => record.data.doughballYield === 645.19);
+    assert.ok(initialMasterRecord, "the imported dough-capacity record must be available to the browser editor");
+    const masterCode = initialMasterRecord.code;
+    const masterEditor = page.getByRole("region", { name: "Dough yield and shipping capacity", exact: true });
+    const masterCard = masterEditor.getByRole("article").filter({ hasText: masterCode });
+    await masterCard.getByRole("heading", { name: initialMasterRecord.name, exact: true }).waitFor();
+    await masterCard.getByRole("button", { name: "Edit", exact: true }).click();
+    assert.equal(await masterEditor.getByLabel("Doughball yield", { exact: true }).inputValue(), "645.19");
+    await masterEditor.getByLabel("Doughball yield", { exact: true }).fill("650");
+    const stageMasterResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/imports/edits" && response.request().method() === "POST");
+    await masterEditor.getByRole("button", { name: "Stage capacity edit", exact: true }).click();
+    const stageMasterResponse = await stageMasterResponsePromise;
+    assert.equal(stageMasterResponse.status(), 201, await stageMasterResponse.text());
+    const masterImportId = (await stageMasterResponse.json()).importId;
+    const productReview = page.getByRole("region", { name: "Product setup review", exact: true });
+    await productReview.getByLabel(`Before product values for ${masterCode}`, { exact: true }).waitFor();
+    assert.match(await productReview.getByLabel(`Product values for ${masterCode}`, { exact: true }).textContent(), /650/u);
+    assert.equal((await masterRecordsRead()).find((record) => record.code === masterCode).data.doughballYield, 645.19,
+      "typed product staging must not mutate the canonical master record");
+    const applyMasterResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/imports/${masterImportId}/apply` && response.request().method() === "POST");
+    await productReview.getByRole("button", { name: "Apply reviewed product setup", exact: true }).click();
+    assert.equal((await applyMasterResponsePromise).status(), 200);
+    await page.getByText(/Product setup import applied\. Catalog records were not changed by this action\./).waitFor();
+    assert.equal((await masterRecordsRead()).find((record) => record.code === masterCode).data.doughballYield, 650);
+    page.once("dialog", (dialog) => dialog.accept());
+    const undoMasterResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/imports/${masterImportId}/undo` && response.request().method() === "POST");
+    await productReview.getByRole("button", { name: "Undo applied product setup", exact: true }).click();
+    assert.equal((await undoMasterResponsePromise).status(), 200);
+    await page.getByText(/Product setup import undone\./).waitFor();
+    assert.equal((await masterRecordsRead()).find((record) => record.code === masterCode).data.doughballYield, 645.19);
+
+    const recipeName = `Browser PostgreSQL Dough ${suffix}`;
+    const variantLabel = `Browser 16 ${suffix}`;
+    await page.locator("#setup-catalog-family").selectOption("manager-lists");
+    const setup2Catalog = page.getByRole("region", { name: "Named recipes and directories", exact: true });
+    await setup2Catalog.getByRole("button", { name: "Create record", exact: true }).click();
+    await setup2Catalog.locator("form select").first().selectOption("run-calc-dough-recipe-presets");
+    await setup2Catalog.getByRole("button", { name: "Add named recipe", exact: true }).click();
+    const recipeEditor = setup2Catalog.getByRole("article", { name: "Named recipe 1", exact: true });
+    await recipeEditor.getByLabel("Recipe name", { exact: true }).fill(recipeName);
+    await recipeEditor.getByLabel("Premade crust", { exact: true }).check();
+    await recipeEditor.getByRole("button", { name: "Add recipe ingredient", exact: true }).click();
+    await recipeEditor.getByLabel("Ingredient", { exact: true }).fill("Browser recipe flour");
+    await recipeEditor.getByLabel("Pounds", { exact: true }).fill("25");
+    await recipeEditor.getByRole("button", { name: "Add doughball variant", exact: true }).click();
+    await recipeEditor.getByLabel("Variant label", { exact: true }).fill(variantLabel);
+    await recipeEditor.getByLabel("Weight oz (optional)", { exact: true }).fill("16");
+    await recipeEditor.getByLabel("Per tray (optional)", { exact: true }).fill("12");
+    await recipeEditor.getByRole("button", { name: "Add customer pairing", exact: true }).click();
+    await recipeEditor.getByLabel("Brand", { exact: true }).fill("Integration Brand");
+    await recipeEditor.getByLabel("Flavor", { exact: true }).fill(sourceFlavor);
+    const stageRecipeResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/setup-catalog/edits" && response.request().method() === "POST");
+    await setup2Catalog.getByRole("button", { name: "Stage typed edit", exact: true }).click();
+    const stageRecipeResponse = await stageRecipeResponsePromise;
+    assert.equal(stageRecipeResponse.status(), 201, await stageRecipeResponse.text());
+    const recipeImportId = (await stageRecipeResponse.json()).importId;
+    await setupReview.getByLabel("Values for run-calc-dough-recipe-presets", { exact: true }).waitFor();
+    assert.match(await setupReview.getByLabel("Values for run-calc-dough-recipe-presets", { exact: true }).textContent(), new RegExp(variantLabel));
+    const applyRecipeResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/setup-catalog/imports/${recipeImportId}/apply` && response.request().method() === "POST");
+    await setupReview.getByRole("button", { name: "Apply reviewed import", exact: true }).click();
+    assert.equal((await applyRecipeResponsePromise).status(), 200);
+    const recipeRecordsResponse = await page.request.get(`${baseUrl}/api/v3/setup-catalog/records?family=manager-lists&limit=100`);
+    assert.equal(recipeRecordsResponse.status(), 200);
+    const appliedRecipe = (await recipeRecordsResponse.json()).records
+      .find((record) => record.code === "run-calc-dough-recipe-presets").data.value[recipeName];
+    assert.equal(appliedRecipe.isPremadeCrust, true);
+    assert.deepEqual(appliedRecipe.rows, [{ ingredient: "Browser recipe flour", lbs: 25 }]);
+    assert.deepEqual(appliedRecipe.doughballVariants, [{
+      label: variantLabel, weightOz: 16, perTray: 12,
+      customers: [{ brand: "Integration Brand", flavor: sourceFlavor }],
+    }]);
+    assert.equal((await masterRecordsRead()).find((record) => record.code === masterCode).data.doughballYield, 645.19,
+      "catalog Apply must not change product setup");
+
+    const allergenCode = `ALLERGEN-${suffix}`;
+    const allergenName = `Browser fixed-nine ingredient ${suffix}`;
+    await page.locator("#setup-catalog-family").selectOption("ingredients");
+    const allergenCatalog = page.getByRole("region", { name: "Ingredients and allergens", exact: true });
+    await allergenCatalog.getByRole("button", { name: "Create record", exact: true }).click();
+    await allergenCatalog.getByLabel("Code", { exact: true }).fill(allergenCode);
+    await allergenCatalog.getByLabel("Name", { exact: true }).fill(allergenName);
+    await allergenCatalog.getByLabel("wheat", { exact: true }).check();
+    await allergenCatalog.getByLabel("Allergen mapping reviewed", { exact: true }).check();
+    const stageAllergenResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/setup-catalog/edits" && response.request().method() === "POST");
+    await allergenCatalog.getByRole("button", { name: "Stage typed edit", exact: true }).click();
+    const stageAllergenResponse = await stageAllergenResponsePromise;
+    assert.equal(stageAllergenResponse.status(), 201, await stageAllergenResponse.text());
+    const allergenImportId = (await stageAllergenResponse.json()).importId;
+    const applyAllergenResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/setup-catalog/imports/${allergenImportId}/apply` && response.request().method() === "POST");
+    await setupReview.getByRole("button", { name: "Apply reviewed import", exact: true }).click();
+    assert.equal((await applyAllergenResponsePromise).status(), 200);
+    const allergenRecord = await setupRecordRead();
+    assert.equal(allergenRecord.length, 0, "the prior undone ingredient must remain absent");
+    const allergenRecordsResponse = await page.request.get(`${baseUrl}/api/v3/setup-catalog/records?family=ingredients&limit=100`);
+    const appliedAllergen = (await allergenRecordsResponse.json()).records.find((record) => record.code === allergenCode);
+    assert.deepEqual(appliedAllergen.data.allergens, ["wheat"]);
+    assert.equal(appliedAllergen.data.allergensReviewed, true);
+
     const typedCode = `TYPED-${suffix}`;
     const typedOriginalName = `Typed browser die ${suffix}`;
     const typedRevisedName = `${typedOriginalName} revised`;
@@ -1128,7 +1242,7 @@ async function main() {
       "500 /api/v3/inventory/opening-counts",
       "500 /api/v3/inventory/freezer-surplus/confirm",
     ], "only deliberate stale conflicts and injected post-commit response loss should be rejected");
-    console.log("V3 authenticated Chromium/PostgreSQL journey passed: run control; React schedule commands, exact retry, stale conflict, deterministic workbook Apply; setup CSV/source-workbook lifecycle, typed create/edit/before-review/Apply, stale-Apply recovery, reviewed die defaults/history, and offline lockout with real catalog readback; inventory warehouse/opening-count exact retry/Review/Apply, stock/movement and production-warehouse readback; freezer-surplus exact replay, single-lot carry-in, schedule projection, physical damage, and no repeat ingredient deduction; reload persistence, staff creation, and desktop/phone/tablet layouts.");
+    console.log("V3 authenticated Chromium/PostgreSQL journey passed: run control; React schedule commands, exact retry, stale conflict, deterministic workbook Apply; setup CSV/source-workbook lifecycle, typed create/edit/before-review/Apply, stale-Apply recovery, product-capacity Apply/Undo, named-recipe variants/customer pairings, fixed-nine allergen review, reviewed die defaults/history, and offline lockout with real catalog readback; inventory warehouse/opening-count exact retry/Review/Apply, stock/movement and production-warehouse readback; freezer-surplus exact replay, single-lot carry-in, schedule projection, physical damage, and no repeat ingredient deduction; reload persistence, staff creation, and desktop/phone/tablet layouts.");
 
     let webkitBrowser;
     try {
@@ -1173,6 +1287,33 @@ async function main() {
       assert.equal(await webkitTypedDie.getByLabel("Enabled for future run defaults", { exact: true }).isChecked(), true);
       await webkitTypedDie.getByRole("button", { name: "Cancel", exact: true }).click();
       await webkitReviewedPanel.getByText(`${typedCode} · created · revision 1`, { exact: true }).waitFor();
+      const webkitMaster = webkitPage.getByRole("region", { name: "Dough yield and shipping capacity", exact: true });
+      const webkitMasterCard = webkitMaster.getByRole("article").filter({ hasText: masterCode });
+      await webkitMasterCard.getByRole("button", { name: "Edit", exact: true }).click();
+      assert.equal(await webkitMaster.getByLabel("Doughball yield", { exact: true }).inputValue(), "645.19");
+      await webkitMaster.getByText(/dough-procedure/).waitFor();
+      await webkitMaster.getByRole("button", { name: "Cancel", exact: true }).click();
+      await webkitPage.locator("#setup-catalog-family").selectOption("manager-lists");
+      const webkitRecipes = webkitPage.getByRole("region", { name: "Named recipes and directories", exact: true });
+      await webkitRecipes.getByRole("article").filter({ hasText: "run-calc-dough-recipe-presets" })
+        .getByRole("button", { name: "Edit", exact: true }).click();
+      await webkitRecipes.getByLabel("Search named recipes", { exact: true }).fill(recipeName);
+      const webkitRecipe = webkitRecipes.getByRole("article", { name: "Named recipe 1", exact: true });
+      assert.equal(await webkitRecipe.getByLabel("Recipe name", { exact: true }).inputValue(), recipeName);
+      assert.equal(await webkitRecipe.getByLabel("Premade crust", { exact: true }).isChecked(), true);
+      assert.equal(await webkitRecipe.getByLabel("Variant label", { exact: true }).inputValue(), variantLabel);
+      assert.equal(await webkitRecipe.getByLabel("Weight oz (optional)", { exact: true }).inputValue(), "16");
+      assert.equal(await webkitRecipe.getByLabel("Per tray (optional)", { exact: true }).inputValue(), "12");
+      assert.equal(await webkitRecipe.getByLabel("Brand", { exact: true }).inputValue(), "Integration Brand");
+      assert.equal(await webkitRecipe.getByLabel("Flavor", { exact: true }).inputValue(), sourceFlavor);
+      await webkitRecipes.getByRole("button", { name: "Cancel", exact: true }).click();
+      await webkitPage.locator("#setup-catalog-family").selectOption("ingredients");
+      const webkitIngredients = webkitPage.getByRole("region", { name: "Ingredients and allergens", exact: true });
+      await webkitIngredients.getByRole("article").filter({ hasText: allergenCode })
+        .getByRole("button", { name: "Edit", exact: true }).click();
+      assert.equal(await webkitIngredients.getByLabel("wheat", { exact: true }).isChecked(), true);
+      assert.equal(await webkitIngredients.getByLabel("Allergen mapping reviewed", { exact: true }).isChecked(), true);
+      await webkitIngredients.getByRole("button", { name: "Cancel", exact: true }).click();
       await webkitPage.getByRole("article").filter({ hasText: "Source spec-sheets" })
         .getByRole("button", { name: /^Reopen import / }).click();
       await webkitPage.getByText("Canonical import details reloaded. Review the preserved values before acting.").waitFor();
@@ -1199,7 +1340,7 @@ async function main() {
       await webkitSurplus.getByText("0 / 2 cases", { exact: true }).waitFor();
       await webkitSurplus.getByText("Real browser freezer damage", { exact: true }).waitFor();
       assert.ok(await webkitPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
-      console.log("V3 WebKit/Safari-engine React/PostgreSQL run, schedule carry-in, typed setup edit/readback, reviewed die defaults/history, setup history, inventory stock, opening-count, production-warehouse, and freezer-surplus readback passed.");
+      console.log("V3 WebKit/Safari-engine React/PostgreSQL run, schedule carry-in, typed setup edit/readback, product-capacity provenance, named-recipe variants/customer pairings, fixed-nine allergen review, reviewed die defaults/history, setup history, inventory stock, opening-count, production-warehouse, and freezer-surplus readback passed.");
       await webkitBrowser.close();
     } catch (error) {
       if (webkitBrowser) {

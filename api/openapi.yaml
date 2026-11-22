@@ -770,6 +770,86 @@ paths:
           $ref: "#/components/responses/Error"
         "415":
           $ref: "#/components/responses/Error"
+  /api/v3/imports/records:
+    get:
+      operationId: listSetupMasterRecords
+      summary: Read one bounded page of canonical dough or shipping records
+      description: Manager-only. Fingerprints identify the exact server record used as a typed capacity editor's optimistic-concurrency base.
+      parameters:
+        - name: kind
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [recipes, production-setups]
+        - $ref: "#/components/parameters/Limit"
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+      responses:
+        "200":
+          description: Canonical records and an optional forward cursor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupMasterRecordPage"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v3/imports/edits:
+    post:
+      operationId: stageSetupMasterEdit
+      summary: Stage one typed dough or shipping record against its canonical base fingerprint
+      description: >
+        Manager-only. The record preserves imported source provenance and uses
+        the existing reviewed setup-import lifecycle. A null fingerprint stages
+        a creation only while the code remains absent. The fingerprint is checked
+        at staging and again under record locks at Apply. Retry an uncertain
+        response with the identical requestId and body.
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetupMasterEditRequest"
+      responses:
+        "201":
+          description: Typed capacity edit staged for review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupImportPreview"
+        "200":
+          description: Previously staged typed capacity edit confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupImportPreview"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
   /api/v3/setup-catalog/records:
     get:
       operationId: listSetupCatalogRecords
@@ -2726,6 +2806,48 @@ components:
         csv:
           type: string
           maxLength: 1048576
+    SetupMasterEditRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, kind, record, expectedFingerprint]
+      properties:
+        requestId:
+          type: string
+          minLength: 1
+          maxLength: 200
+        kind:
+          type: string
+          enum: [recipes, production-setups]
+        record:
+          $ref: "#/components/schemas/SetupImportMasterRecord"
+        expectedFingerprint:
+          type: [string, "null"]
+          pattern: "^[0-9a-f]{64}$"
+    SetupMasterListedRecord:
+      allOf:
+        - $ref: "#/components/schemas/SetupImportMasterRecord"
+        - type: object
+          required: [fingerprint]
+          properties:
+            fingerprint:
+              type: string
+              pattern: "^[0-9a-f]{64}$"
+    SetupMasterRecordPage:
+      type: object
+      additionalProperties: false
+      required: [kind, records, nextCursor]
+      properties:
+        kind:
+          type: string
+          enum: [recipes, production-setups]
+        records:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/SetupMasterListedRecord"
+        nextCursor:
+          type: [string, "null"]
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
     SetupCatalogEditRequest:
       type: object
       additionalProperties: false
@@ -3260,6 +3382,7 @@ components:
           type: string
         data:
           type: object
+          additionalProperties: true
     SetupImportPreview:
       type: object
       required: [outcome, importId, kind, rowCount, replayed, records]
@@ -3335,7 +3458,7 @@ components:
           format: date-time
     SetupImportDetail:
       type: object
-      required: [id, kind, status, records, createdBy, appliedBy, undoneBy, createdAt, appliedAt, undoneAt]
+      required: [id, kind, status, records, rowCount, createdBy, appliedBy, undoneBy, createdAt, appliedAt, undoneAt, editorBefore, before, after]
       properties:
         id:
           type: string
@@ -3352,6 +3475,27 @@ components:
             oneOf:
               - $ref: "#/components/schemas/SetupImportProduct"
               - $ref: "#/components/schemas/SetupImportMasterRecord"
+        rowCount:
+          type: integer
+          minimum: 1
+          maximum: 2000
+        editorBefore:
+          oneOf:
+            - $ref: "#/components/schemas/SetupImportMasterRecord"
+            - type: "null"
+          description: Exact canonical base for a typed edit; null for creation and bulk imports.
+        before:
+          type: [array, "null"]
+          items:
+            type: object
+            additionalProperties: true
+          description: Canonical pre-Apply snapshots; null while staged.
+        after:
+          type: [array, "null"]
+          items:
+            type: object
+            additionalProperties: true
+          description: Canonical post-Apply snapshots; null while staged.
         createdBy:
           type: string
           format: uuid

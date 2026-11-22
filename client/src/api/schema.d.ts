@@ -337,6 +337,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/imports/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one bounded page of canonical dough or shipping records
+         * @description Manager-only. Fingerprints identify the exact server record used as a typed capacity editor's optimistic-concurrency base.
+         */
+        get: operations["listSetupMasterRecords"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/imports/edits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stage one typed dough or shipping record against its canonical base fingerprint
+         * @description Manager-only. The record preserves imported source provenance and uses the existing reviewed setup-import lifecycle. A null fingerprint stages a creation only while the code remains absent. The fingerprint is checked at staging and again under record locks at Apply. Retry an uncertain response with the identical requestId and body.
+         */
+        post: operations["stageSetupMasterEdit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/setup-catalog/records": {
         parameters: {
             query?: never;
@@ -1250,6 +1290,22 @@ export interface components {
             kind: "products" | "recipes" | "production-setups";
             csv: string;
         };
+        SetupMasterEditRequest: {
+            requestId: string;
+            /** @enum {string} */
+            kind: "recipes" | "production-setups";
+            record: components["schemas"]["SetupImportMasterRecord"];
+            expectedFingerprint: string | null;
+        };
+        SetupMasterListedRecord: components["schemas"]["SetupImportMasterRecord"] & {
+            fingerprint: string;
+        };
+        SetupMasterRecordPage: {
+            /** @enum {string} */
+            kind: "recipes" | "production-setups";
+            records: components["schemas"]["SetupMasterListedRecord"][];
+            nextCursor: string | null;
+        };
         SetupCatalogEditRequest: {
             requestId: string;
             /** @enum {string} */
@@ -1465,7 +1521,9 @@ export interface components {
             code: string;
             name: string;
             productCode: string;
-            data: Record<string, never>;
+            data: {
+                [key: string]: unknown;
+            };
         };
         SetupImportPreview: {
             /** @enum {string} */
@@ -1516,6 +1574,17 @@ export interface components {
             /** @enum {string} */
             status: "staged" | "applied" | "undone";
             records: (components["schemas"]["SetupImportProduct"] | components["schemas"]["SetupImportMasterRecord"])[];
+            rowCount: number;
+            /** @description Exact canonical base for a typed edit; null for creation and bulk imports. */
+            editorBefore: components["schemas"]["SetupImportMasterRecord"] | null;
+            /** @description Canonical pre-Apply snapshots; null while staged. */
+            before: {
+                [key: string]: unknown;
+            }[] | null;
+            /** @description Canonical post-Apply snapshots; null while staged. */
+            after: {
+                [key: string]: unknown;
+            }[] | null;
             /** Format: uuid */
             createdBy: string;
             /** Format: uuid */
@@ -2939,6 +3008,75 @@ export interface operations {
             409: components["responses"]["Error"];
             413: components["responses"]["Error"];
             415: components["responses"]["Error"];
+        };
+    };
+    listSetupMasterRecords: {
+        parameters: {
+            query: {
+                kind: "recipes" | "production-setups";
+                limit?: components["parameters"]["Limit"];
+                after?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical records and an optional forward cursor */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupMasterRecordPage"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    stageSetupMasterEdit: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupMasterEditRequest"];
+            };
+        };
+        responses: {
+            /** @description Previously staged typed capacity edit confirmed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupImportPreview"];
+                };
+            };
+            /** @description Typed capacity edit staged for review */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupImportPreview"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
         };
     };
     listSetupCatalogRecords: {

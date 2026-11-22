@@ -10,6 +10,7 @@ export interface ParsedSetupCatalogRecord {
   data: Record<string, unknown>;
 }
 
+export declare const setupAllergenOptions: readonly string[];
 export declare const setupCatalogCsvTemplates: Readonly<Record<string, SetupCatalogCsvTemplate>>;
 export declare const setupCatalogCsvLimits: { readonly families: readonly string[]; readonly directoryKeys: readonly string[]; readonly maxRows: number };
 export declare function parseSetupCatalogCsv(family: string, csv: string): ParsedSetupCatalogRecord[];

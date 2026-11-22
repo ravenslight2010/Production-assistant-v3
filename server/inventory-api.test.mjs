@@ -488,6 +488,64 @@ test("typed catalog reads and edits are bounded, strict, and server hashed", asy
   assert.equal(operator.calls.length + noCsrf.calls.length, 0);
 });
 
+test("typed product capacity reads and edits are bounded, strict, and server hashed", async (t) => {
+  const record = {
+    code: "DOUGH-1", name: "House dough", productCode: "PIZZA",
+    data: {
+      sourceFamily: "dough-procedure", sourceKey: null, fileName: null, fileSha256: null, source: null,
+      doughballYield: 100, doughballWeightOz: null, doughballsPerTray: null,
+    },
+  };
+  const fingerprint = "b".repeat(64);
+  const staged = {
+    outcome: "staged", importId: "10000000-0000-4000-8000-000000000015",
+    kind: "recipes", rowCount: 1, replayed: false,
+  };
+  const api = await withApi(t, {
+    query: async (sql) => ({ rows: [{ result: sql.includes("list_setup_master_records")
+      ? { kind: "recipes", records: [{ ...record, fingerprint }], nextCursor: null }
+      : staged }] }),
+  });
+  const page = await send(api.baseUrl, "/api/v3/imports/records?kind=recipes&limit=100");
+  assert.equal(page.status, 200);
+  assert.deepEqual(await page.json(), { kind: "recipes", records: [{ ...record, fingerprint }], nextCursor: null });
+  assert.deepEqual(api.calls[0].values.slice(1), ["recipes", 100, null]);
+
+  const invalidPage = await send(api.baseUrl, "/api/v3/imports/records?kind=recipes&after=bad%20cursor");
+  assert.equal(invalidPage.status, 400);
+  const invalidEdit = await send(api.baseUrl, "/api/v3/imports/edits", {
+    method: "POST",
+    body: {
+      requestId: "master-invalid", kind: "recipes", expectedFingerprint: fingerprint,
+      record: { ...record, data: { ...record.data, doughballYield: 0 } },
+    },
+  });
+  assert.equal(invalidEdit.status, 400);
+  assert.equal(api.calls.length, 1);
+
+  const response = await send(api.baseUrl, "/api/v3/imports/edits", {
+    method: "POST",
+    body: { requestId: "master-1", kind: "recipes", record, expectedFingerprint: fingerprint },
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), { ...staged, records: [record] });
+  const call = api.calls[1];
+  assert.match(call.text, /stage_setup_master_edit/u);
+  assert.deepEqual(call.values.slice(4), ["recipes", JSON.stringify(record), fingerprint]);
+  assert.equal(call.values[3], createHash("sha256").update(JSON.stringify({
+    kind: "recipes", record, expectedFingerprint: fingerprint,
+  })).digest("hex"));
+
+  const operator = await withApi(t, { auth: { ...MANAGER, capabilities: [] } });
+  assert.equal((await send(operator.baseUrl, "/api/v3/imports/records?kind=recipes")).status, 403);
+  const noCsrf = await withApi(t, { csrf: false });
+  assert.equal((await send(noCsrf.baseUrl, "/api/v3/imports/edits", {
+    method: "POST", csrf: false,
+    body: { requestId: "master-no-csrf", kind: "recipes", record, expectedFingerprint: fingerprint },
+  })).status, 403);
+  assert.equal(operator.calls.length + noCsrf.calls.length, 0);
+});
+
 test("setup catalog history and writes stay manager-only and CSRF protected", async (t) => {
   const operator = await withApi(t, { auth: { ...MANAGER, capabilities: [] } });
   const read = await send(operator.baseUrl, "/api/v3/setup-catalog/imports");

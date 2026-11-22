@@ -4,11 +4,14 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { chromium } from "playwright";
-import { parseSetupCatalogCsv } from "../core/setup-catalog-csv.mjs";
+import { parseSetupCatalogCsv, parseSetupCatalogRecord } from "../core/setup-catalog-csv.mjs";
+import { parseSetupMasterRecord } from "../core/setup-master-records.mjs";
 
 const CSRF_TOKEN = "b".repeat(43);
 const STAFF_ID = "75000000-0000-4000-8000-000000000001";
 const IMPORT_ID = "75000000-0000-4000-8000-000000000002";
+const MASTER_IMPORT_ID = "75000000-0000-4000-8000-000000000003";
+const MASTER_FINGERPRINT = "e".repeat(64);
 const CSV = 'code,name,categories_json,allergens_json,allergens_reviewed,merged_into_code,enabled\n'
   + 'BROWSER-ING,Browser Reviewed Flour,"[""dough""]","[]",true,,true\n';
 const DIST = new URL("../dist/", import.meta.url);
@@ -73,13 +76,57 @@ function detail(importItem) {
   };
 }
 
-async function installSetupApi(context, baseUrl, { manager = true } = {}) {
+function masterDetail(importItem) {
+  return {
+    ...importItem,
+    createdBy: STAFF_ID,
+    appliedBy: importItem.appliedBy ?? null,
+    undoneBy: importItem.undoneBy ?? null,
+    createdAt: "2026-11-21T12:00:00.000Z",
+    appliedAt: importItem.appliedAt ?? null,
+    undoneAt: importItem.undoneAt ?? null,
+    editorBefore: importItem.editorBefore ?? null,
+    before: importItem.before ?? null,
+    after: importItem.after ?? null,
+  };
+}
+
+async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = false } = {}) {
   const imports = new Map();
   const requests = new Map();
   const setupRequests = [];
   const writes = [];
   const appliedRecords = new Map();
+  const masterImports = new Map();
+  const masterRequests = new Map();
+  const masterRecords = new Map([["DOUGH-BROWSER", {
+    code: "DOUGH-BROWSER", name: "Browser dough procedure", productCode: "PIZZA",
+    data: {
+      sourceFamily: "dough-procedure", sourceKey: null, fileName: null, fileSha256: null, source: null,
+      doughballYield: 100, doughballWeightOz: 8, doughballsPerTray: 24,
+    },
+  }]]);
   let loseNextStageResponse = false;
+  let loseNextMasterStageResponse = false;
+  if (seedSetup2) {
+    appliedRecords.set("LEGACY-ING", {
+      code: "LEGACY-ING", name: "Legacy allergen ingredient",
+      data: { categories: ["dough"], allergens: ["milk", "Legacy: unspecified oil"], allergensReviewed: false, mergedIntoCode: null, enabled: true },
+    });
+    appliedRecords.set("run-calc-dough-recipe-presets", {
+      code: "run-calc-dough-recipe-presets", name: "run-calc-dough-recipe-presets",
+      data: {
+        key: "run-calc-dough-recipe-presets",
+        value: {
+          "House Dough": {
+            rows: [{ ingredient: "Bread flour", lbs: 50 }], brand: "Browser Brand", flavors: ["Plain"], notes: "Base recipe",
+            enabled: true, isPremadeCrust: false, doughballWeightOz: 8, doughballsPerTray: 24,
+            doughballVariants: [{ label: "Regular", weightOz: 8, perTray: 24, customers: [{ brand: "Browser Brand", flavor: "Plain" }] }],
+          },
+        },
+      },
+    });
+  }
 
   await context.addCookies([{ name: "v3_csrf", value: CSRF_TOKEN, url: baseUrl }]);
   await context.route("**/api/v3/**", async (route) => {
@@ -94,6 +141,83 @@ async function installSetupApi(context, baseUrl, { manager = true } = {}) {
       });
     }
     if (path === "/api/v3/auth/bootstrap-status" && method === "GET") return json(route, { available: false });
+    if (path === "/api/v3/imports" && method === "GET") {
+      assert.equal(url.searchParams.get("limit"), "50");
+      return json(route, { imports: [...masterImports.values()].map((item) => {
+        const { records: _records, editorBefore: _editorBefore, before: _before, after: _after, ...historyItem } = masterDetail(item);
+        return historyItem;
+      }) });
+    }
+    if (path === "/api/v3/inventory/products" && method === "GET") {
+      return json(route, { products: [{ id: "75000000-0000-4000-8000-000000000010", code: "PIZZA", name: "Browser Pizza", unit: "case", active: true }] });
+    }
+    if (path === "/api/v3/imports/records" && method === "GET") {
+      const kind = url.searchParams.get("kind");
+      assert.equal(url.searchParams.get("limit"), "100");
+      return json(route, {
+        kind,
+        records: kind === "recipes" ? [...masterRecords.values()].map((record) => ({ ...record, fingerprint: MASTER_FINGERPRINT })) : [],
+        nextCursor: null,
+      });
+    }
+    if (path === "/api/v3/imports/edits" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(Object.keys(body).sort(), ["expectedFingerprint", "kind", "record", "requestId"]);
+      const record = parseSetupMasterRecord(body.kind, body.record);
+      const prior = masterRequests.get(body.requestId);
+      if (prior) {
+        assert.deepEqual(body, prior, "exact product retry must preserve the request and canonical record");
+        const item = masterImports.get(MASTER_IMPORT_ID);
+        return json(route, { outcome: "staged", importId: MASTER_IMPORT_ID, kind: item.kind, rowCount: 1, replayed: true, records: item.records });
+      }
+      const item = {
+        id: MASTER_IMPORT_ID, kind: body.kind, status: "staged", rowCount: 1, records: [record],
+        editorBefore: body.expectedFingerprint === null ? null : masterRecords.get(record.code) ?? null,
+      };
+      masterRequests.set(body.requestId, body);
+      masterImports.set(MASTER_IMPORT_ID, item);
+      if (loseNextMasterStageResponse) {
+        loseNextMasterStageResponse = false;
+        return json(route, { error: "Synthetic product staging response loss after commit." }, 500);
+      }
+      return json(route, { outcome: "staged", importId: MASTER_IMPORT_ID, kind: item.kind, rowCount: 1, replayed: false, records: item.records }, 201);
+    }
+    const masterDetailMatch = path.match(/^\/api\/v3\/imports\/([0-9a-f-]+)$/);
+    if (masterDetailMatch && method === "GET") {
+      const item = masterImports.get(masterDetailMatch[1]);
+      return item ? json(route, { import: masterDetail(item) }) : json(route, { error: "Not found" }, 404);
+    }
+    const masterActionMatch = path.match(/^\/api\/v3\/imports\/([0-9a-f-]+)\/(apply|undo)$/);
+    if (masterActionMatch && method === "POST") {
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(request.postDataJSON(), {});
+      const item = masterImports.get(masterActionMatch[1]);
+      const action = masterActionMatch[2];
+      if (action === "apply") {
+        const replayed = item.status === "applied";
+        if (!replayed) {
+          item.status = "applied";
+          item.appliedAt = "2026-11-21T12:01:00.000Z";
+          item.appliedBy = STAFF_ID;
+          item.before = item.records.map((record) => ({ code: record.code, data: item.editorBefore }));
+          item.after = item.records.map((record) => ({ code: record.code, data: record }));
+          for (const record of item.records) masterRecords.set(record.code, record);
+        }
+        return json(route, { outcome: "applied", importId: item.id, kind: item.kind, replayed });
+      }
+      const replayed = item.status === "undone";
+      if (!replayed) {
+        item.status = "undone";
+        item.undoneAt = "2026-11-21T12:02:00.000Z";
+        item.undoneBy = STAFF_ID;
+        for (const record of item.records) {
+          if (item.editorBefore) masterRecords.set(record.code, item.editorBefore);
+          else masterRecords.delete(record.code);
+        }
+      }
+      return json(route, { outcome: "undone", importId: item.id, kind: item.kind, replayed });
+    }
     if (path.startsWith("/api/v3/setup-catalog/")) setupRequests.push(`${method} ${path}`);
     if (!["GET", "HEAD", "OPTIONS"].includes(method)) writes.push(`${method} ${path}`);
     if (path === "/api/v3/setup-catalog/imports" && method === "GET") {
@@ -107,7 +231,8 @@ async function installSetupApi(context, baseUrl, { manager = true } = {}) {
       const family = url.searchParams.get("family");
       return json(route, {
         family,
-        records: family === "ingredients" ? [...appliedRecords.values()].map((record) => ({
+        records: ["ingredients", "manager-lists"].includes(family) ? [...appliedRecords.values()].filter((record) =>
+          family === "ingredients" ? !record.code.startsWith("run-calc-") : record.code.startsWith("run-calc-")).map((record) => ({
           ...record, fingerprint: "d".repeat(64),
         })) : [],
         nextCursor: null,
@@ -171,6 +296,26 @@ async function installSetupApi(context, baseUrl, { manager = true } = {}) {
       }
       return json(route, { outcome: "staged", importId: IMPORT_ID, family: item.family, rowCount: item.rowCount, replayed: false, records, sourceSummary: item.sourceSummary }, 201);
     }
+    if (path === "/api/v3/setup-catalog/edits" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(Object.keys(body).sort(), ["expectedFingerprint", "family", "record", "requestId"]);
+      const record = parseSetupCatalogRecord(body.family, body.record);
+      const prior = requests.get(body.requestId);
+      if (prior) {
+        assert.deepEqual(body, prior, "exact typed retry must preserve request ID and record");
+        const item = imports.get(IMPORT_ID);
+        return json(route, { outcome: "staged", importId: IMPORT_ID, family: item.family, rowCount: 1, replayed: true, records: item.records, sourceSummary: null });
+      }
+      const item = {
+        id: IMPORT_ID, family: body.family, status: "staged", rowCount: 1, records: [record],
+        editorBefore: body.expectedFingerprint === null ? null : appliedRecords.get(record.code) ?? null,
+        sourceSummary: null,
+      };
+      requests.set(body.requestId, body);
+      imports.set(IMPORT_ID, item);
+      return json(route, { outcome: "staged", importId: IMPORT_ID, family: item.family, rowCount: 1, replayed: false, records: item.records, sourceSummary: null }, 201);
+    }
     const detailMatch = path.match(/^\/api\/v3\/setup-catalog\/imports\/([0-9a-f-]+)$/);
     if (detailMatch && method === "GET") {
       const item = imports.get(detailMatch[1]);
@@ -211,7 +356,11 @@ async function installSetupApi(context, baseUrl, { manager = true } = {}) {
     requests,
     imports,
     appliedRecords,
+    masterImports,
+    masterRequests,
+    masterRecords,
     loseNextStageResponse: () => { loseNextStageResponse = true; },
+    loseNextMasterStageResponse: () => { loseNextMasterStageResponse = true; },
   };
 }
 
@@ -379,6 +528,132 @@ test("cheese source review requires an explicit applicator slot before staging",
     sourceFamily: "cheese-mix-specs", sourceSha256: "c".repeat(64), parserVersion: "v1-source-import/1",
     sourceRows: 1, importedRows: 1, skippedRows: 0, unresolvedRows: 0,
   });
+  await context.close();
+});
+
+test("typed product capacity retries exactly and applies and undoes independently of catalogs", { timeout: 90_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installSetupApi(context, baseUrl);
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#setup`);
+  const editor = page.getByRole("region", { name: "Dough yield and shipping capacity", exact: true });
+  await editor.getByText("Browser dough procedure", { exact: true }).waitFor();
+  await editor.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByLabel("Doughball yield", { exact: true }).fill("125");
+  api.loseNextMasterStageResponse();
+  await page.getByRole("button", { name: "Stage capacity edit", exact: true }).click();
+  await page.getByText(/Retry the same request; its request ID prevents duplicate imports/).waitFor();
+  assert.equal(api.masterImports.size, 1);
+  assert.equal(api.masterRecords.get("DOUGH-BROWSER").data.doughballYield, 100, "staging must not mutate canonical product setup");
+  assert.equal(api.appliedRecords.size, 0, "product staging must not touch catalog records");
+  assert.equal(await editor.getByRole("button", { name: "Create capacity record", exact: true }).isDisabled(), true, "an unresolved write pauses other setup writes");
+  const originalRequest = [...api.masterRequests.values()][0];
+
+  await page.reload();
+  await page.getByRole("button", { name: "Retry the same staging request", exact: true }).click();
+  await page.getByText(/The previous staging request was confirmed\. The canonical setup review has been reloaded\./).waitFor();
+  assert.equal(api.masterImports.size, 1);
+  assert.deepEqual([...api.masterRequests.values()], [originalRequest]);
+  const review = page.getByRole("region", { name: "Product setup review", exact: true });
+  await review.getByLabel("Before product values for DOUGH-BROWSER", { exact: true }).waitFor();
+  assert.match(await review.getByLabel("Product values for DOUGH-BROWSER", { exact: true }).textContent(), /125/u);
+  await review.getByRole("button", { name: "Apply reviewed product setup", exact: true }).click();
+  await page.getByText(/Product setup import applied\. Catalog records were not changed by this action\. Canonical history reloaded\./).waitFor();
+  assert.equal(api.masterRecords.get("DOUGH-BROWSER").data.doughballYield, 125);
+  assert.equal(api.appliedRecords.size, 0, "product Apply must not apply a catalog record");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await review.getByRole("button", { name: "Undo applied product setup", exact: true }).click();
+  await page.getByText(/Product setup import undone\. Server dependency and later-edit rules were enforced\. Canonical history reloaded\./).waitFor();
+  assert.equal(api.masterRecords.get("DOUGH-BROWSER").data.doughballYield, 100);
+  assert.equal(api.appliedRecords.size, 0);
+  await page.getByRole("button", { name: "Reload canonical product review", exact: true }).click();
+  await page.getByText(/Canonical product setup details reloaded\. Review the preserved values before acting\./u).waitFor();
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test("named recipe variants stage canonically and legacy allergens require explicit resolution", { timeout: 90_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installSetupApi(context, baseUrl, { seedSetup2: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#setup`);
+  await page.locator("#setup-catalog-family").selectOption("manager-lists");
+  const catalog = page.getByRole("region", { name: "Named recipes and directories", exact: true });
+  await catalog.getByText("run-calc-dough-recipe-presets", { exact: true }).first().waitFor();
+  await catalog.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByLabel("Search named recipes", { exact: true }).fill("missing recipe");
+  await page.getByText("No named recipes match this search.", { exact: true }).waitFor();
+  await page.getByLabel("Search named recipes", { exact: true }).fill("House");
+  const recipe = page.getByRole("article", { name: "Named recipe 1", exact: true });
+  await recipe.getByLabel("Premade crust", { exact: true }).check();
+  await recipe.getByRole("button", { name: "Add doughball variant", exact: true }).click();
+  await recipe.getByLabel("Variant label", { exact: true }).nth(1).fill("Large 16");
+  await recipe.getByLabel("Weight oz (optional)", { exact: true }).nth(1).fill("16");
+  await recipe.getByLabel("Per tray (optional)", { exact: true }).nth(1).fill("12");
+  await recipe.getByRole("button", { name: "Add customer pairing", exact: true }).nth(1).click();
+  await recipe.getByLabel("Brand", { exact: true }).last().fill("Second Brand");
+  await recipe.getByLabel("Flavor", { exact: true }).last().fill("Supreme");
+  await page.getByRole("button", { name: "Stage typed edit", exact: true }).click();
+  const review = page.getByRole("region", { name: "Setup import review", exact: true });
+  await review.getByLabel("Values for run-calc-dough-recipe-presets", { exact: true }).waitFor();
+  assert.match(await review.getByLabel("Values for run-calc-dough-recipe-presets", { exact: true }).textContent(), /Large 16/u);
+  await review.getByRole("button", { name: "Apply reviewed import", exact: true }).click();
+  await page.getByText(/1 setup rows created and 0 updated\. Canonical history reloaded\./).waitFor();
+  const appliedRecipe = api.appliedRecords.get("run-calc-dough-recipe-presets").data.value["House Dough"];
+  assert.equal(appliedRecipe.isPremadeCrust, true);
+  assert.deepEqual(appliedRecipe.doughballVariants[1], {
+    label: "Large 16", weightOz: 16, perTray: 12, customers: [{ brand: "Second Brand", flavor: "Supreme" }],
+  });
+  assert.equal(api.masterRecords.get("DOUGH-BROWSER").data.doughballYield, 100, "catalog Apply must not change product setup");
+
+  await page.locator("#setup-catalog-family").selectOption("ingredients");
+  const ingredients = page.getByRole("region", { name: "Ingredients and allergens", exact: true });
+  await ingredients.getByText("Legacy allergen ingredient", { exact: true }).waitFor();
+  await ingredients.getByRole("button", { name: "Edit", exact: true }).click();
+  assert.equal(await page.getByLabel("Allergen mapping reviewed", { exact: true }).isDisabled(), true);
+  await page.getByText("Unrecognized legacy allergen text", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Remove legacy allergen text 1", exact: true }).click();
+  assert.equal(await page.getByLabel("Allergen mapping reviewed", { exact: true }).isEnabled(), true);
+  await page.getByLabel("wheat", { exact: true }).check();
+  await page.getByLabel("Allergen mapping reviewed", { exact: true }).check();
+  await ingredients.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test("named recipe renames cannot silently replace an existing recipe", { timeout: 30_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installSetupApi(context, baseUrl, { seedSetup2: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#setup`);
+  await page.locator("#setup-catalog-family").selectOption("manager-lists");
+  const catalog = page.getByRole("region", { name: "Named recipes and directories", exact: true });
+  await catalog.getByText("run-calc-dough-recipe-presets", { exact: true }).first().waitFor();
+  await catalog.getByRole("button", { name: "Edit", exact: true }).click();
+  await catalog.getByRole("button", { name: "Add named recipe", exact: true }).click();
+  const first = catalog.getByRole("article", { name: "Named recipe 1", exact: true });
+  const second = catalog.getByRole("article", { name: "Named recipe 2", exact: true });
+  assert.equal(await second.getByLabel("Recipe name", { exact: true }).inputValue(), "Recipe 2");
+  await first.getByLabel("Recipe name", { exact: true }).fill("Recipe 2");
+  await catalog.getByText("Recipe names must be unique. The existing recipes were not changed.", { exact: true }).waitFor();
+  assert.equal(await first.getByLabel("Recipe name", { exact: true }).inputValue(), "House Dough");
+  assert.equal(await second.getByLabel("Recipe name", { exact: true }).inputValue(), "Recipe 2");
+  await catalog.getByRole("button", { name: "Add named recipe", exact: true }).click();
+  const third = catalog.getByRole("article", { name: "Named recipe 3", exact: true });
+  assert.equal(await third.getByLabel("Recipe name", { exact: true }).inputValue(), "Recipe 3");
+  await catalog.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.deepEqual(api.writes, []);
+  assert.deepEqual(errors, []);
   await context.close();
 });
 

@@ -717,9 +717,12 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0012-freezer-surplus.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0013-warehouse-operations.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0014-setup-catalog-editors.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0015-setup-management.sql" >/dev/null
 "${PSQL[@]}" -c "
   GRANT EXECUTE ON FUNCTION v3.list_setup_catalog_records(uuid, text, integer, text) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.stage_setup_catalog_edit(uuid, uuid, text, text, text, jsonb, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.list_setup_master_records(uuid, text, integer, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.stage_setup_master_edit(uuid, uuid, text, text, text, jsonb, text) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.apply_setup_catalog_import(uuid, uuid, uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.get_setup_catalog_import(uuid, uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.warehouse_guidance(uuid) TO v3_api_test;
@@ -782,6 +785,23 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0012-freezer-surplus.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0013-warehouse-operations.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0014-setup-catalog-editors.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0015-setup-management.test.sql"
+SETUP_EDITOR_PRIVILEGES="$("${PSQL[@]}" -c "
+  SET ROLE v3_api_test;
+  SELECT has_function_privilege(current_user,
+    'v3.list_setup_master_records(uuid,text,integer,text)', 'EXECUTE')
+    AND has_function_privilege(current_user,
+    'v3.stage_setup_master_edit(uuid,uuid,text,text,text,jsonb,text)', 'EXECUTE')
+    AND NOT has_function_privilege(current_user,
+    'v3.apply_setup_import_without_editor_fence(uuid,uuid,uuid)', 'EXECUTE')
+    AND NOT has_function_privilege(current_user,
+    'v3.apply_setup_catalog_import_without_editor_fence(uuid,uuid,uuid)', 'EXECUTE');
+  RESET ROLE;
+")"
+if [[ "$SETUP_EDITOR_PRIVILEGES" != "t" ]]; then
+  echo "Restricted API role has unsafe or incomplete setup editor function access." >&2
+  exit 1
+fi
 ENCODED_DB_USER="$(python3 - "$DB_USER" <<'PY'
 import sys
 import urllib.parse

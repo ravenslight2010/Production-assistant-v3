@@ -90,3 +90,55 @@ test("typed editor records round-trip through every strict family parser", () =>
     }, extra: true,
   }), /exactly code, name/u);
 });
+
+
+test("named recipes preserve dough variants and fixed-nine allergen review semantics", () => {
+  const recipe = {
+    rows: [{ ingredient: "Flour", ingredientId: "ING-1", lbs: 40 }],
+    doughballWeightOz: 8,
+    doughballsPerTray: 24,
+    brand: "Example Brand",
+    flavors: ["Original"],
+    notes: "Manager-reviewed dough recipe",
+    enabled: true,
+    isPremadeCrust: false,
+    doughballVariants: [{
+      label: "8 oz / 24",
+      weightOz: 8,
+      perTray: 24,
+      customers: [{ brand: "Example Brand", flavor: "Original" }],
+    }],
+  };
+  const record = parseSetupCatalogRecord("manager-lists", {
+    code: "run-calc-dough-recipe-presets",
+    name: "run-calc-dough-recipe-presets",
+    data: { key: "run-calc-dough-recipe-presets", value: { "House Dough": recipe } },
+  });
+  assert.deepEqual(record.data.value["House Dough"], recipe);
+  assert.throws(() => parseSetupCatalogRecord("manager-lists", {
+    code: "run-calc-dough-recipe-presets",
+    name: "run-calc-dough-recipe-presets",
+    data: { key: "run-calc-dough-recipe-presets", value: { "House Dough": {
+      ...recipe,
+      doughballVariants: [{ label: "Same" }, { label: " same  " }],
+    } } },
+  }), /distinct/u);
+  assert.throws(() => parseSetupCatalogRecord("manager-lists", {
+    code: "run-calc-cheese-recipe-presets",
+    name: "run-calc-cheese-recipe-presets",
+    data: { key: "run-calc-cheese-recipe-presets", value: { "House Dough": recipe } },
+  }), /unsupported shape/u);
+
+  const base = {
+    code: "ING-ALLERGEN", name: "Ingredient", data: {
+      categories: [], allergens: ["milk", "sesame"], allergensReviewed: true, mergedIntoCode: null, enabled: true,
+    },
+  };
+  assert.deepEqual(parseSetupCatalogRecord("ingredients", base), base);
+  assert.throws(() => parseSetupCatalogRecord("ingredients", {
+    ...base, data: { ...base.data, allergens: ["legacy uncertain text"] },
+  }), /fixed nine/u);
+  assert.deepEqual(parseSetupCatalogRecord("ingredients", {
+    ...base, data: { ...base.data, allergens: ["legacy uncertain text"], allergensReviewed: false },
+  }).data.allergens, ["legacy uncertain text"]);
+});

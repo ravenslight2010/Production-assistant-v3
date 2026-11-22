@@ -3,8 +3,10 @@ import {
   type DieDefaultSaveRequest,
   type SetupCatalogEditRequest,
   type SetupCatalogStageRequest,
+  type SetupMasterEditRequest,
 } from "../api";
 import { parseSetupCatalogRecord } from "../../../core/setup-catalog-csv.mjs";
+import { parseSetupMasterRecord } from "../../../core/setup-master-records.mjs";
 
 const PENDING_PREFIX = "fieldline:v3:setup-catalog-pending:";
 const FAMILIES = new Set([
@@ -14,7 +16,7 @@ const FAMILIES = new Set([
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
 const FINGERPRINT = /^[0-9a-f]{64}$/u;
 
-export type PendingSetupCatalogRequest = SetupCatalogStageRequest | SetupCatalogEditRequest | DieDefaultSaveRequest;
+export type PendingSetupCatalogRequest = SetupCatalogStageRequest | SetupCatalogEditRequest | SetupMasterEditRequest | DieDefaultSaveRequest;
 
 function pendingKey(userId: string): string {
   return `${PENDING_PREFIX}${userId}`;
@@ -44,6 +46,23 @@ export function readPendingSetupCatalogImport(userId: string): PendingSetupCatal
         return null;
       }
       return value as unknown as DieDefaultSaveRequest;
+    }
+    if (Object.hasOwn(value, "kind")) {
+      if (Object.keys(value).sort().join("\u0000") !== "expectedFingerprint\u0000kind\u0000record\u0000requestId"
+        || typeof value.kind !== "string" || !["recipes", "production-setups"].includes(value.kind)
+        || (value.expectedFingerprint !== null
+          && (typeof value.expectedFingerprint !== "string" || !FINGERPRINT.test(value.expectedFingerprint)))) {
+        sessionStorage.removeItem(key);
+        return null;
+      }
+      const kind = value.kind as SetupMasterEditRequest["kind"];
+      const record = parseSetupMasterRecord(kind, value.record);
+      return {
+        requestId: value.requestId,
+        kind,
+        record,
+        expectedFingerprint: value.expectedFingerprint as string | null,
+      };
     }
     if (typeof value.family !== "string" || !FAMILIES.has(value.family)) {
       sessionStorage.removeItem(key);

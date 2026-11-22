@@ -29,6 +29,15 @@ export type SetupCatalogStageRequest = components["schemas"]["SetupCatalogReques
 export type SetupCatalogEditRequest = components["schemas"]["SetupCatalogEditRequest"];
 export type SetupCatalogRecordPage = components["schemas"]["SetupCatalogRecordPage"];
 export type SetupCatalogListedRecord = components["schemas"]["SetupCatalogListedRecord"];
+export type SetupMasterKind = components["schemas"]["SetupMasterEditRequest"]["kind"];
+export type SetupMasterRecord = components["schemas"]["SetupImportMasterRecord"];
+export type SetupMasterListedRecord = components["schemas"]["SetupMasterListedRecord"];
+export type SetupMasterRecordPage = components["schemas"]["SetupMasterRecordPage"];
+export type SetupMasterEditRequest = components["schemas"]["SetupMasterEditRequest"];
+export type SetupMasterStageResponse = components["schemas"]["SetupImportPreview"];
+export type SetupImportHistoryItem = components["schemas"]["ImportHistoryItem"];
+export type SetupImportDetail = components["schemas"]["SetupImportDetail"];
+export type SetupImportActionResult = components["schemas"]["ImportResult"];
 export type ReviewedDieDefault = components["schemas"]["ReviewedDieDefault"];
 export type ReviewedDieLineSettings = components["schemas"]["ReviewedDieLineSettings"];
 export type DieDefaultHistoryItem = components["schemas"]["DieDefaultHistoryItem"];
@@ -379,6 +388,47 @@ function isSetupCatalogDetail(value: unknown): value is SetupCatalogDetail {
     && (candidate.after === null || (Array.isArray(candidate.after) && candidate.after.every(object)));
 }
 
+function isSetupMasterRecord(value: unknown): value is SetupMasterRecord {
+  return object(value) && typeof value.code === "string" && typeof value.name === "string"
+    && typeof value.productCode === "string" && object(value.data);
+}
+
+function isSetupMasterListedRecord(value: unknown): value is SetupMasterListedRecord {
+  const candidate = value as (SetupMasterRecord & { fingerprint?: unknown }) | null;
+  return isSetupMasterRecord(candidate) && typeof candidate.fingerprint === "string"
+    && /^[0-9a-f]{64}$/u.test(candidate.fingerprint);
+}
+
+function isSetupImportProduct(value: unknown): value is components["schemas"]["SetupImportProduct"] {
+  return object(value) && typeof value.code === "string" && typeof value.name === "string"
+    && typeof value.unit === "string";
+}
+
+function isSetupImportHistoryItem(value: unknown): value is SetupImportHistoryItem {
+  return object(value) && typeof value.id === "string" && UUID.test(value.id)
+    && ["products", "recipes", "production-setups"].includes(String(value.kind))
+    && ["staged", "applied", "undone"].includes(String(value.status))
+    && Number.isSafeInteger(value.rowCount) && Number(value.rowCount) >= 1
+    && typeof value.createdBy === "string" && UUID.test(value.createdBy)
+    && (value.appliedBy === null || (typeof value.appliedBy === "string" && UUID.test(value.appliedBy)))
+    && (value.undoneBy === null || (typeof value.undoneBy === "string" && UUID.test(value.undoneBy)))
+    && typeof value.createdAt === "string"
+    && (value.appliedAt === null || typeof value.appliedAt === "string")
+    && (value.undoneAt === null || typeof value.undoneAt === "string");
+}
+
+function isSetupImportDetail(value: unknown): value is SetupImportDetail {
+  if (!isSetupImportHistoryItem(value)) return false;
+  const candidate = value as SetupImportHistoryItem & Partial<SetupImportDetail>;
+  return Array.isArray(candidate.records) && candidate.records.length === value.rowCount
+    && candidate.records.every((record) => value.kind === "products"
+      ? isSetupImportProduct(record)
+      : isSetupMasterRecord(record))
+    && (candidate.editorBefore === null || isSetupMasterRecord(candidate.editorBefore))
+    && (candidate.before === null || (Array.isArray(candidate.before) && candidate.before.every(object)))
+    && (candidate.after === null || (Array.isArray(candidate.after) && candidate.after.every(object)));
+}
+
 export async function previewSourceWorkbook(input: {
   family: SourceWorkbookFamily;
   fileName: string;
@@ -477,6 +527,75 @@ export async function actOnSetupCatalogImport(
   const path = action === "apply"
     ? "/api/v3/setup-catalog/imports/{importId}/apply"
     : "/api/v3/setup-catalog/imports/{importId}/undo";
+  const result = await unwrap(await client.POST(path, {
+    params: { path: { importId }, header: mutationHeaders() },
+    body: {},
+  }));
+  const expectedOutcome = action === "apply" ? "applied" : "undone";
+  if (result.outcome !== expectedOutcome || result.importId !== importId || typeof result.replayed !== "boolean") {
+    throw new ApiError("The server did not confirm the setup action. Reload history before retrying.", 502);
+  }
+  return result;
+}
+
+export async function listSetupImports(): Promise<SetupImportHistoryItem[]> {
+  const result = await unwrap(await client.GET("/api/v3/imports", {
+    params: { query: { limit: 50 } },
+  }));
+  if (!Array.isArray(result.imports) || !result.imports.every(isSetupImportHistoryItem)) {
+    throw new ApiError("The server returned incomplete setup import history. Refresh and retry.", 502);
+  }
+  return result.imports;
+}
+
+export async function listSetupMasterRecords(
+  kind: SetupMasterKind,
+  after: string | null = null,
+): Promise<SetupMasterRecordPage> {
+  const result = await unwrap(await client.GET("/api/v3/imports/records", {
+    params: { query: { kind, limit: 100, ...(after ? { after } : {}) } },
+  }));
+  if (result.kind !== kind || !Array.isArray(result.records) || result.records.length > 100
+    || !result.records.every(isSetupMasterListedRecord)
+    || (result.nextCursor !== null
+      && (typeof result.nextCursor !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(result.nextCursor)))) {
+    throw new ApiError("The server returned an incomplete setup record page. Refresh and retry.", 502);
+  }
+  return result;
+}
+
+export async function stageSetupMasterEdit(
+  request: SetupMasterEditRequest,
+): Promise<SetupMasterStageResponse> {
+  const result = await unwrap(await client.POST("/api/v3/imports/edits", {
+    params: { header: mutationHeaders() },
+    body: request,
+  }));
+  if (result.outcome !== "staged" || !UUID.test(result.importId) || result.kind !== request.kind
+    || result.rowCount !== 1 || typeof result.replayed !== "boolean"
+    || !Array.isArray(result.records) || result.records.length !== 1 || !isSetupMasterRecord(result.records[0])) {
+    throw new ApiError("The server did not return a complete typed capacity review. Retry the same request.", 502);
+  }
+  return result;
+}
+
+export async function getSetupImport(importId: string): Promise<SetupImportDetail> {
+  const result = await unwrap(await client.GET("/api/v3/imports/{importId}", {
+    params: { path: { importId } },
+  }));
+  if (!isSetupImportDetail(result.import)) {
+    throw new ApiError("The stored setup review was incomplete. Reload history and retry.", 502);
+  }
+  return result.import;
+}
+
+export async function actOnSetupImport(
+  importId: string,
+  action: "apply" | "undo",
+): Promise<SetupImportActionResult> {
+  const path = action === "apply"
+    ? "/api/v3/imports/{importId}/apply"
+    : "/api/v3/imports/{importId}/undo";
   const result = await unwrap(await client.POST(path, {
     params: { path: { importId }, header: mutationHeaders() },
     body: {},

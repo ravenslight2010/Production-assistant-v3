@@ -9,6 +9,7 @@ import {
   parseSetupCatalogRecord,
   setupCatalogCsvLimits,
 } from "../core/setup-catalog-csv.mjs";
+import { parseSetupMasterRecord, setupMasterRecordLimits } from "../core/setup-master-records.mjs";
 import {
   parseSourceWorkbook,
   SourceWorkbookImportError,
@@ -24,6 +25,8 @@ import {
 import { DIE_DEFAULT_FIELDS, REQUIRED_DIE_DEFAULT_FIELDS, isDieLineSettings } from "../core/die-defaults.mjs";
 
 const IMPORTS_PATH = "/api/v3/imports";
+const SETUP_MASTER_RECORDS_PATH = `${IMPORTS_PATH}/records`;
+const SETUP_MASTER_EDITS_PATH = `${IMPORTS_PATH}/edits`;
 const SETUP_CATALOG_ROOT = "/api/v3/setup-catalog";
 const SETUP_CATALOG_PATH = `${SETUP_CATALOG_ROOT}/imports`;
 const SETUP_CATALOG_RECORDS_PATH = `${SETUP_CATALOG_ROOT}/records`;
@@ -193,6 +196,23 @@ function parseCatalogListQuery(url) {
     throw new InventoryApiError(400, "The setup catalog cursor is invalid.");
   }
   return { family, limit: parseLimit(url, { extra: ["family", "after"] }), after };
+}
+
+function parseMasterListQuery(url) {
+  const allowed = new Set(["kind", "limit", "after"]);
+  if ([...url.searchParams.keys()].some((key) => !allowed.has(key))
+    || ["kind", "limit", "after"].some((key) => url.searchParams.getAll(key).length > 1)) {
+    throw new InventoryApiError(400, "Unsupported setup record list query.");
+  }
+  const kind = url.searchParams.get("kind");
+  if (typeof kind !== "string" || !setupMasterRecordLimits.kinds.includes(kind)) {
+    throw new InventoryApiError(400, "Choose dough recipes or production setups.");
+  }
+  const after = url.searchParams.get("after");
+  if (after !== null && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(after)) {
+    throw new InventoryApiError(400, "The setup record cursor is invalid.");
+  }
+  return { kind, limit: parseLimit(url, { extra: ["kind", "after"] }), after };
 }
 
 function safeStatus(error) {
@@ -438,6 +458,7 @@ export function createInventoryApi({ pool, authenticate, verifyCsrf, logger = ()
           || url.pathname === `${IMPORTS_PATH}/workbooks/preview`
           || url.pathname === SETUP_CATALOG_PATH
           || url.pathname === SETUP_CATALOG_EDITS_PATH
+          || url.pathname === SETUP_MASTER_EDITS_PATH
           || url.pathname === SOURCE_WORKBOOK_PREVIEW_PATH
           || url.pathname === `${INVENTORY_PATH}/opening-counts`
         ) {
@@ -600,6 +621,51 @@ export function createInventoryApi({ pool, authenticate, verifyCsrf, logger = ()
           [...scope, actor, requestId, hashRequest(payload), payload.lotId, body.eventType, body.cases, payload.reason, body.expectedRevision, hasCorrection ? payload.correctsEventId : null],
         );
         sendJson(response, 200, resultValue(result));
+        return true;
+      }
+
+      if (isImports && url.pathname === SETUP_MASTER_RECORDS_PATH && request.method === "GET") {
+        operation = "list_setup_master_records";
+        const { kind, limit, after } = parseMasterListQuery(url);
+        const result = await pool.query(
+          "SELECT v3.list_setup_master_records($1::uuid, $2::text, $3::integer, $4::text) AS result",
+          [...scope, kind, limit, after],
+        );
+        const page = resultValue(result);
+        if (!page || page.kind !== kind || !Array.isArray(page.records)
+          || page.records.length > limit || page.records.some((record) =>
+            !record || typeof record.fingerprint !== "string" || !/^[0-9a-f]{64}$/u.test(record.fingerprint))) {
+          throw new InventoryApiError(502, "The setup record page is incomplete. Refresh and try again.");
+        }
+        sendJson(response, 200, page);
+        return true;
+      }
+
+      if (isImports && url.pathname === SETUP_MASTER_EDITS_PATH && request.method === "POST") {
+        operation = "stage_setup_master_edit";
+        const body = await readJsonBody(request);
+        requireKeys(body, ["requestId", "kind", "record", "expectedFingerprint"]);
+        const requestId = validateRequestId(body.requestId);
+        if (typeof body.kind !== "string" || !setupMasterRecordLimits.kinds.includes(body.kind)
+          || (body.expectedFingerprint !== null
+            && (typeof body.expectedFingerprint !== "string" || !/^[0-9a-f]{64}$/u.test(body.expectedFingerprint)))) {
+          throw new InventoryApiError(400, "Choose a dough recipe or production setup and its current server fingerprint.");
+        }
+        const record = parseSetupMasterRecord(body.kind, body.record);
+        const requestHash = hashRequest({
+          kind: body.kind,
+          record,
+          expectedFingerprint: body.expectedFingerprint,
+        });
+        const result = await pool.query(
+          "SELECT v3.stage_setup_master_edit($1::uuid, $2::uuid, $3::text, $4::text, $5::text, $6::jsonb, $7::text) AS result",
+          [...scope, actor, requestId, requestHash, body.kind, JSON.stringify(record), body.expectedFingerprint],
+        );
+        const staged = resultValue(result);
+        if (!staged || staged.kind !== body.kind || staged.rowCount !== 1) {
+          throw new InventoryApiError(502, "The server did not confirm the staged setup edit.");
+        }
+        sendJson(response, staged.replayed ? 200 : 201, { ...staged, records: [record] });
         return true;
       }
 
