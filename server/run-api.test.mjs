@@ -17,7 +17,9 @@ const RUN = {
   resumedAt: null,
   completedAt: null,
   runToTime: "19:15",
+  operationalNotes: "",
   setupSnapshot: { label: "Run A", targetCases: 12 },
+  stoppages: [],
   pauseIntervals: [],
 };
 const PRODUCTION_PLAN = {
@@ -96,6 +98,20 @@ async function withApi(t, overrides = {}, options = {}) {
         : { outcome: "conflict", expectedRevision: input.command.expectedRevision, currentRun: { ...RUN, runToTime: "18:45", revision: 1 } };
     },
   };
+  const operations = {
+    execute: async (input) => {
+      calls.push(["operation", input]);
+      return { outcome: "accepted", replayed: false, commandId: input.command.commandId, run: { ...RUN, revision: 1 } };
+    },
+    getStopReasons: async (input) => {
+      calls.push(["getStopReasons", input]);
+      return { revision: 0, reasons: ["Break"], updatedAt: null };
+    },
+    saveStopReasons: async (input) => {
+      calls.push(["saveStopReasons", input]);
+      return { outcome: "accepted", replayed: false, settings: { revision: 1, reasons: input.command.reasons, updatedAt: RUN.updatedAt } };
+    },
+  };
   const stations = {
     execute: async (input) => {
       calls.push(["station", input]);
@@ -112,6 +128,7 @@ async function withApi(t, overrides = {}, options = {}) {
     runs: { ...runs, ...overrides.runs },
     commands: { ...commands, ...overrides.commands },
     runToTimes: { ...runToTimes, ...overrides.runToTimes },
+    operations: { ...operations, ...overrides.operations },
     stations: { ...stations, ...overrides.stations },
     authenticate: overrides.authenticate ?? (async () => AUTH),
     verifyCsrf: overrides.verifyCsrf ?? (async (request, auth) => auth === AUTH && request.headers["x-csrf-token"] === "ok"),
@@ -438,4 +455,44 @@ test("composes the HTTP API with server services and a parameterized PostgreSQL 
   assert.equal(authorizations[3].commandType, "start");
   assert.equal(authorizations[4].commandType, "run_to_time");
   assert.ok(authorizations.every(({ auth }) => auth === AUTH));
+});
+
+
+test("serves stop reasons and forwards exact operational commands", async (t) => {
+  const { baseUrl, calls } = await withApi(t);
+  const reasons = await send(baseUrl, "/api/v3/operations/stop-reasons");
+  assert.equal(reasons.status, 200);
+  assert.deepEqual((await reasons.json()).settings.reasons, ["Break"]);
+
+  const saved = await send(baseUrl, "/api/v3/operations/stop-reasons", {
+    method: "POST",
+    body: { commandId: "reasons-1", expectedRevision: 0, reasons: ["Break", "Quality hold"] },
+  });
+  assert.equal(saved.status, 200);
+  assert.equal((await saved.json()).settings.revision, 1);
+
+  const response = await send(baseUrl, `/api/v3/runs/${RUN_ID}/operations/commands`, {
+    method: "POST",
+    body: {
+      commandId: "notes-1", commandType: "set_notes", expectedRevision: 0,
+      details: { operationalNotes: "Watch the freezer infeed." },
+    },
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls.at(-1), ["operation", {
+    auth: AUTH,
+    command: {
+      runId: RUN_ID, commandId: "notes-1", commandType: "set_notes", expectedRevision: 0,
+      details: { operationalNotes: "Watch the freezer infeed." },
+    },
+  }]);
+
+  const bypass = await send(baseUrl, `/api/v3/runs/${RUN_ID}/operations/commands`, {
+    method: "POST",
+    body: {
+      commandId: "notes-2", commandType: "set_notes", expectedRevision: 0,
+      details: { operationalNotes: "No" }, bypass: true,
+    },
+  });
+  assert.equal(bypass.status, 400);
 });

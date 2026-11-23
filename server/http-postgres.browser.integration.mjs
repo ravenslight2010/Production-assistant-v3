@@ -68,6 +68,8 @@ async function main() {
   let offlineCheckActive = false;
   let loseRunToTimeResponse = false;
   const runToTimeRequests = [];
+  let loseOperationResponse = false;
+  const operationRequests = [];
   let loseScheduleUpdateResponse = false;
   let loseSetupStageResponse = false;
   let setupImportId;
@@ -140,6 +142,25 @@ async function main() {
             status: 500,
             contentType: "application/json",
             body: JSON.stringify({ error: "Synthetic Run to Time response loss after the disposable database commit." }),
+          });
+          return;
+        }
+      }
+      await route.continue();
+    });
+    await context.route("**/api/v3/runs/*/operations/commands", async (route) => {
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON();
+        operationRequests.push(body);
+        assert.deepEqual(Object.keys(body).sort(), ["commandId", "commandType", "details", "expectedRevision"]);
+        if (loseOperationResponse && body.commandType === "start_stop") {
+          loseOperationResponse = false;
+          const committed = await route.fetch();
+          assert.equal(committed.status(), 200, await committed.text());
+          await route.fulfill({
+            status: 500,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "Synthetic operational response loss after the disposable database commit." }),
           });
           return;
         }
@@ -339,7 +360,126 @@ async function main() {
     assert.equal(runToTimeRequests.length, 4);
     assert.notEqual(runToTimeRequests[3].commandId, runToTimeRequests[0].commandId);
 
-    for (const [command, expectedStatus] of [["pause", "paused"], ["resume", "running"], ["complete", "completed"]]) {
+    const operations = page.locator('section[aria-labelledby="operations-heading"]');
+    const operationPath = `/api/v3/runs/${createdRun.id}/operations/commands`;
+    const submitOperation = async (targetPage, commandType, action) => {
+      const responsePromise = targetPage.waitForResponse((response) =>
+        new URL(response.url()).pathname === operationPath
+        && response.request().method() === "POST"
+        && response.request().postDataJSON().commandType === commandType);
+      await action();
+      const response = await responsePromise;
+      const body = await response.json();
+      assert.notEqual(response.status(), 400, `${commandType} was rejected: ${JSON.stringify(body)}; request=${JSON.stringify(response.request().postDataJSON())}; runStartedAt=${startedRun.startedAt}`);
+      return { response, body };
+    };
+
+    await operations.getByLabel(/^Reason/).selectOption("Equipment jam");
+    await operations.getByLabel("Notes", { exact: true }).fill("Real database infeed stop");
+    loseOperationResponse = true;
+    const lostStop = await submitOperation(page, "start_stop", () =>
+      operations.getByRole("button", { name: "Start line stop", exact: true }).click());
+    assert.equal(lostStop.response.status(), 500);
+    await operations.getByRole("alert").filter({ hasText: "Synthetic operational response loss" }).waitFor();
+    const retryStop = await submitOperation(page, "start_stop", () =>
+      operations.getByRole("button", { name: "Start line stop", exact: true }).click());
+    assert.equal(retryStop.response.status(), 200, JSON.stringify(retryStop.body));
+    assert.equal(retryStop.body.replayed, true);
+    assert.equal(retryStop.body.run.stoppages.length, 1);
+    assert.equal(operationRequests.length, 2);
+    assert.equal(operationRequests[0].commandId, operationRequests[1].commandId);
+    assert.equal(operationRequests[0].expectedRevision, operationRequests[1].expectedRevision);
+    const activeStop = operations.locator('article[data-stoppage-type="stop"]');
+    await activeStop.getByText("Real database infeed stop", { exact: true }).waitFor();
+    const endedStop = await submitOperation(page, "end_stop", () =>
+      activeStop.getByRole("button", { name: "End stop", exact: true }).click());
+    assert.equal(endedStop.response.status(), 200);
+    assert.ok(endedStop.body.run.stoppages[0].endedAt);
+
+    await operations.getByRole("button", { name: "Add past event", exact: true }).click();
+    const pastForm = operations.getByRole("form", { name: "Past stoppage", exact: true });
+    const localDateTime = async (iso) => page.evaluate((value) => {
+      const date = new Date(value);
+      return new Date(date.valueOf() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
+    }, iso);
+    const pastStart = await localDateTime(new Date(Date.parse(startedRun.startedAt) + 1000).toISOString());
+    const pastEnd = await localDateTime(new Date(Date.parse(startedRun.startedAt) + 2000).toISOString());
+    await pastForm.getByLabel(/^Reason/).selectOption("Break");
+    await pastForm.getByLabel("Notes", { exact: true }).fill("Real database crew rotation");
+    await pastForm.getByLabel("Started", { exact: true }).fill(pastStart);
+    await pastForm.getByLabel("Ended", { exact: true }).fill(pastEnd);
+    const pastStop = await submitOperation(page, "add_past_stop", () =>
+      pastForm.getByRole("button", { name: "Record past event", exact: true }).click());
+    assert.equal(pastStop.response.status(), 200, JSON.stringify(pastStop.body));
+    const manual = operations.locator('article[data-stoppage-type="manual"]');
+    await manual.getByText("Real database crew rotation", { exact: true }).waitFor();
+    await manual.getByRole("button", { name: "Edit", exact: true }).click();
+    const editStoppage = operations.getByRole("form", { name: "Edit stoppage", exact: true });
+    await editStoppage.getByLabel("Notes", { exact: true }).fill("Corrected real database crew rotation");
+    const editedStop = await submitOperation(page, "update_stoppage", () =>
+      editStoppage.getByRole("button", { name: "Save stoppage", exact: true }).click());
+    assert.equal(editedStop.response.status(), 200, JSON.stringify(editedStop.body));
+    await manual.getByText("Corrected real database crew rotation", { exact: true }).waitFor();
+    const deletedStop = await submitOperation(page, "delete_stoppage", () =>
+      manual.getByRole("button", { name: "Delete", exact: true }).click());
+    assert.equal(deletedStop.response.status(), 200);
+    await manual.waitFor({ state: "detached" });
+    const persistedManual = await adminPool.query(
+      "SELECT voided_at IS NOT NULL AS voided FROM v3.run_stoppages WHERE id = $1",
+      [pastStop.body.run.stoppages.find((item) => item.type === "manual").id],
+    );
+    assert.equal(persistedManual.rows[0].voided, true, "manual deletion must retain its audited row");
+
+    const operationsStalePage = await context.newPage();
+    observePage(operationsStalePage);
+    await operationsStalePage.goto(baseUrl);
+    await selectRun(operationsStalePage, createdRun.id, runLabel);
+    const staleOperations = operationsStalePage.locator('section[aria-labelledby="operations-heading"]');
+    const operationalHandoff = `Real database operational handoff ${suffix}`;
+    await operations.getByLabel("Run notes", { exact: true }).fill(operationalHandoff);
+    const savedNotes = await submitOperation(page, "set_notes", () =>
+      operations.getByRole("button", { name: "Save run notes", exact: true }).click());
+    assert.equal(savedNotes.response.status(), 200);
+    await staleOperations.getByLabel("Run notes", { exact: true }).fill("Stale operational overwrite");
+    const staleNotes = await submitOperation(operationsStalePage, "set_notes", () =>
+      staleOperations.getByRole("button", { name: "Save run notes", exact: true }).click());
+    assert.equal(staleNotes.response.status(), 409);
+    await operationsStalePage.getByRole("status").filter({ hasText: "Stale operational change discarded; the latest server state is now displayed." }).waitFor();
+    assert.equal(await staleOperations.getByLabel("Run notes", { exact: true }).inputValue(), operationalHandoff);
+    await operationsStalePage.close();
+
+    const customReason = `Custom hold ${suffix}`;
+    await operations.getByRole("button", { name: "Edit stop reasons", exact: true }).click();
+    const stopReasonEditor = operations.getByLabel("Stop reasons, one per line", { exact: true });
+    const existingReasons = (await stopReasonEditor.inputValue()).split("\n");
+    await stopReasonEditor.fill([...existingReasons, customReason].join("\n"));
+    const reasonResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/operations/stop-reasons" && response.request().method() === "POST");
+    await operations.getByRole("button", { name: "Save stop reasons", exact: true }).click();
+    const reasonResponse = await reasonResponsePromise;
+    assert.equal(reasonResponse.status(), 200, await reasonResponse.text());
+    const savedReasons = (await reasonResponse.json()).settings;
+    assert.ok(savedReasons.reasons.includes(customReason));
+
+    await page.reload();
+    await page.getByRole("heading", { name: "Run control", exact: true }).waitFor();
+    await selectRun(page, createdRun.id, runLabel);
+    assert.equal(await operations.getByLabel("Run notes", { exact: true }).inputValue(), operationalHandoff);
+    await operations.locator('article[data-stoppage-type="stop"]').getByText("Real database infeed stop", { exact: true }).waitFor();
+    assert.equal(await operations.locator('article[data-stoppage-type="manual"]').count(), 0);
+    const writesBeforeOperationsOffline = browserWrites.length;
+    offlineCheckActive = true;
+    await context.setOffline(true);
+    await page.getByText("Read-only offline", { exact: true }).first().waitFor();
+    assert.equal(await operations.getByRole("button", { name: "Start line stop", exact: true }).isDisabled(), true);
+    assert.equal(await operations.getByRole("button", { name: "Add past event", exact: true }).isDisabled(), true);
+    assert.equal(await operations.getByLabel("Run notes", { exact: true }).isDisabled(), true);
+    assert.equal(browserWrites.length, writesBeforeOperationsOffline, "offline operations must not issue writes");
+    await context.setOffline(false);
+    offlineCheckActive = false;
+    await page.getByText("Connected", { exact: true }).first().waitFor();
+
+    const lifecycle = async (command, expectedStatus) => {
       const commandResponsePromise = page.waitForResponse((response) =>
         new URL(response.url()).pathname === `/api/v3/runs/${createdRun.id}/commands`
         && response.request().method() === "POST"
@@ -349,11 +489,81 @@ async function main() {
       assert.equal(commandResponse.status(), 200, `${command} should be accepted by PostgreSQL`);
       const body = await commandResponse.json();
       assert.equal(body.run.status, expectedStatus);
-      if (command === "complete") {
-        assert.ok(body.run.inventoryConsumption, "completion should return its exact-once inventory receipt");
-        assert.ok(["completed", "shortage"].includes(body.run.inventoryConsumption.status));
-      }
+      return body;
+    };
+
+    await lifecycle("pause", "paused");
+    await operations.getByText("Tunnel stopped by default", { exact: true }).waitFor();
+    const tunnelOverride = await submitOperation(page, "set_pause_tunnel", () =>
+      operations.getByRole("button", { name: "Keep tunnel running", exact: true }).click());
+    assert.equal(tunnelOverride.response.status(), 200, JSON.stringify(tunnelOverride.body));
+    assert.equal(tunnelOverride.body.run.stoppages.find((item) => item.type === "pause" && item.endedAt === null).stopTunnel, false);
+    await operations.getByText(/Operator override confirmed: line and packaging automatic progress continue/).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Start run to edit stations", exact: true }).isDisabled(), true);
+
+    for (const stationKey of ["line", "packaging", "dough"]) {
+      await adminPool.query(`
+        INSERT INTO v3.run_station_progress (
+          facility_id, run_id, station_key, status, revision, inputs, progress, next_due_at, updated_at
+        )
+        SELECT facility_id, id, $2, 'not_started', 0,
+          jsonb_build_object('autoTrackRatePerMinute', 60),
+          jsonb_build_object(
+            'autoTrackLastAt', to_char((clock_timestamp() - interval '30 seconds') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            'autoTrackRemainder', 0
+          ),
+          clock_timestamp() - interval '1 second', clock_timestamp()
+        FROM v3.runs WHERE id = $1
+        ON CONFLICT (facility_id, run_id, station_key) DO UPDATE SET
+          inputs = EXCLUDED.inputs,
+          progress = run_station_progress.progress || EXCLUDED.progress,
+          next_due_at = EXCLUDED.next_due_at,
+          updated_at = EXCLUDED.updated_at
+      `, [createdRun.id, stationKey]);
     }
+    const dueDuringOverride = await adminPool.query(
+      "SELECT station_key FROM v3.list_due_station_auto_track(20) WHERE run_id = $1 ORDER BY station_key",
+      [createdRun.id],
+    );
+    assert.deepEqual(dueDuringOverride.rows.map((row) => row.station_key), ["line", "packaging"]);
+    await lifecycle("resume", "running");
+
+    const latePaused = await lifecycle("pause", "paused");
+    const latePause = latePaused.run.stoppages.find((item) => item.type === "pause" && item.endedAt === null);
+    await adminPool.query(
+      "UPDATE v3.run_pause_intervals SET paused_at = clock_timestamp() - interval '11 seconds' WHERE id = $1",
+      [latePause.id],
+    );
+    await page.reload();
+    await page.getByRole("heading", { name: "Run control", exact: true }).waitFor();
+    await selectRun(page, createdRun.id, runLabel);
+    await operations.getByText("The 10-second tunnel decision window has closed.", { exact: true }).waitFor();
+    assert.equal(await operations.getByRole("button", { name: "Keep tunnel running", exact: true }).isDisabled(), true);
+    const lateOverride = await page.evaluate(async ({ path, expectedRevision, stoppageId }) => {
+      const csrf = document.cookie.split("; ").find((value) => value.startsWith("v3_csrf="))?.slice("v3_csrf=".length) ?? "";
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": decodeURIComponent(csrf) },
+        body: JSON.stringify({
+          commandId: crypto.randomUUID(), commandType: "set_pause_tunnel", expectedRevision,
+          details: { stoppageId, stopTunnel: false },
+        }),
+      });
+      return { status: response.status, body: await response.json() };
+    }, { path: operationPath, expectedRevision: latePaused.run.revision, stoppageId: latePause.id });
+    assert.equal(lateOverride.status, 409);
+    assert.equal(lateOverride.body.outcome, "invalid_transition");
+    await lifecycle("resume", "running");
+
+    await operations.getByLabel(/^Reason/).selectOption(customReason);
+    await operations.getByLabel("Notes", { exact: true }).fill("Close this stop with run completion");
+    const completionStop = await submitOperation(page, "start_stop", () =>
+      operations.getByRole("button", { name: "Start line stop", exact: true }).click());
+    assert.equal(completionStop.response.status(), 200);
+    const completed = await lifecycle("complete", "completed");
+    assert.ok(completed.run.inventoryConsumption, "completion should return its exact-once inventory receipt");
+    assert.ok(["completed", "shortage"].includes(completed.run.inventoryConsumption.status));
+    assert.ok(completed.run.stoppages.every((item) => item.endedAt !== null), "completion must close every open operational record");
     await page.getByText("Completion inventory receipt recorded; consumption is exact-once.").waitFor();
 
     await page.reload();
@@ -367,6 +577,12 @@ async function main() {
     assert.equal(await targetInput.isDisabled(), true);
     assert.equal(await runToTime.getByRole("button", { name: "Save target", exact: true }).isDisabled(), true);
     assert.equal(await runToTime.getByRole("button", { name: "Reset to 7:15 PM", exact: true }).isDisabled(), true);
+    assert.equal(await operations.getByLabel("Run notes", { exact: true }).inputValue(), operationalHandoff);
+    assert.equal(await operations.getByLabel("Run notes", { exact: true }).isDisabled(), true);
+    assert.equal(await operations.getByRole("button", { name: "Start line stop", exact: true }).isDisabled(), true);
+    assert.equal(await operations.getByRole("button", { name: "Add past event", exact: true }).isDisabled(), true);
+    assert.equal(await operations.getByRole("button", { name: "End stop", exact: true }).count(), 0);
+    await operations.getByText("Close this stop with run completion", { exact: true }).waitFor();
 
     for (const viewport of [
       { width: 1280, height: 900 },
@@ -1246,7 +1462,7 @@ async function main() {
     await surplusPanel.getByRole("button", { name: `Select surplus lot ${surplusLotId}`, exact: true }).click();
     await surplusPanel.getByLabel("Event type", { exact: true }).selectOption("damage");
     await surplusPanel.getByLabel("Cases", { exact: true }).fill("1");
-    await surplusPanel.getByLabel("Reason", { exact: true }).fill("Real browser freezer damage");
+    await surplusPanel.getByLabel(/^Reason/).fill("Real browser freezer damage");
     await surplusPanel.getByRole("button", { name: "Append damage", exact: true }).click();
     await page.getByText(/Surplus damage appended\. 0 physically remaining cases/).waitFor();
     const finalSurplusLot = await adminPool.query(
@@ -1332,14 +1548,17 @@ async function main() {
 
     assert.deepEqual(errors, [], "the real React/PostgreSQL browser journey should have no unexpected browser or server errors");
     const conflictPath = `/api/v3/runs/${createdRun.id}/stations/line/commands`;
-    assert.equal(browserWrites.filter((entry) => entry === `POST /api/v3/runs/${createdRun.id}/commands`).length, 4,
-      "Run to Time must not add lifecycle writes");
+    assert.equal(browserWrites.filter((entry) => entry === `POST /api/v3/runs/${createdRun.id}/commands`).length, 6,
+      "operations must not add lifecycle writes");
     assert.equal(browserWrites.filter((entry) => entry === `POST ${conflictPath}`).length, 3,
       "Run to Time must not add station writes");
     assert.deepEqual(failedResponses, [
       `500 ${runToTimePath}`,
       `409 ${conflictPath}`,
       `409 ${runToTimePath}`,
+      `500 ${operationPath}`,
+      `409 ${operationPath}`,
+      `409 ${operationPath}`,
       "500 /api/v3/schedules/commands",
       "409 /api/v3/schedules/commands",
       "500 /api/v3/setup-catalog/imports",
@@ -1368,6 +1587,13 @@ async function main() {
       assert.equal(await webkitTargetInput.isDisabled(), true);
       assert.equal(await webkitRunToTime.getByRole("button", { name: "Save target", exact: true }).isDisabled(), true);
       assert.equal(await webkitRunToTime.getByRole("button", { name: "Reset to 7:15 PM", exact: true }).isDisabled(), true);
+      const webkitOperations = webkitPage.locator('section[aria-labelledby="operations-heading"]');
+      assert.equal(await webkitOperations.getByLabel("Run notes", { exact: true }).inputValue(), operationalHandoff);
+      assert.equal(await webkitOperations.getByLabel("Run notes", { exact: true }).isDisabled(), true);
+      await webkitOperations.getByText("Real database infeed stop", { exact: true }).waitFor();
+      await webkitOperations.getByText("Close this stop with run completion", { exact: true }).waitFor();
+      assert.equal(await webkitOperations.getByRole("button", { name: "End stop", exact: true }).count(), 0);
+      assert.equal(await webkitOperations.getByRole("button", { name: "Start line stop", exact: true }).isDisabled(), true);
       assert.ok(await webkitPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
       await webkitPage.getByRole("button", { name: "Schedule", exact: true }).click();
       await webkitPage.getByLabel("Production date", { exact: true }).fill(SCHEDULE_DATE);

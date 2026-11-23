@@ -262,6 +262,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/operations/stop-reasons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the facility stop-reason catalog */
+        get: operations["getStopReasonSettings"];
+        put?: never;
+        /** Replace the facility stop-reason catalog with manager authorization */
+        post: operations["saveStopReasonSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/runs/{runId}/operations/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record stoppages, operational notes, or the pause tunnel decision */
+        post: operations["applyRunOperation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/runs/{runId}": {
         parameters: {
             query?: never;
@@ -1187,6 +1222,20 @@ export interface components {
             /** Format: date-time */
             endedAt: string | null;
         };
+        Stoppage: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            type: "stop" | "pause" | "manual";
+            reason: string;
+            notes: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            endedAt: string | null;
+            /** @description Required for lifecycle pauses; false allows only line and packaging automatic progress during the open pause. */
+            stopTunnel?: boolean;
+        };
         /** @description Server-owned run snapshot. Optional productionRules contains enabled manager-imported rule assessments. Unknown is not a pass. Flexible findings warn; strict unknown/violated findings block preparation/start. A bypass can only come from the reviewed imported rule configuration. */
         Run: {
             productionRules?: {
@@ -1220,6 +1269,8 @@ export interface components {
             serverNow: string;
             /** @description Server-owned America/Chicago wall-time operator target; not a lifecycle scheduling instruction. */
             runToTime: string;
+            operationalNotes: string;
+            stoppages: components["schemas"]["Stoppage"][];
             setupSnapshot: components["schemas"]["RunSetup"];
             doughCapacity: components["schemas"]["DoughCapacity"];
             inventoryConsumption: components["schemas"]["RunInventoryConsumption"] | null;
@@ -1228,6 +1279,55 @@ export interface components {
             stationProgress: {
                 [key: string]: components["schemas"]["StationState"];
             };
+        };
+        StopReasonSettings: {
+            revision: number;
+            reasons: string[];
+            /** Format: date-time */
+            updatedAt: string | null;
+        };
+        StopReasonSaveRequest: {
+            commandId: string;
+            expectedRevision: number;
+            reasons: string[];
+        };
+        StopReasonSaveResponse: {
+            /** @constant */
+            outcome: "accepted";
+            replayed: boolean;
+            commandId: string;
+            settings: components["schemas"]["StopReasonSettings"];
+        };
+        StopReasonConflict: {
+            /** @constant */
+            outcome: "conflict";
+            expectedRevision: number;
+            currentSettings: components["schemas"]["StopReasonSettings"];
+        };
+        RunOperationCommand: {
+            commandId: string;
+            /** @enum {string} */
+            commandType: "start_stop" | "end_stop" | "add_past_stop" | "update_stoppage" | "delete_stoppage" | "set_notes" | "set_pause_tunnel";
+            expectedRevision: number;
+            /** @description Exact operation-specific fields validated by the server; client-supplied lifecycle pause timestamps are never accepted. */
+            details: {
+                [key: string]: unknown;
+            };
+        };
+        RunOperationAccepted: {
+            /** @constant */
+            outcome: "accepted";
+            replayed: boolean;
+            commandId: string;
+            operation: string;
+            run: components["schemas"]["Run"];
+        };
+        RunOperationInvalidTransition: {
+            /** @constant */
+            outcome: "invalid_transition";
+            /** @enum {string} */
+            currentStatus: "planned" | "running" | "paused" | "completed";
+            currentRun: components["schemas"]["Run"];
         };
         StationState: {
             /** @enum {string} */
@@ -2848,6 +2948,115 @@ export interface operations {
             403: components["responses"]["Error"];
             405: components["responses"]["Error"];
             500: components["responses"]["Error"];
+        };
+    };
+    getStopReasonSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current stop reasons and revision */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        settings: components["schemas"]["StopReasonSettings"];
+                    };
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+        };
+    };
+    saveStopReasonSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StopReasonSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description Stop reasons saved or exactly replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StopReasonSaveResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            /** @description Stale catalog revision with current settings */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StopReasonConflict"];
+                };
+            };
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+        };
+    };
+    applyRunOperation: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                runId: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunOperationCommand"];
+            };
+        };
+        responses: {
+            /** @description Operation accepted; includes canonical run state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunOperationAccepted"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            /** @description Stale revision or invalid operational transition; includes canonical run state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConflict"] | components["schemas"]["RunOperationInvalidTransition"];
+                };
+            };
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
         };
     };
     getRun: {

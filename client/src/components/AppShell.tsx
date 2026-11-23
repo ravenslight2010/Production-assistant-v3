@@ -96,7 +96,7 @@ export function AppShell({ session, onSignOut }: { session: AuthSession; onSignO
       </nav>
 
       <main className="app-shell py-6 sm:py-8">
-        {view === "run" ? <RunPage online={online} /> : null}
+        {view === "run" ? <RunPage session={session} online={online} /> : null}
         {view === "schedule" ? <SchedulePage session={session} online={online} /> : null}
         {view === "setup" ? <SetupPage session={session} online={online} /> : null}
         {view === "inventory" ? <InventoryPage session={session} online={online} /> : null}

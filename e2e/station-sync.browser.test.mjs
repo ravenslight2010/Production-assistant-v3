@@ -45,6 +45,9 @@ function productionRun(status = "planned", revision = 1) {
     pausedAt: null,
     resumedAt: null,
     completedAt: null,
+    runToTime: "19:15",
+    operationalNotes: "",
+    stoppages: [],
     setupSnapshot: {
       label: "Browser qualification run",
       targetCases: 25,
@@ -102,6 +105,11 @@ async function installManagerApi(context, baseUrl, initialRun = null) {
     staff: [{ userId: STAFF_ID, username: "manager", role: "manager", disabled: false }],
     roles: [{ name: "manager", capabilities: ["manage-staff"] }, { name: "operator", capabilities: [] }],
   };
+  let stopReasonSettings = { revision: 0, reasons: ["Equipment jam", "Break", "Quality hold"], updatedAt: null };
+  const operationRequests = [];
+  const stopReasonRequests = [];
+  const operationReceipts = new Map();
+  let loseNextOperation = false;
   await context.addCookies([{ name: "v3_csrf", value: CSRF_TOKEN, url: baseUrl }]);
   await context.route("**/api/v3/**", async (route) => {
     const request = route.request();
@@ -109,11 +117,29 @@ async function installManagerApi(context, baseUrl, initialRun = null) {
     const method = request.method();
     if (path === "/api/v3/auth/session" && method === "GET") {
       return json(route, {
-        staff: { userId: STAFF_ID, username: "manager", role: "manager", capabilities: ["manage-staff", "manage-inventory"] },
+        staff: { userId: STAFF_ID, username: "manager", role: "manager", capabilities: ["manage-staff", "manage-inventory", "manage-factory-settings"] },
         expiresAt: "2026-11-22T12:00:00.000Z",
       });
     }
     if (path === "/api/v3/auth/bootstrap-status" && method === "GET") return json(route, { available: false });
+    if (path === "/api/v3/operations/stop-reasons" && method === "GET") {
+      return json(route, { settings: stopReasonSettings });
+    }
+    if (path === "/api/v3/operations/stop-reasons" && method === "POST") {
+      const body = request.postDataJSON();
+      stopReasonRequests.push(body);
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(Object.keys(body).sort(), ["commandId", "expectedRevision", "reasons"]);
+      if (body.expectedRevision !== stopReasonSettings.revision) {
+        return json(route, { outcome: "conflict", currentSettings: stopReasonSettings }, 409);
+      }
+      stopReasonSettings = {
+        revision: stopReasonSettings.revision + 1,
+        reasons: body.reasons,
+        updatedAt: "2026-11-21T12:00:00.000Z",
+      };
+      return json(route, { outcome: "accepted", replayed: false, settings: stopReasonSettings });
+    }
     if (path === "/api/v3/runs/products" && method === "GET") {
       return json(route, { products: [{ code: "PIZZA-A", name: "Reviewed pizza", productionSetups: [{ code: "LINE-A", name: "Main line" }] }] });
     }
@@ -133,9 +159,68 @@ async function installManagerApi(context, baseUrl, initialRun = null) {
       commands.push(body);
       assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
       assert.equal(body.expectedRevision, run.revision);
-      assert.equal(body.commandType, "start");
-      run = productionRun("running", run.revision + 1);
+      if (body.commandType === "start") {
+        run = productionRun("running", run.revision + 1);
+      } else {
+        run = structuredClone(run);
+        run.revision += 1;
+        run.status = body.commandType === "pause" ? "paused"
+          : body.commandType === "resume" ? "running" : "completed";
+        run.pausedAt = body.commandType === "pause" ? run.serverNow : null;
+        run.completedAt = body.commandType === "complete" ? run.serverNow : null;
+        if (body.commandType === "pause") {
+          const pause = {
+            id: crypto.randomUUID(), type: "pause", reason: "", notes: "",
+            startedAt: run.serverNow, endedAt: null, stopTunnel: true,
+          };
+          run.stoppages.push(pause);
+          run.pauseIntervals.push({ startedAt: pause.startedAt, endedAt: null });
+        }
+        if (["resume", "complete"].includes(body.commandType)) {
+          run.stoppages = run.stoppages.map((item) => item.endedAt === null
+            ? { ...item, endedAt: run.serverNow } : item);
+          run.pauseIntervals = run.pauseIntervals.map((item) => ({ ...item, endedAt: item.endedAt ?? run.serverNow }));
+        }
+      }
       return json(route, { outcome: "accepted", replayed: false, commandId: body.commandId, run });
+    }
+    if (path === `/api/v3/runs/${RUN_ID}/operations/commands` && method === "POST") {
+      const body = request.postDataJSON();
+      operationRequests.push(body);
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(Object.keys(body).sort(), ["commandId", "commandType", "details", "expectedRevision"]);
+      const replay = operationReceipts.get(body.commandId);
+      if (replay) return json(route, { ...replay, replayed: true });
+      if (body.expectedRevision !== run.revision) {
+        return json(route, { outcome: "conflict", currentRun: run }, 409);
+      }
+      run = structuredClone(run);
+      const details = body.details;
+      if (body.commandType === "start_stop" || body.commandType === "add_past_stop") {
+        run.stoppages.push({
+          id: crypto.randomUUID(), type: body.commandType === "start_stop" ? "stop" : "manual",
+          reason: details.reason, notes: details.notes,
+          startedAt: details.startedAt ?? run.serverNow, endedAt: details.endedAt ?? null,
+        });
+      } else if (body.commandType === "set_notes") {
+        run.operationalNotes = details.operationalNotes;
+      } else if (body.commandType === "delete_stoppage") {
+        run.stoppages = run.stoppages.filter((item) => item.id !== details.stoppageId);
+      } else {
+        const item = run.stoppages.find((candidate) => candidate.id === details.stoppageId);
+        assert.ok(item, `${body.commandType} should target a visible stoppage`);
+        if (body.commandType === "end_stop") item.endedAt = run.serverNow;
+        if (body.commandType === "update_stoppage") Object.assign(item, details);
+        if (body.commandType === "set_pause_tunnel") item.stopTunnel = details.stopTunnel;
+      }
+      run.revision += 1;
+      const response = { outcome: "accepted", replayed: false, commandId: body.commandId, operation: body.commandType, run };
+      operationReceipts.set(body.commandId, response);
+      if (loseNextOperation) {
+        loseNextOperation = false;
+        return json(route, { error: "Synthetic operational response loss after commit." }, 500);
+      }
+      return json(route, response);
     }
     if (path === `/api/v3/runs/${RUN_ID}/stations/line/commands` && method === "POST") {
       const body = request.postDataJSON();
@@ -160,7 +245,14 @@ async function installManagerApi(context, baseUrl, initialRun = null) {
     if (path === "/api/v3/auth/sign-out" && method === "POST") return route.fulfill({ status: 204 });
     return json(route, { error: `Unexpected test request: ${method} ${path}` }, 500);
   });
-  return { commands, staffChanges, getRun: () => run };
+  return {
+    commands,
+    staffChanges,
+    operationRequests,
+    stopReasonRequests,
+    loseNextOperation: () => { loseNextOperation = true; },
+    getRun: () => run,
+  };
 }
 
 test("React run cockpit confirms creation, lifecycle, manual edits, and stale conflicts", { timeout: 60_000 }, async (t) => {
@@ -236,5 +328,131 @@ test("all V1-style sections and staff workflows are reachable without dead navig
   assert.deepEqual(api.staffChanges, [{ username: "operator.two", password: "synthetic-only", roleName: "operator" }]);
   await page.getByRole("button", { name: "Sign out" }).click();
   await page.getByRole("heading", { name: "Staff sign in" }).waitFor();
+  await context.close();
+});
+
+
+test("operational journal preserves exact retries, conflicts, pause policy, and read-only boundaries", { timeout: 60_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const { context } = await openBrowser(t);
+  const api = await installManagerApi(context, baseUrl, productionRun("running", 1));
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(baseUrl);
+  await page.getByRole("heading", { name: "Browser qualification run" }).waitFor();
+  const operations = page.locator('section[aria-labelledby="operations-heading"]');
+  await operations.getByText("No stoppages recorded for this run.").waitFor();
+
+  await operations.getByLabel(/^Reason/).selectOption("Equipment jam");
+  await operations.getByLabel("Notes", { exact: true }).fill("Infeed");
+  api.loseNextOperation();
+  await operations.getByRole("button", { name: "Start line stop", exact: true }).click();
+  await operations.getByRole("alert").filter({ hasText: "Synthetic operational response loss after commit." }).waitFor();
+  await operations.getByRole("button", { name: "Start line stop", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Operational record confirmed by the server." }).waitFor();
+  assert.equal(api.operationRequests.length, 2);
+  assert.equal(api.operationRequests[0].commandId, api.operationRequests[1].commandId);
+  assert.equal(api.operationRequests[0].expectedRevision, 1);
+  assert.equal(api.operationRequests[1].expectedRevision, 1);
+  assert.equal(api.getRun().stoppages.length, 1);
+  const activeStop = operations.locator('article[data-stoppage-type="stop"]');
+  await activeStop.getByText("Equipment jam", { exact: true }).waitFor();
+  await activeStop.getByRole("button", { name: "End stop", exact: true }).click();
+  await activeStop.getByRole("button", { name: "End stop", exact: true }).waitFor({ state: "detached" });
+
+  await operations.getByRole("button", { name: "Add past event", exact: true }).click();
+  const pastForm = operations.getByRole("form", { name: "Past stoppage", exact: true });
+  await pastForm.getByLabel(/^Reason/).selectOption("Break");
+  await pastForm.getByLabel("Notes", { exact: true }).fill("Crew rotation");
+  await pastForm.getByLabel("Started", { exact: true }).fill("2026-11-21T12:00");
+  await pastForm.getByLabel("Ended", { exact: true }).fill("2026-11-21T12:15");
+  await pastForm.getByRole("button", { name: "Record past event", exact: true }).click();
+  const manual = operations.locator('article[data-stoppage-type="manual"]');
+  await manual.getByText("Crew rotation", { exact: true }).waitFor();
+  await manual.getByRole("button", { name: "Edit", exact: true }).click();
+  const editForm = operations.getByRole("form", { name: "Edit stoppage", exact: true });
+  await editForm.getByLabel("Notes", { exact: true }).fill("Corrected crew rotation");
+  await editForm.getByRole("button", { name: "Save stoppage", exact: true }).click();
+  await manual.getByText("Corrected crew rotation", { exact: true }).waitFor();
+  await manual.getByRole("button", { name: "Delete", exact: true }).click();
+  await manual.waitFor({ state: "detached" });
+
+  const stalePage = await context.newPage();
+  await stalePage.goto(baseUrl);
+  await stalePage.getByRole("heading", { name: "Browser qualification run" }).waitFor();
+  const staleOperations = stalePage.locator('section[aria-labelledby="operations-heading"]');
+  await operations.getByLabel("Run notes", { exact: true }).fill("Canonical night shift handoff");
+  await operations.getByRole("button", { name: "Save run notes", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Operational record confirmed by the server." }).waitFor();
+  await staleOperations.getByLabel("Run notes", { exact: true }).fill("Stale overwrite");
+  await staleOperations.getByRole("button", { name: "Save run notes", exact: true }).click();
+  await stalePage.getByRole("status").filter({ hasText: "Stale operational change discarded; the latest server state is now displayed." }).waitFor();
+  assert.equal(await staleOperations.getByLabel("Run notes", { exact: true }).inputValue(), "Canonical night shift handoff");
+  await stalePage.close();
+
+  await operations.getByRole("button", { name: "Edit stop reasons", exact: true }).click();
+  const reasonEditor = operations.getByLabel("Stop reasons, one per line", { exact: true });
+  await reasonEditor.fill("Equipment jam\nBreak\nQuality hold\nCustom hold");
+  await operations.getByRole("button", { name: "Save stop reasons", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Stop reasons confirmed by the server." }).waitFor();
+  assert.deepEqual(api.stopReasonRequests[0].reasons, ["Equipment jam", "Break", "Quality hold", "Custom hold"]);
+
+  const writesBeforeOffline = api.operationRequests.length + api.stopReasonRequests.length + api.commands.length;
+  await context.setOffline(true);
+  await page.getByText("Read-only offline", { exact: true }).first().waitFor();
+  assert.equal(await operations.getByRole("button", { name: "Start line stop", exact: true }).isDisabled(), true);
+  assert.equal(await operations.getByRole("button", { name: "Add past event", exact: true }).isDisabled(), true);
+  assert.equal(await operations.getByLabel("Run notes", { exact: true }).isDisabled(), true);
+  assert.equal(api.operationRequests.length + api.stopReasonRequests.length + api.commands.length, writesBeforeOffline);
+  await context.setOffline(false);
+  await page.getByText("Connected", { exact: true }).first().waitFor();
+
+  await page.getByRole("button", { name: "pause", exact: true }).click();
+  await operations.getByText("Tunnel stopped by default", { exact: true }).waitFor();
+  await operations.getByRole("button", { name: "Keep tunnel running", exact: true }).click();
+  await operations.getByText(/Operator override confirmed: line and packaging automatic progress continue/).waitFor();
+  await page.getByRole("button", { name: "resume", exact: true }).click();
+  await page.getByRole("button", { name: "complete", exact: true }).click();
+  await page.locator('section[aria-labelledby="current-run-heading"]').getByText("completed", { exact: true }).waitFor();
+  assert.equal(await operations.getByRole("button", { name: "Start line stop", exact: true }).isDisabled(), true);
+  assert.equal(await operations.getByRole("button", { name: "Add past event", exact: true }).isDisabled(), true);
+  assert.equal(await operations.getByLabel("Run notes", { exact: true }).isDisabled(), true);
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 390, height: 844 },
+    { width: 768, height: 1024 },
+    { width: 1024, height: 768 },
+  ]) {
+    await page.setViewportSize(viewport);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true);
+  }
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test("late tunnel override is unavailable after the server decision window", { timeout: 60_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const { context } = await openBrowser(t);
+  const paused = productionRun("paused", 4);
+  paused.pausedAt = "2026-11-21T12:00:00.000Z";
+  paused.serverNow = "2026-11-21T12:00:20.000Z";
+  paused.stoppages = [{
+    id: "73000000-0000-4000-8000-000000000002",
+    type: "pause",
+    reason: "",
+    notes: "",
+    startedAt: "2026-11-21T12:00:00.000Z",
+    endedAt: null,
+    stopTunnel: true,
+  }];
+  paused.pauseIntervals = [{ startedAt: paused.pausedAt, endedAt: null }];
+  const api = await installManagerApi(context, baseUrl, paused);
+  const page = await context.newPage();
+  await page.goto(baseUrl);
+  const operations = page.locator('section[aria-labelledby="operations-heading"]');
+  await operations.getByText("The 10-second tunnel decision window has closed.", { exact: true }).waitFor();
+  assert.equal(await operations.getByRole("button", { name: "Keep tunnel running", exact: true }).isDisabled(), true);
+  assert.equal(api.operationRequests.length, 0);
   await context.close();
 });

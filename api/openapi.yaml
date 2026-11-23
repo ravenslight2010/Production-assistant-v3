@@ -556,6 +556,94 @@ paths:
           $ref: "#/components/responses/Error"
         "405":
           $ref: "#/components/responses/Error"
+  /api/v3/operations/stop-reasons:
+    get:
+      operationId: getStopReasonSettings
+      summary: Read the facility stop-reason catalog
+      responses:
+        "200":
+          description: Current stop reasons and revision
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [settings]
+                properties:
+                  settings:
+                    $ref: "#/components/schemas/StopReasonSettings"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: saveStopReasonSettings
+      summary: Replace the facility stop-reason catalog with manager authorization
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StopReasonSaveRequest"
+      responses:
+        "200":
+          description: Stop reasons saved or exactly replayed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StopReasonSaveResponse"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Stale catalog revision with current settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StopReasonConflict"
+        "413": { $ref: "#/components/responses/Error" }
+        "415": { $ref: "#/components/responses/Error" }
+  /api/v3/runs/{runId}/operations/commands:
+    post:
+      operationId: applyRunOperation
+      summary: Record stoppages, operational notes, or the pause tunnel decision
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunOperationCommand"
+      responses:
+        "200":
+          description: Operation accepted; includes canonical run state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunOperationAccepted"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Stale revision or invalid operational transition; includes canonical run state
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/RunConflict"
+                  - $ref: "#/components/schemas/RunOperationInvalidTransition"
+        "413": { $ref: "#/components/responses/Error" }
+        "415": { $ref: "#/components/responses/Error" }
   /api/v3/runs/{runId}:
     get:
       operationId: getRun
@@ -2616,6 +2704,19 @@ components:
         endedAt:
           type: [string, "null"]
           format: date-time
+    Stoppage:
+      type: object
+      required: [id, type, reason, notes, startedAt, endedAt]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [stop, pause, manual] }
+        reason: { type: string, maxLength: 200 }
+        notes: { type: string, maxLength: 2000 }
+        startedAt: { type: string, format: date-time }
+        endedAt: { type: [string, "null"], format: date-time }
+        stopTunnel:
+          type: boolean
+          description: Required for lifecycle pauses; false allows only line and packaging automatic progress during the open pause.
     Run:
       type: object
       description: >
@@ -2635,9 +2736,11 @@ components:
         - completedAt
         - serverNow
         - runToTime
+        - operationalNotes
         - setupSnapshot
         - doughCapacity
         - inventoryConsumption
+        - stoppages
         - pauseIntervals
         - stationProgress
       properties:
@@ -2695,6 +2798,13 @@ components:
           type: string
           pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
           description: Server-owned America/Chicago wall-time operator target; not a lifecycle scheduling instruction.
+        operationalNotes:
+          type: string
+          maxLength: 4000
+        stoppages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Stoppage"
         setupSnapshot:
           $ref: "#/components/schemas/RunSetup"
         doughCapacity:
@@ -2712,6 +2822,74 @@ components:
           description: Canonical per-station inputs, progress, timer state, and revisions.
           additionalProperties:
             $ref: "#/components/schemas/StationState"
+    StopReasonSettings:
+      type: object
+      required: [revision, reasons, updatedAt]
+      properties:
+        revision: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        reasons:
+          type: array
+          minItems: 1
+          maxItems: 30
+          items: { type: string, minLength: 1, maxLength: 80 }
+        updatedAt: { type: [string, "null"], format: date-time }
+    StopReasonSaveRequest:
+      type: object
+      additionalProperties: false
+      required: [commandId, expectedRevision, reasons]
+      properties:
+        commandId: { type: string, minLength: 1, maxLength: 200 }
+        expectedRevision: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        reasons:
+          type: array
+          minItems: 1
+          maxItems: 30
+          items: { type: string, minLength: 1, maxLength: 80 }
+    StopReasonSaveResponse:
+      type: object
+      required: [outcome, replayed, commandId, settings]
+      properties:
+        outcome: { const: accepted }
+        replayed: { type: boolean }
+        commandId: { type: string }
+        settings: { $ref: "#/components/schemas/StopReasonSettings" }
+    StopReasonConflict:
+      type: object
+      required: [outcome, expectedRevision, currentSettings]
+      properties:
+        outcome: { const: conflict }
+        expectedRevision: { type: integer }
+        currentSettings: { $ref: "#/components/schemas/StopReasonSettings" }
+    RunOperationCommand:
+      type: object
+      additionalProperties: false
+      required: [commandId, commandType, expectedRevision, details]
+      properties:
+        commandId: { type: string, minLength: 1, maxLength: 200 }
+        commandType:
+          type: string
+          enum: [start_stop, end_stop, add_past_stop, update_stoppage, delete_stoppage, set_notes, set_pause_tunnel]
+        expectedRevision: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        details:
+          type: object
+          description: Exact operation-specific fields validated by the server; client-supplied lifecycle pause timestamps are never accepted.
+          additionalProperties: true
+    RunOperationAccepted:
+      type: object
+      required: [outcome, replayed, commandId, operation, run]
+      properties:
+        outcome: { const: accepted }
+        replayed: { type: boolean }
+        commandId: { type: string }
+        operation: { type: string }
+        run: { $ref: "#/components/schemas/Run" }
+    RunOperationInvalidTransition:
+      type: object
+      required: [outcome, currentStatus, currentRun]
+      properties:
+        outcome: { const: invalid_transition }
+        currentStatus: { type: string, enum: [planned, running, paused, completed] }
+        currentRun: { $ref: "#/components/schemas/Run" }
     StationState:
       type: object
       required: [status, revision, inputs, progress, startedAt, pausedAt, completedAt, nextDueAt, updatedAt]

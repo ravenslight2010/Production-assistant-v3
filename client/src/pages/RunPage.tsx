@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { ApiError, listRunProducts, listRuns, type Run, type RunProduct } from "../api";
+import { ApiError, listRunProducts, listRuns, type AuthSession, type Run, type RunProduct } from "../api";
 import { CreateRunForm } from "../components/CreateRunForm";
 import { RunDetail } from "../components/RunDetail";
 
-export function RunPage({ online }: { online: boolean }) {
+export function RunPage({ session, online }: { session: AuthSession; online: boolean }) {
   const [runs, setRuns] = useState<Run[]>([]);
   const [products, setProducts] = useState<RunProduct[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -84,7 +84,7 @@ export function RunPage({ online }: { online: boolean }) {
               </select>
             </label>
           ) : null}
-          {selected ? <RunDetail run={selected} online={online} onUpdated={updated} /> : (
+          {selected ? <RunDetail run={selected} online={online} canManageReasons={session.staff.capabilities.includes("manage-factory-settings")} onUpdated={updated} /> : (
             <section className="panel">
               <p className="eyebrow">Current run</p>
               <h2 className="mt-2 text-xl font-semibold">{loading ? "Reading server state…" : "No production runs yet"}</h2>

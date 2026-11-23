@@ -9,6 +9,10 @@ export type RunProduct = components["schemas"]["RunProduct"];
 export type RunStatus = Run["status"];
 export type RunCommand = "start" | "pause" | "resume" | "complete";
 export type RunCommandResult = { run: Run; conflict: boolean };
+export type Stoppage = components["schemas"]["Stoppage"];
+export type RunOperationType = components["schemas"]["RunOperationCommand"]["commandType"];
+export type RunOperationDetails = components["schemas"]["RunOperationCommand"]["details"];
+export type StopReasonSettings = components["schemas"]["StopReasonSettings"];
 export type StationKey = "line" | "dough" | "cheese" | "pepperoni" | "sauce" | "frontline" | "packaging";
 export type StaffDirectory = components["schemas"]["StaffDirectory"];
 export type StaffAccount = components["schemas"]["StaffAccount"];
@@ -183,6 +187,52 @@ export async function applyRunToTime(run: Run, runToTime: string, commandId: str
   }
   const accepted = await unwrap(result);
   return { run: accepted.run, conflict: false };
+}
+
+export async function applyRunOperation(
+  run: Run,
+  commandType: RunOperationType,
+  details: RunOperationDetails,
+  commandId: string,
+): Promise<RunCommandResult> {
+  const result = await client.POST("/api/v3/runs/{runId}/operations/commands", {
+    params: { path: { runId: run.id }, header: mutationHeaders() },
+    body: { commandId, commandType, expectedRevision: run.revision, details },
+  });
+  if (result.response.status === 409) {
+    const conflict = result.error as { currentRun?: Run } | undefined;
+    if (conflict?.currentRun) return { run: conflict.currentRun, conflict: true };
+  }
+  const accepted = await unwrap(result);
+  return { run: accepted.run, conflict: false };
+}
+
+export async function getStopReasonSettings(): Promise<StopReasonSettings> {
+  const result = await unwrap(await client.GET("/api/v3/operations/stop-reasons"));
+  if (!result.settings || !Array.isArray(result.settings.reasons) || !Number.isSafeInteger(result.settings.revision)) {
+    throw new ApiError("Stop reasons were incomplete. Refresh and retry.", 502);
+  }
+  return result.settings;
+}
+
+export async function saveStopReasonSettings(
+  settings: StopReasonSettings,
+  reasons: string[],
+  commandId: string,
+): Promise<{ settings: StopReasonSettings; conflict: boolean }> {
+  const result = await client.POST("/api/v3/operations/stop-reasons", {
+    params: { header: mutationHeaders() },
+    body: { commandId, expectedRevision: settings.revision, reasons },
+  });
+  if (result.response.status === 409) {
+    const conflict = result.error as { currentSettings?: StopReasonSettings } | undefined;
+    if (conflict?.currentSettings) return { settings: conflict.currentSettings, conflict: true };
+  }
+  const accepted = await unwrap(result);
+  if (accepted.outcome !== "accepted" || !accepted.settings) {
+    throw new ApiError("The server did not confirm the stop reasons. Retry the same request.", 502);
+  }
+  return { settings: accepted.settings, conflict: false };
 }
 
 export async function applyStationCommand(

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError, applyRunCommand, applyStationCommand, type Run, type RunCommand, type StationKey } from "../api";
 import { RunToTimeControl } from "./RunToTimeControl";
+import { RunOperationsPanel } from "./RunOperationsPanel";
 
 const stationOrder: StationKey[] = ["line", "dough", "cheese", "pepperoni", "sauce", "frontline", "packaging"];
 const stationFields: Record<StationKey, { inputs: string[]; progress: string[] }> = {
@@ -107,9 +108,10 @@ function StationCard({ run, stationKey, online, onUpdated }: {
   );
 }
 
-export function RunDetail({ run, online, onUpdated }: {
+export function RunDetail({ run, online, canManageReasons, onUpdated }: {
   run: Run;
   online: boolean;
+  canManageReasons: boolean;
   onUpdated: (run: Run, notice?: string) => void;
 }) {
   const [pending, setPending] = useState<RunCommand | null>(null);
@@ -151,6 +153,7 @@ export function RunDetail({ run, online, onUpdated }: {
         <div className="metric"><dt>Server update</dt><dd>{new Date(run.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</dd></div>
       </dl>
       <RunToTimeControl run={run} online={online} onUpdated={onUpdated} />
+      <RunOperationsPanel run={run} online={online} canManageReasons={canManageReasons} onUpdated={onUpdated} />
       {run.productionRules?.length ? (
         <div className="mt-4 rounded-lg border border-border p-3 text-xs text-muted-foreground">
           Production rules: {run.productionRules.map((rule) => `${rule.name}: ${rule.status}`).join(" · ")}

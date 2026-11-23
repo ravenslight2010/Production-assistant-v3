@@ -48,7 +48,9 @@ const RUN = {
   resumedAt: null,
   completedAt: null,
   runToTime: "19:15",
+  operationalNotes: "",
   setupSnapshot: { ...SETUP, productionPlan: PRODUCTION_PLAN },
+  stoppages: [],
   pauseIntervals: [],
 };
 

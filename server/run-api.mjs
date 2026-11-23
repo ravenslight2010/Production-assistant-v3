@@ -1,9 +1,11 @@
 import { createRunCommandService } from "../core/run-command-service.mjs";
 import { createRunService } from "../core/run-service.mjs";
 import { createRunToTimeService } from "../core/run-to-time-service.mjs";
+import { createRunOperationsService } from "../core/run-operations-service.mjs";
 import { createStationCommandService } from "../core/station-command-service.mjs";
 
 const API_PREFIX = "/api/v3/runs";
+const STOP_REASONS_PATH = "/api/v3/operations/stop-reasons";
 const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEFAULT_MAX_BODY_BYTES = 16 * 1024;
 
@@ -66,6 +68,7 @@ function safeStatus(error) {
   const knownService = error?.name === "RunServiceError"
     || error?.name === "RunCommandServiceError"
     || error?.name === "RunToTimeServiceError"
+    || error?.name === "RunOperationsServiceError"
     || error?.name === "RunStationServiceError"
     || error?.name === "V3AuthError";
   if (error instanceof RunApiError) return error.status;
@@ -80,6 +83,7 @@ function safeMessage(error) {
     || error?.name === "RunServiceError"
     || error?.name === "RunCommandServiceError"
     || error?.name === "RunToTimeServiceError"
+    || error?.name === "RunOperationsServiceError"
     || error?.name === "RunStationServiceError"
     || error?.name === "V3AuthError") {
     return error.message;
@@ -115,6 +119,7 @@ export function createRunApi({
   runs,
   commands,
   runToTimes,
+  operations,
   stations,
   authenticate,
   verifyCsrf,
@@ -130,6 +135,10 @@ export function createRunApi({
   }
   if (!runToTimes || typeof runToTimes.execute !== "function") {
     throw new TypeError("The Run to Time command service is required.");
+  }
+  if (!operations || typeof operations.execute !== "function"
+    || typeof operations.getStopReasons !== "function" || typeof operations.saveStopReasons !== "function") {
+    throw new TypeError("The run operations service is required.");
   }
   if (stations !== undefined && typeof stations?.execute !== "function") {
     throw new TypeError("The station command service must provide execute().");
@@ -148,7 +157,8 @@ export function createRunApi({
   return async function handleRunApi(request, response) {
     try {
       const url = new URL(request.url || "/", "http://v3.local");
-      if (url.pathname !== API_PREFIX && !url.pathname.startsWith(`${API_PREFIX}/`)) {
+      if (url.pathname !== STOP_REASONS_PATH && url.pathname !== API_PREFIX
+        && !url.pathname.startsWith(`${API_PREFIX}/`)) {
         throw new RunApiError(404, "Run route not found.");
       }
 
@@ -157,6 +167,21 @@ export function createRunApi({
       const isMutation = request.method === "POST";
       if (isMutation && await verifyCsrf(request, auth) !== true) {
         throw new RunApiError(403, "Refresh your session before changing run state.");
+      }
+
+      if (url.pathname === STOP_REASONS_PATH && request.method === "GET") {
+        if (url.search) throw new RunApiError(400, "Stop reason query parameters are not supported.");
+        sendJson(response, 200, { settings: await operations.getStopReasons({ auth }) });
+        return;
+      }
+
+      if (url.pathname === STOP_REASONS_PATH && request.method === "POST") {
+        if (url.search) throw new RunApiError(400, "Stop reason query parameters are not supported.");
+        const body = await readJsonBody(request, maxBodyBytes);
+        requireExactKeys(body, ["commandId", "expectedRevision", "reasons"]);
+        const result = await operations.saveStopReasons({ auth, command: body });
+        sendJson(response, result?.outcome === "accepted" ? 200 : 409, result);
+        return;
       }
 
       if (url.pathname === API_PREFIX && request.method === "GET") {
@@ -181,6 +206,17 @@ export function createRunApi({
           setupSnapshot: body.setupSnapshot,
         });
         sendJson(response, result.replayed ? 200 : 201, result);
+        return;
+      }
+
+      const operationMatch = url.pathname.match(/^\/api\/v3\/runs\/([^/]+)\/operations\/commands$/);
+      if (operationMatch && request.method === "POST") {
+        if (url.search) throw new RunApiError(400, "Run operation query parameters are not supported.");
+        const runId = normalizePathRunId(operationMatch[1]);
+        const body = await readJsonBody(request, maxBodyBytes);
+        requireExactKeys(body, ["commandId", "commandType", "expectedRevision", "details"]);
+        const result = await operations.execute({ auth, command: { ...body, runId } });
+        sendJson(response, result?.outcome === "accepted" ? 200 : 409, result);
         return;
       }
 
@@ -278,6 +314,7 @@ export function createRunApiForDatabase({
   const runs = createRunService({ query, authorize });
   const commands = createRunCommandService({ query, authorize });
   const runToTimes = createRunToTimeService({ query, authorize });
+  const operations = createRunOperationsService({ query, authorize });
   const stations = createStationCommandService({ query, authorize });
-  return createRunApi({ runs, commands, runToTimes, stations, authenticate, verifyCsrf, maxBodyBytes, logger });
+  return createRunApi({ runs, commands, runToTimes, operations, stations, authenticate, verifyCsrf, maxBodyBytes, logger });
 }

@@ -189,6 +189,8 @@ function validateRun(value) {
     || !validCanonicalTimestamp(value.resumedAt, true)
     || !validCanonicalTimestamp(value.completedAt, true)
     || normalizeRunToTimeInput(value.runToTime) !== value.runToTime
+    || typeof value.operationalNotes !== "string" || value.operationalNotes.length > 4000
+    || !Array.isArray(value.stoppages)
     || !Array.isArray(value.pauseIntervals)
   ) {
     throw new RunServiceError("INVALID_STORAGE_RESPONSE", "Run storage returned invalid data.", 502);
@@ -221,6 +223,18 @@ function validateRun(value) {
         || value.doughCapacity.pizzasPerCase > 100))
   )) {
     throw new RunServiceError("INVALID_STORAGE_RESPONSE", "Run storage returned invalid dough source status.", 502);
+  }
+  for (const stoppage of value.stoppages) {
+    if (!stoppage || typeof stoppage !== "object" || Array.isArray(stoppage)
+      || !UUID_PATTERN.test(stoppage.id)
+      || !["stop", "pause", "manual"].includes(stoppage.type)
+      || typeof stoppage.reason !== "string" || stoppage.reason.length > 200
+      || typeof stoppage.notes !== "string" || stoppage.notes.length > 2000
+      || !validCanonicalTimestamp(stoppage.startedAt)
+      || !validCanonicalTimestamp(stoppage.endedAt, true)
+      || (stoppage.type === "pause" ? typeof stoppage.stopTunnel !== "boolean" : stoppage.stopTunnel !== undefined)) {
+      throw new RunServiceError("INVALID_STORAGE_RESPONSE", "Run storage returned invalid stoppage data.", 502);
+    }
   }
   for (const interval of value.pauseIntervals) {
     if (
