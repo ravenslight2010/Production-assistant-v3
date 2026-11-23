@@ -149,8 +149,6 @@ fi
   GRANT EXECUTE ON FUNCTION v3.bootstrap_first_manager(text, text) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_staff_accounts(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_staff_roles(uuid) TO v3_api_test;
-  GRANT EXECUTE ON FUNCTION v3.create_staff_account(uuid, text, text, text) TO v3_api_test;
-  GRANT EXECUTE ON FUNCTION v3.update_staff_account(uuid, uuid, boolean, text) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_inventory_warehouses(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_inventory_products(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_inventory_stock(uuid, uuid) TO v3_api_test;
@@ -722,7 +720,24 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0017-run-operations.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0018-temporary-substitutions.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0019-operational-mix-plan.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0020-account-lifecycle.sql" >/dev/null
 "${PSQL[@]}" -c "
+  GRANT EXECUTE ON FUNCTION v3.list_staff_accounts(uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.list_staff_roles(uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.create_staff_account(uuid, text, text, text, text, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.update_staff_account(uuid, uuid, boolean, text, bigint, text, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.create_staff_invitation(uuid, text, text, text, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.list_staff_invitations(uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.revoke_staff_invitation(uuid, uuid, bigint, text, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.accept_staff_invitation(text, text, text, text, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.request_password_reset(text, text, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.list_password_reset_requests(uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.approve_password_reset(uuid, uuid, bigint, text, text, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.decline_password_reset(uuid, uuid, bigint, text, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.reissue_password_reset_code(uuid, uuid, bigint, text, text, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.complete_password_reset(text, text, text, text, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.change_own_password(uuid, text, text, text, text) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.revoke_staff_sessions(uuid, uuid, bigint, text, text) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.create_planned_run(uuid, uuid, text, text, date, jsonb) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.get_mix_plan(uuid, date) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_mix_recipes(uuid) TO v3_api_test;
@@ -755,6 +770,10 @@ fi
 for table in v3.cycle_count_schedules v3.cycle_count_confirmations v3.inventory_lots v3.inventory_lot_movements v3.freezer_surplus_lots v3.freezer_surplus_confirmations v3.freezer_surplus_allocations v3.freezer_surplus_events v3.warehouse_guidance_settings v3.inventory_reorder_points v3.run_stoppages v3.facility_stop_reason_settings v3.facility_operation_events v3.substitution_overlays v3.substitution_rules v3.substitution_rule_history v3.completed_run_substitutions v3.mix_recipes v3.mix_recipe_components v3.mix_recipe_history v3.mix_plan_days v3.mix_plan_amounts v3.mix_finalizations v3.mix_surplus_state v3.mix_surplus_lots v3.mix_surplus_allocations v3.mix_surplus_history; do
   assert_no_direct_table_access "$table"
 done
+assert_no_direct_table_access "v3.staff_invitations"
+assert_no_direct_table_access "v3.password_reset_requests"
+assert_no_direct_table_access "v3.account_audit_events"
+assert_no_direct_table_access "v3.account_command_receipts"
 "${PSQL[@]}" -c "
   GRANT EXECUTE ON FUNCTION v3.record_inventory_movement(
     uuid, uuid, text, text, uuid, text, text, numeric, text, text, date, date
@@ -810,6 +829,23 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0017-run-operations.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0018-temporary-substitutions.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0019-operational-mix-plan.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0020-account-lifecycle.test.sql"
+ACCOUNT_FUNCTION_PRIVILEGES="$("${PSQL[@]}" -c "
+  SET ROLE v3_api_test;
+  SELECT has_function_privilege(current_user,
+    'v3.accept_staff_invitation(text,text,text,text,text)', 'EXECUTE')
+    AND has_function_privilege(current_user,
+    'v3.complete_password_reset(text,text,text,text,text)', 'EXECUTE')
+    AND NOT has_function_privilege(current_user,
+    'v3.account_audit(uuid,uuid,text,uuid,text,uuid,text,jsonb)', 'EXECUTE')
+    AND NOT has_function_privilege(current_user,
+    'v3.purge_account_lifecycle_metadata(integer)', 'EXECUTE');
+  RESET ROLE;
+")"
+if [[ "$ACCOUNT_FUNCTION_PRIVILEGES" != "t" ]]; then
+  echo "Restricted API role has unsafe or incomplete account lifecycle function access." >&2
+  exit 1
+fi
 SETUP_EDITOR_PRIVILEGES="$("${PSQL[@]}" -c "
   SET ROLE v3_api_test;
   SELECT has_function_privilege(current_user,
@@ -845,6 +881,72 @@ V3_TEST_ADMIN_URL="$V3_TEST_ADMIN_URL" V3_DATABASE_URL="$V3_API_URL" NODE_ENV=de
 "${PSQL[@]}" -f "$ROOT/db/0007-staff-role-equivalents.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/cutover-transfer-rehearsal.test.sql"
 
+"${PSQL[@]}" -c "
+  INSERT INTO v3.staff_accounts (id, username, password_hash, disabled)
+  VALUES (
+    '72000000-0000-4000-8000-000000000020',
+    'V3InvitationRaceManager',
+    'argon2id\$v=19\$m=19456,t=2,p=1\$c2FsdA==\$aGFzaA==',
+    false
+  );
+  INSERT INTO v3.user_roles (user_id, role_name)
+  VALUES ('72000000-0000-4000-8000-000000000020', 'manager');
+  INSERT INTO v3.staff_invitations (
+    facility_id, id, token_hash, role_name, invited_by, expires_at
+  )
+  SELECT facility_id,
+    '72000000-0000-4000-8000-000000000021',
+    repeat('e', 64), 'operator',
+    '72000000-0000-4000-8000-000000000020',
+    clock_timestamp() + interval '24 hours'
+  FROM v3.facility_scope WHERE singleton;
+" >/dev/null
+INVITATION_RACE_A_SQL="
+  SET ROLE v3_api_test;
+  SELECT v3.accept_staff_invitation(
+    repeat('e', 64), 'V3InvitationRaceA',
+    'argon2id\$v=19\$m=19456,t=2,p=1\$c2FsdA==\$aGFzaA==',
+    'invitation-race-a', repeat('b', 64)
+  )->>'outcome';
+  RESET ROLE;
+"
+INVITATION_RACE_B_SQL="
+  SET ROLE v3_api_test;
+  SELECT v3.accept_staff_invitation(
+    repeat('e', 64), 'V3InvitationRaceB',
+    'argon2id\$v=19\$m=19456,t=2,p=1\$c2FsdA==\$aGFzaA==',
+    'invitation-race-b', repeat('c', 64)
+  )->>'outcome';
+  RESET ROLE;
+"
+"${PSQL[@]}" -c "$INVITATION_RACE_A_SQL" > "$TMP_DIR/invitation-race-a" &
+INVITATION_RACE_PID_A=$!
+"${PSQL[@]}" -c "$INVITATION_RACE_B_SQL" > "$TMP_DIR/invitation-race-b" &
+INVITATION_RACE_PID_B=$!
+wait "$INVITATION_RACE_PID_A"
+wait "$INVITATION_RACE_PID_B"
+INVITATION_RACE_RESULTS="$(cat "$TMP_DIR/invitation-race-a" "$TMP_DIR/invitation-race-b" | sort | tr '\n' ' ')"
+INVITATION_RACE_STATE="$("${PSQL[@]}" -c "
+  SELECT
+    (SELECT count(*) FROM v3.staff_accounts
+      WHERE lower(username) IN ('v3invitationracea', 'v3invitationraceb'))
+    || '|' ||
+    (SELECT status FROM v3.staff_invitations
+      WHERE id = '72000000-0000-4000-8000-000000000021')
+    || '|' ||
+    (SELECT count(*) FROM v3.account_command_receipts
+      WHERE actor_key = 'public' AND command_id IN ('invitation-race-a', 'invitation-race-b'))
+    || '|' ||
+    (SELECT count(*) FROM v3.account_audit_events
+      WHERE action = 'invitation_accepted'
+        AND entity_id = '72000000-0000-4000-8000-000000000021');
+")"
+if [[ "$INVITATION_RACE_RESULTS" != "accepted invalid " || "$INVITATION_RACE_STATE" != "1|consumed|1|1" ]]; then
+  echo "Concurrent invitation acceptance did not converge on one account: $INVITATION_RACE_RESULTS / $INVITATION_RACE_STATE" >&2
+  exit 1
+fi
+# The disposable database teardown removes these fixtures and their append-only audit.
+
 printf 'Run schema and lifecycle checks passed.\n'
 printf 'Concurrent first-manager bootstrap passed: exactly one manager was created.\n'
 printf 'Restricted API role check passed: %s\n' "$API_ROLE_RESULT"
@@ -865,3 +967,5 @@ printf 'V3 run-to-inventory snapshot, shortage, and retry checks passed.\n'
 printf 'Restricted API run/inventory command grants passed: %s\n' "$INVENTORY_COMPLETION_PRIVILEGES"
 printf 'Synthetic setup family count, identity, replay, rollback, undo, and facility-scope checks passed.\n'
 printf 'Synthetic V1-to-V3 setup and staff transfer rehearsal passed.\n'
+printf 'Account lifecycle function grants passed: %s\n' "$ACCOUNT_FUNCTION_PRIVILEGES"
+printf 'Concurrent invitation acceptance passed: %s (%s)\n' "$INVITATION_RACE_RESULTS" "$INVITATION_RACE_STATE"

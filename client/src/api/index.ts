@@ -16,6 +16,15 @@ export type StopReasonSettings = components["schemas"]["StopReasonSettings"];
 export type StationKey = "line" | "dough" | "cheese" | "pepperoni" | "sauce" | "frontline" | "packaging";
 export type StaffDirectory = components["schemas"]["StaffDirectory"];
 export type StaffAccount = components["schemas"]["StaffAccount"];
+export type StaffInvitation = components["schemas"]["StaffInvitation"];
+export type StaffInvitationSecret = components["schemas"]["StaffInvitationSecret"];
+export type StaffInvitationMutation = components["schemas"]["StaffInvitationMutation"];
+export type StaffInvitationAcceptance = components["schemas"]["StaffInvitationAcceptance"];
+export type StaffSessionRevocation = components["schemas"]["StaffSessionRevocation"];
+export type PasswordResetRequest = components["schemas"]["PasswordResetRequest"];
+export type PasswordResetQueue = components["schemas"]["PasswordResetQueue"];
+export type PasswordResetSecret = components["schemas"]["PasswordResetSecret"];
+export type PasswordResetMutation = components["schemas"]["PasswordResetMutation"];
 export type ScheduleCatalog = components["schemas"]["ScheduleCatalog"];
 export type ProductionSchedule = Omit<components["schemas"]["ProductionSchedule"], "date"> & { date: string };
 export type PlannedScheduleRun = components["schemas"]["PlannedScheduleRun"];
@@ -109,12 +118,21 @@ export type SubstitutionCommandResult = {
 };
 
 export class ApiError extends Error {
+  public readonly code?: string;
+  public readonly details: Readonly<Record<string, unknown>>;
+  public readonly retryAfterSeconds?: number;
+
   constructor(
     message: string,
     public readonly status: number,
+    details: Record<string, unknown> = {},
+    retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "ApiError";
+    this.code = typeof details.code === "string" ? details.code : undefined;
+    this.details = Object.freeze({ ...details });
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -129,9 +147,15 @@ function mutationHeaders(): { "X-CSRF-Token": string } {
 
 async function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): Promise<T> {
   if (result.data !== undefined && result.response.ok) return result.data;
-  const error = result.error as { error?: unknown } | undefined;
+  const error = result.error as Record<string, unknown> | undefined;
   const message = typeof error?.error === "string" ? error.error : `Request failed (${result.response.status}).`;
-  throw new ApiError(message, result.response.status);
+  const details = Object.fromEntries(Object.entries(error ?? {}).filter(([key]) => key !== "error"));
+  const retryAfterHeader = result.response.headers.get("retry-after");
+  const parsedRetryAfter = retryAfterHeader === null ? Number.NaN : Number(retryAfterHeader);
+  const retryAfterSeconds = Number.isFinite(parsedRetryAfter) && parsedRetryAfter >= 0
+    ? parsedRetryAfter
+    : undefined;
+  throw new ApiError(message, result.response.status, details, retryAfterSeconds);
 }
 
 export async function getSession(): Promise<AuthSession | null> {
@@ -288,6 +312,7 @@ export async function createStaffAccount(input: {
   username: string;
   password: string;
   roleName: string;
+  requestId: string;
 }): Promise<StaffDirectory> {
   return unwrap(await client.POST("/api/v3/auth/staff", {
     params: { header: mutationHeaders() },
@@ -297,11 +322,123 @@ export async function createStaffAccount(input: {
 
 export async function updateStaffAccount(
   userId: string,
-  change: { disabled?: boolean; roleName?: string },
+  change: {
+    disabled?: boolean;
+    roleName?: string;
+    expectedRevision: number;
+    requestId: string;
+  },
 ): Promise<StaffDirectory> {
   return unwrap(await client.PATCH("/api/v3/auth/staff/{staffId}", {
     params: { path: { staffId: userId }, header: mutationHeaders() },
     body: change,
+  }));
+}
+
+export async function getStaffInvitations(): Promise<StaffInvitation[]> {
+  const result = await unwrap(await client.GET("/api/v3/auth/invitations"));
+  return result.invitations;
+}
+
+export async function createStaffInvitation(input: {
+  roleName: string;
+  requestId: string;
+}): Promise<StaffInvitationSecret> {
+  return unwrap(await client.POST("/api/v3/auth/invitations", {
+    params: { header: mutationHeaders() },
+    body: input,
+  }));
+}
+
+export async function revokeStaffInvitation(
+  invitation: StaffInvitation,
+  requestId: string,
+): Promise<StaffInvitationMutation> {
+  return unwrap(await client.POST("/api/v3/auth/invitations/{invitationId}/revoke", {
+    params: { path: { invitationId: invitation.invitationId }, header: mutationHeaders() },
+    body: { expectedRevision: invitation.revision, requestId },
+  }));
+}
+
+export async function acceptStaffInvitation(input: {
+  secret: string;
+  username: string;
+  password: string;
+  requestId: string;
+}): Promise<StaffInvitationAcceptance> {
+  return unwrap(await client.POST("/api/v3/auth/invitations/accept", { body: input }));
+}
+
+export async function requestPasswordReset(
+  username: string,
+  requestId: string,
+): Promise<{ outcome: "accepted" }> {
+  return unwrap(await client.POST("/api/v3/auth/password-reset-requests", {
+    body: { username, requestId },
+  }));
+}
+
+export async function getPasswordResetRequests(signal?: AbortSignal): Promise<PasswordResetQueue> {
+  return unwrap(await client.GET("/api/v3/auth/password-reset-requests", { signal }));
+}
+
+export async function approvePasswordReset(
+  request: PasswordResetRequest,
+  requestId: string,
+): Promise<PasswordResetSecret> {
+  return unwrap(await client.POST("/api/v3/auth/password-reset-requests/{requestId}/approve", {
+    params: { path: { requestId: request.requestId }, header: mutationHeaders() },
+    body: { expectedRevision: request.revision, requestId },
+  }));
+}
+
+export async function declinePasswordReset(
+  request: PasswordResetRequest,
+  requestId: string,
+): Promise<PasswordResetMutation> {
+  return unwrap(await client.POST("/api/v3/auth/password-reset-requests/{requestId}/decline", {
+    params: { path: { requestId: request.requestId }, header: mutationHeaders() },
+    body: { expectedRevision: request.revision, requestId },
+  }));
+}
+
+export async function reissuePasswordReset(
+  request: PasswordResetRequest,
+  requestId: string,
+): Promise<PasswordResetSecret> {
+  return unwrap(await client.POST("/api/v3/auth/password-reset-requests/{requestId}/reissue", {
+    params: { path: { requestId: request.requestId }, header: mutationHeaders() },
+    body: { expectedRevision: request.revision, requestId },
+  }));
+}
+
+export async function completePasswordReset(input: {
+  username: string;
+  code: string;
+  password: string;
+  requestId: string;
+}): Promise<{ outcome: "completed" }> {
+  return unwrap(await client.POST("/api/v3/auth/password-reset", { body: input }));
+}
+
+export async function changeOwnPassword(input: {
+  currentPassword: string;
+  newPassword: string;
+  requestId: string;
+}): Promise<AuthSession> {
+  return unwrap(await client.POST("/api/v3/auth/change-password", {
+    params: { header: mutationHeaders() },
+    body: input,
+  }));
+}
+
+export async function revokeStaffSessions(
+  staff: StaffAccount,
+  requestId: string,
+): Promise<StaffSessionRevocation> {
+  return unwrap(await client.POST("/api/v3/auth/staff/{staffId}/revoke-sessions", {
+    params: { path: { staffId: staff.userId }, header: mutationHeaders() },
+    body: { expectedRevision: staff.revision, requestId },
   }));
 }
 

@@ -50,6 +50,7 @@ export default function App() {
   return (
     <AppShell
       session={session}
+      onSessionChange={setSession}
       onSignOut={async () => {
         await signOut();
         setSession(null);

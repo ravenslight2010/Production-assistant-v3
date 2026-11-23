@@ -54,12 +54,14 @@ BEGIN
   -- Only the allowlisted identity, disabled flag, and reviewed role are in this
   -- synthetic projection. There is no V1 ID, password hash, session, or reset
   -- token in the fixture.
-  v_outcome := v3.create_staff_account(
+  v_outcome := (v3.create_staff_account(
     v_manager,
     'CutoverRehearsalOperator',
     'argon2id$v=19$m=19456,t=2,p=1$c2FsdA==$aGFzaA==',
-    'operator'
-  );
+    'operator',
+    'cutover-create-operator',
+    repeat('1', 64)
+  ))->>'outcome';
   IF v_outcome <> 'created' THEN
     RAISE EXCEPTION 'Expected a new V3 operator account, got %', v_outcome;
   END IF;
@@ -72,28 +74,35 @@ BEGIN
     RAISE EXCEPTION 'Synthetic staff identity or role mapping was not preserved';
   END IF;
 
-  v_outcome := v3.create_staff_account(
+  v_outcome := (v3.create_staff_account(
     v_manager,
     'cutoverrehearsaloperator',
     'argon2id$v=19$m=19456,t=2,p=1$c2FsdA==$aGFzaA==',
-    'operator'
-  );
+    'operator',
+    'cutover-create-duplicate',
+    repeat('2', 64)
+  ))->>'outcome';
   IF v_outcome <> 'duplicate' THEN
     RAISE EXCEPTION 'Case-insensitive duplicate staff identity was not held for review';
   END IF;
 
-  v_outcome := v3.create_staff_account(
+  v_outcome := (v3.create_staff_account(
     v_manager,
     'CutoverRehearsalDisabled',
     'argon2id$v=19$m=19456,t=2,p=1$c2FsdA==$aGFzaA==',
-    'operator'
-  );
+    'operator',
+    'cutover-create-disabled',
+    repeat('3', 64)
+  ))->>'outcome';
   IF v_outcome <> 'created' THEN
     RAISE EXCEPTION 'Could not create the synthetic disabled-account fixture';
   END IF;
   SELECT staff_id INTO v_disabled_staff
   FROM v3.find_staff_for_sign_in('cutoverrehearsaldisabled');
-  v_outcome := v3.update_staff_account(v_manager, v_disabled_staff, true, NULL);
+  v_outcome := (v3.update_staff_account(
+    v_manager, v_disabled_staff, true, NULL, 1,
+    'cutover-disable-fixture', repeat('4', 64)
+  ))->>'outcome';
   SELECT disabled INTO v_disabled
   FROM v3.find_staff_for_sign_in('cutoverrehearsaldisabled');
   IF v_outcome <> 'updated' OR v_disabled IS DISTINCT FROM true THEN
@@ -263,7 +272,10 @@ BEGIN
     RAISE EXCEPTION 'Retrying setup Undo did not return its original outcome';
   END IF;
 
-  v_outcome := v3.update_staff_account(v_manager, v_operator, true, NULL);
+  v_outcome := (v3.update_staff_account(
+    v_manager, v_operator, true, NULL, 1,
+    'cutover-disable-operator', repeat('5', 64)
+  ))->>'outcome';
   IF v_outcome <> 'updated'
      OR EXISTS (SELECT 1 FROM v3.resolve_staff_session(repeat('a', 64))) THEN
     RAISE EXCEPTION 'Synthetic staff rollback did not disable and revoke the V3 account';

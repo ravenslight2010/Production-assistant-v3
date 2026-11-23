@@ -110,6 +110,7 @@ function routeOperation(pathname) {
 
 export function createAuthApi({
   auth,
+  accounts,
   getClientKey,
   secureCookies = process.env.NODE_ENV === "production",
   logger = () => {},
@@ -126,11 +127,15 @@ export function createAuthApi({
     "bootstrapAvailable",
     "bootstrapManager",
     "listStaff",
-    "createStaffAccount",
-    "updateStaffAccount",
   ]) {
     if (typeof auth?.[method] !== "function") {
       throw new TypeError(`A V3 authentication adapter with ${method}() is required.`);
+    }
+  }
+  const staffAccounts = accounts ?? auth;
+  for (const method of ["createStaffAccount", "updateStaffAccount"]) {
+    if (typeof staffAccounts?.[method] !== "function") {
+      throw new TypeError(`A V3 account service with ${method}() is required.`);
     }
   }
   if (typeof getClientKey !== "function") {
@@ -250,7 +255,7 @@ export function createAuthApi({
           return true;
         }
         if (url.search) throw new V3AuthError(400, "Staff accounts do not accept query parameters.");
-        if (request.method === "POST") assertSameOriginRequest(request);
+        assertSameOriginRequest(request);
         const current = await auth.authenticate(request);
         if (current?.verified !== true) {
           sendJson(response, 401, { error: "Sign in to manage staff accounts." });
@@ -274,17 +279,18 @@ export function createAuthApi({
 
         const body = await readJsonBody(request);
         const keys = Object.keys(body).sort();
-        if (keys.length !== 3 || keys[0] !== "password" || keys[1] !== "roleName" || keys[2] !== "username") {
+        if (keys.length !== 4 || keys[0] !== "password" || keys[1] !== "requestId" || keys[2] !== "roleName" || keys[3] !== "username") {
           throw new V3AuthError(400, "The staff account request contains missing or unsupported fields.");
         }
-        await auth.createStaffAccount({
+        const created = await staffAccounts.createStaffAccount({
           actorId: current.actorId,
           username: body.username,
           password: body.password,
           roleName: body.roleName,
+          requestId: body.requestId,
           clientKey: getClientKey(request),
         });
-        sendJson(response, 201, await auth.listStaff(current.actorId));
+        sendJson(response, created.replayed === true ? 200 : 201, await auth.listStaff(current.actorId));
         return true;
       }
 
@@ -312,18 +318,23 @@ export function createAuthApi({
         const body = await readJsonBody(request);
         const keys = Object.keys(body);
         if (
-          keys.length < 1
-          || keys.length > 2
-          || keys.some((key) => key !== "disabled" && key !== "roleName")
+          keys.length < 3
+          || keys.length > 4
+          || keys.some((key) => !["disabled", "roleName", "expectedRevision", "requestId"].includes(key))
+          || !Object.hasOwn(body, "expectedRevision")
+          || !Object.hasOwn(body, "requestId")
+          || !Object.hasOwn(body, "disabled") && !Object.hasOwn(body, "roleName")
         ) {
           throw new V3AuthError(400, "The staff account change contains missing or unsupported fields.");
         }
         const staffId = url.pathname.slice(`${AUTH_PREFIX}/staff/`.length);
-        const updated = await auth.updateStaffAccount({
+        const updated = await staffAccounts.updateStaffAccount({
           actorId: current.actorId,
           staffId,
           disabled: body.disabled,
           roleName: body.roleName,
+          expectedRevision: body.expectedRevision,
+          requestId: body.requestId,
           clientKey: getClientKey(request),
         });
         sendJson(response, 200, {
@@ -340,7 +351,7 @@ export function createAuthApi({
         const headers = error.retryAfterSeconds === undefined
           ? {}
           : { "Retry-After": String(error.retryAfterSeconds) };
-        sendJson(response, error.status, { error: error.message }, headers);
+        sendJson(response, error.status, { error: error.message, ...error.details }, headers);
         return true;
       }
       logger({

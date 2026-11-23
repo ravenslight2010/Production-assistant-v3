@@ -8,7 +8,7 @@ const SOURCES = [
   ["0007-approved-setup-catalogs.sql", "163829a4906746dc18879aa41156cc04adacaccc17a33ca698554979860dab9d"],
   ["0008-production-rule-enforcement.sql", "d248bb1d6c9b4a781d001f0720376bce827b78c3f8f3f8a03a59eb86334cc5a2"],
 ];
-const RUNTIME_ACCESS_SHA256 = "14f2febdbbc7af08a23e728db89d02c5b3e619527fa62f4f58d8d3c4aec387b0";
+const RUNTIME_ACCESS_SHA256 = "2310e52f036969f79a6dc18242c6e8761e7429415b5687366c2d8539958b53ce";
 const MANAGED_BASELINE = "8563f4c4b177a2c0a864491f9d5ed5db";
 const TABLES = [
   "command_receipts", "facility_scope", "inventory_balances", "inventory_movements",

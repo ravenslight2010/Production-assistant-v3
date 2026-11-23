@@ -222,6 +222,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StaffDirectory"
+        "200":
+          description: Exact staff-creation replay confirmed; no credential is returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffDirectory"
         "400":
           $ref: "#/components/responses/Error"
         "401":
@@ -291,6 +297,497 @@ paths:
         "503":
           $ref: "#/components/responses/Error"
         "405":
+          $ref: "#/components/responses/Error"
+  /api/v3/auth/staff/{staffId}/revoke-sessions:
+    post:
+      operationId: revokeStaffSessions
+      summary: Revoke all active sessions for a staff account
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - name: staffId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountRevisionCommand"
+      responses:
+        "200":
+          description: Sessions revoked, or an exact replay confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffSessionRevocation"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v3/auth/invitations/accept:
+    post:
+      operationId: acceptStaffInvitation
+      summary: Accept a single-use staff invitation
+      description: >
+        Invitation secrets are accepted only in the JSON body. A replay confirms
+        that the account exists and requires sign-in; it never recreates a session.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StaffInvitationAccept"
+      responses:
+        "201":
+          description: Invitation accepted and staff account created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffInvitationAcceptance"
+        "200":
+          description: Exact acceptance replay confirmed; sign-in is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffInvitationAcceptance"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v3/auth/invitations:
+    get:
+      operationId: listStaffInvitations
+      summary: List staff invitations visible to the manager's capabilities
+      responses:
+        "200":
+          description: Bounded invitation list without plaintext secrets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffInvitationList"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createStaffInvitation
+      summary: Create a single-use staff invitation
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StaffInvitationCreate"
+      responses:
+        "201":
+          description: Invitation created; plaintext secret is returned only now
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffInvitationSecret"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v3/auth/invitations/{invitationId}/revoke:
+    post:
+      operationId: revokeStaffInvitation
+      summary: Revoke an active staff invitation
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - name: invitationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountRevisionCommand"
+      responses:
+        "200":
+          description: Invitation revoked, or an exact replay confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffInvitationMutation"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v3/auth/password-reset-requests:
+    get:
+      operationId: listPasswordResetRequests
+      summary: List password-reset requests visible to the approver
+      responses:
+        "200":
+          description: Bounded approval queue and pending count without reset codes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PasswordResetQueue"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: requestPasswordReset
+      summary: Request manager-approved password recovery
+      description: The response is identical whether or not the username exists.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetRequestCreate"
+      responses:
+        "202":
+          description: Recovery request accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PasswordResetRequestAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v3/auth/password-reset-requests/{requestId}/approve:
+    post:
+      operationId: approvePasswordReset
+      summary: Approve recovery and issue a single-use reset code
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/PasswordResetId"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountRevisionCommand"
+      responses:
+        "200":
+          description: Reset approved; plaintext code is returned only now
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PasswordResetSecret"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v3/auth/password-reset-requests/{requestId}/decline:
+    post:
+      operationId: declinePasswordReset
+      summary: Decline a pending password-reset request
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/PasswordResetId"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountRevisionCommand"
+      responses:
+        "200":
+          description: Reset declined without revoking sessions, or an exact replay confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PasswordResetMutation"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v3/auth/password-reset-requests/{requestId}/reissue:
+    post:
+      operationId: reissuePasswordReset
+      summary: Invalidate and replace an approved reset code
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/PasswordResetId"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountRevisionCommand"
+      responses:
+        "200":
+          description: Replacement reset code issued; plaintext code is returned only now
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PasswordResetSecret"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v3/auth/password-reset:
+    post:
+      operationId: completePasswordReset
+      summary: Complete recovery with an approved single-use code
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetComplete"
+      responses:
+        "200":
+          description: Password replaced and prior sessions revoked; sign-in is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PasswordResetCompleted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v3/auth/change-password:
+    post:
+      operationId: changeOwnPassword
+      summary: Change the signed-in account's password
+      description: Prior sessions are revoked and a fresh session is returned.
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordChange"
+      responses:
+        "200":
+          description: Password changed and fresh session/CSRF cookies set
+          headers:
+            Set-Cookie:
+              description: Separate replacement v3_session and v3_csrf cookies
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
           $ref: "#/components/responses/Error"
   /api/v3/runs:
     get:
@@ -2451,6 +2948,13 @@ components:
       required: true
       schema:
         type: string
+    PasswordResetId:
+      in: path
+      name: requestId
+      required: true
+      schema:
+        type: string
+        format: uuid
   schemas:
     Health:
       type: object
@@ -2519,7 +3023,7 @@ components:
     StaffAccountCreate:
       type: object
       additionalProperties: false
-      required: [username, password, roleName]
+      required: [username, password, roleName, requestId]
       properties:
         username:
           type: string
@@ -2533,10 +3037,13 @@ components:
           type: string
           minLength: 1
           maxLength: 80
+        requestId:
+          $ref: "#/components/schemas/AccountRequestId"
     StaffAccountUpdate:
       type: object
       additionalProperties: false
-      minProperties: 1
+      minProperties: 3
+      required: [expectedRevision, requestId]
       properties:
         disabled:
           type: boolean
@@ -2544,6 +3051,101 @@ components:
           type: string
           minLength: 1
           maxLength: 80
+        expectedRevision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        requestId:
+          $ref: "#/components/schemas/AccountRequestId"
+    AccountRequestId:
+      type: string
+      minLength: 1
+      maxLength: 200
+    AccountRevisionCommand:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, requestId]
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        requestId:
+          $ref: "#/components/schemas/AccountRequestId"
+    StaffInvitationCreate:
+      type: object
+      additionalProperties: false
+      required: [roleName, requestId]
+      properties:
+        roleName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        requestId:
+          $ref: "#/components/schemas/AccountRequestId"
+    StaffInvitationAccept:
+      type: object
+      additionalProperties: false
+      required: [secret, username, password, requestId]
+      properties:
+        secret:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{43}$"
+        username:
+          type: string
+          minLength: 3
+          maxLength: 40
+        password:
+          type: string
+          minLength: 6
+          maxLength: 128
+        requestId:
+          $ref: "#/components/schemas/AccountRequestId"
+    PasswordResetRequestCreate:
+      type: object
+      additionalProperties: false
+      required: [username, requestId]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 40
+        requestId:
+          $ref: "#/components/schemas/AccountRequestId"
+    PasswordResetComplete:
+      type: object
+      additionalProperties: false
+      required: [username, code, password, requestId]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 40
+        code:
+          type: string
+          maxLength: 64
+          description: Eight-character recovery code; case, whitespace, and dashes are normalized.
+        password:
+          type: string
+          minLength: 6
+          maxLength: 128
+        requestId:
+          $ref: "#/components/schemas/AccountRequestId"
+    PasswordChange:
+      type: object
+      additionalProperties: false
+      required: [currentPassword, newPassword, requestId]
+      properties:
+        currentPassword:
+          type: string
+          minLength: 1
+          maxLength: 128
+        newPassword:
+          type: string
+          minLength: 6
+          maxLength: 128
+        requestId:
+          $ref: "#/components/schemas/AccountRequestId"
     StaffDirectory:
       type: object
       required: [staff, roles]
@@ -2558,9 +3160,12 @@ components:
           maxItems: 100
           items:
             $ref: "#/components/schemas/StaffRole"
+        outcome:
+          type: string
+          enum: [updated, unchanged]
     StaffAccount:
       type: object
-      required: [userId, username, role, disabled, createdAt]
+      required: [userId, username, role, disabled, createdAt, revision]
       properties:
         userId:
           type: string
@@ -2574,6 +3179,10 @@ components:
         createdAt:
           type: string
           format: date-time
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
     StaffRole:
       type: object
       required: [name, capabilities]
@@ -2584,6 +3193,152 @@ components:
           type: array
           items:
             type: string
+    StaffInvitation:
+      type: object
+      required: [invitationId, roleName, status, createdAt, expiresAt, revision]
+      properties:
+        invitationId:
+          type: string
+          format: uuid
+        roleName:
+          type: string
+        status:
+          type: string
+          enum: [active, consumed, revoked, expired]
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+    StaffInvitationList:
+      type: object
+      required: [invitations]
+      properties:
+        invitations:
+          type: array
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/StaffInvitation"
+    StaffInvitationSecret:
+      type: object
+      required: [invitation, secret]
+      properties:
+        invitation:
+          $ref: "#/components/schemas/StaffInvitation"
+        secret:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{43}$"
+    StaffInvitationMutation:
+      type: object
+      required: [invitation, outcome]
+      properties:
+        invitation:
+          $ref: "#/components/schemas/StaffInvitation"
+        outcome:
+          const: revoked
+        replayed:
+          type: boolean
+    StaffInvitationAcceptance:
+      type: object
+      required: [outcome, staff]
+      properties:
+        outcome:
+          type: string
+          enum: [accepted, accepted_sign_in_required]
+        staff:
+          $ref: "#/components/schemas/StaffAccount"
+    StaffSessionRevocation:
+      type: object
+      required: [outcome, staff]
+      properties:
+        outcome:
+          const: revoked
+        staff:
+          $ref: "#/components/schemas/StaffAccount"
+        replayed:
+          type: boolean
+    PasswordResetRequest:
+      type: object
+      required: [requestId, staffId, username, role, status, requestedAt, expiresAt, revision, approvedAt, codeExpiresAt]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        staffId:
+          type: string
+          format: uuid
+        username:
+          type: string
+        role:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, declined, used, superseded, invalidated, expired]
+        requestedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        approvedAt:
+          type: [string, "null"]
+          format: date-time
+        codeExpiresAt:
+          type: [string, "null"]
+          format: date-time
+    PasswordResetQueue:
+      type: object
+      required: [requests, pendingCount]
+      properties:
+        requests:
+          type: array
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/PasswordResetRequest"
+        pendingCount:
+          type: integer
+          minimum: 0
+          maximum: 200
+    PasswordResetRequestAccepted:
+      type: object
+      required: [outcome]
+      properties:
+        outcome:
+          const: accepted
+    PasswordResetSecret:
+      type: object
+      required: [request, code]
+      properties:
+        request:
+          $ref: "#/components/schemas/PasswordResetRequest"
+        code:
+          type: string
+          pattern: "^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$"
+    PasswordResetMutation:
+      type: object
+      required: [request, outcome]
+      properties:
+        request:
+          $ref: "#/components/schemas/PasswordResetRequest"
+        outcome:
+          const: declined
+        replayed:
+          type: boolean
+    PasswordResetCompleted:
+      type: object
+      required: [outcome]
+      properties:
+        outcome:
+          const: completed
     AuthSession:
       type: object
       required: [staff, expiresAt]
@@ -5844,6 +6599,21 @@ components:
       properties:
         error:
           type: string
+        code:
+          type: string
+          description: Stable caller-safe account failure code, when available.
+        replayed:
+          type: boolean
+        currentStaff:
+          $ref: "#/components/schemas/StaffAccount"
+        currentInvitation:
+          $ref: "#/components/schemas/StaffInvitation"
+        currentRequest:
+          $ref: "#/components/schemas/PasswordResetRequest"
+        invitation:
+          $ref: "#/components/schemas/StaffInvitation"
+        request:
+          $ref: "#/components/schemas/PasswordResetRequest"
   responses:
     Error:
       description: Safe error message

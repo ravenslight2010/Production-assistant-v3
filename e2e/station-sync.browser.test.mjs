@@ -102,7 +102,7 @@ async function installManagerApi(context, baseUrl, initialRun = null) {
   const commands = [];
   const staffChanges = [];
   let directory = {
-    staff: [{ userId: STAFF_ID, username: "manager", role: "manager", disabled: false }],
+    staff: [{ userId: STAFF_ID, username: "manager", role: "manager", disabled: false, createdAt: "2026-11-21T12:00:00.000Z", revision: 1 }],
     roles: [{ name: "manager", capabilities: ["manage-staff"] }, { name: "operator", capabilities: [] }],
   };
   let stopReasonSettings = { revision: 0, reasons: ["Equipment jam", "Break", "Quality hold"], updatedAt: null };
@@ -234,12 +234,13 @@ async function installManagerApi(context, baseUrl, initialRun = null) {
       run.stationProgress.line.progress.casesProduced = body.changes.casesProduced;
       return json(route, { outcome: "accepted", replayed: false, commandId: body.commandId, stationKey: "line", run });
     }
+    if (path === "/api/v3/auth/invitations" && method === "GET") return json(route, { invitations: [] });
     if (path === "/api/v3/auth/staff" && method === "GET") return json(route, directory);
     if (path === "/api/v3/auth/staff" && method === "POST") {
       const body = request.postDataJSON();
       staffChanges.push(body);
       assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
-      directory = { ...directory, staff: [...directory.staff, { userId: crypto.randomUUID(), username: body.username, role: body.roleName, disabled: false }] };
+      directory = { ...directory, staff: [...directory.staff, { userId: crypto.randomUUID(), username: body.username, role: body.roleName, disabled: false, createdAt: "2026-11-21T12:00:00.000Z", revision: 1 }] };
       return json(route, directory, 201);
     }
     if (path === "/api/v3/auth/sign-out" && method === "POST") return route.fulfill({ status: 204 });
@@ -325,7 +326,11 @@ test("all V1-style sections and staff workflows are reachable without dead navig
   await page.locator("#new-staff-role").selectOption("operator");
   await page.getByRole("button", { name: "Create account" }).click();
   await page.getByText("Staff account created. The password was not stored in the browser.").waitFor();
-  assert.deepEqual(api.staffChanges, [{ username: "operator.two", password: "synthetic-only", roleName: "operator" }]);
+  assert.equal(api.staffChanges.length, 1);
+  assert.equal(api.staffChanges[0].username, "operator.two");
+  assert.equal(api.staffChanges[0].password, "synthetic-only");
+  assert.equal(api.staffChanges[0].roleName, "operator");
+  assert.match(api.staffChanges[0].requestId, /^[0-9a-f-]{36}$/);
   await page.getByRole("button", { name: "Sign out" }).click();
   await page.getByRole("heading", { name: "Staff sign in" }).waitFor();
   await context.close();

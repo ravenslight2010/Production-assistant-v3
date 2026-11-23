@@ -150,6 +150,187 @@ export interface paths {
         patch: operations["updateStaffAccount"];
         trace?: never;
     };
+    "/api/v3/auth/staff/{staffId}/revoke-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke all active sessions for a staff account */
+        post: operations["revokeStaffSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/auth/invitations/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept a single-use staff invitation
+         * @description Invitation secrets are accepted only in the JSON body. A replay confirms that the account exists and requires sign-in; it never recreates a session.
+         */
+        post: operations["acceptStaffInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/auth/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List staff invitations visible to the manager's capabilities */
+        get: operations["listStaffInvitations"];
+        put?: never;
+        /** Create a single-use staff invitation */
+        post: operations["createStaffInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/auth/invitations/{invitationId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke an active staff invitation */
+        post: operations["revokeStaffInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/auth/password-reset-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List password-reset requests visible to the approver */
+        get: operations["listPasswordResetRequests"];
+        put?: never;
+        /**
+         * Request manager-approved password recovery
+         * @description The response is identical whether or not the username exists.
+         */
+        post: operations["requestPasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/auth/password-reset-requests/{requestId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve recovery and issue a single-use reset code */
+        post: operations["approvePasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/auth/password-reset-requests/{requestId}/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decline a pending password-reset request */
+        post: operations["declinePasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/auth/password-reset-requests/{requestId}/reissue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Invalidate and replace an approved reset code */
+        post: operations["reissuePasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/auth/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete recovery with an approved single-use code */
+        post: operations["completePasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/auth/change-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change the signed-in account's password
+         * @description Prior sessions are revoked and a fresh session is returned.
+         */
+        post: operations["changeOwnPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/runs": {
         parameters: {
             query?: never;
@@ -1196,14 +1377,50 @@ export interface components {
             username: string;
             password: string;
             roleName: string;
+            requestId: components["schemas"]["AccountRequestId"];
         };
         StaffAccountUpdate: {
             disabled?: boolean;
             roleName?: string;
+            expectedRevision: number;
+            requestId: components["schemas"]["AccountRequestId"];
+        };
+        AccountRequestId: string;
+        AccountRevisionCommand: {
+            expectedRevision: number;
+            requestId: components["schemas"]["AccountRequestId"];
+        };
+        StaffInvitationCreate: {
+            roleName: string;
+            requestId: components["schemas"]["AccountRequestId"];
+        };
+        StaffInvitationAccept: {
+            secret: string;
+            username: string;
+            password: string;
+            requestId: components["schemas"]["AccountRequestId"];
+        };
+        PasswordResetRequestCreate: {
+            username: string;
+            requestId: components["schemas"]["AccountRequestId"];
+        };
+        PasswordResetComplete: {
+            username: string;
+            /** @description Eight-character recovery code; case, whitespace, and dashes are normalized. */
+            code: string;
+            password: string;
+            requestId: components["schemas"]["AccountRequestId"];
+        };
+        PasswordChange: {
+            currentPassword: string;
+            newPassword: string;
+            requestId: components["schemas"]["AccountRequestId"];
         };
         StaffDirectory: {
             staff: components["schemas"]["StaffAccount"][];
             roles: components["schemas"]["StaffRole"][];
+            /** @enum {string} */
+            outcome?: "updated" | "unchanged";
         };
         StaffAccount: {
             /** Format: uuid */
@@ -1213,10 +1430,88 @@ export interface components {
             disabled: boolean;
             /** Format: date-time */
             createdAt: string;
+            revision: number;
         };
         StaffRole: {
             name: string;
             capabilities: string[];
+        };
+        StaffInvitation: {
+            /** Format: uuid */
+            invitationId: string;
+            roleName: string;
+            /** @enum {string} */
+            status: "active" | "consumed" | "revoked" | "expired";
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+            revision: number;
+        };
+        StaffInvitationList: {
+            invitations: components["schemas"]["StaffInvitation"][];
+        };
+        StaffInvitationSecret: {
+            invitation: components["schemas"]["StaffInvitation"];
+            secret: string;
+        };
+        StaffInvitationMutation: {
+            invitation: components["schemas"]["StaffInvitation"];
+            /** @constant */
+            outcome: "revoked";
+            replayed?: boolean;
+        };
+        StaffInvitationAcceptance: {
+            /** @enum {string} */
+            outcome: "accepted" | "accepted_sign_in_required";
+            staff: components["schemas"]["StaffAccount"];
+        };
+        StaffSessionRevocation: {
+            /** @constant */
+            outcome: "revoked";
+            staff: components["schemas"]["StaffAccount"];
+            replayed?: boolean;
+        };
+        PasswordResetRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            staffId: string;
+            username: string;
+            role: string;
+            /** @enum {string} */
+            status: "pending" | "approved" | "declined" | "used" | "superseded" | "invalidated" | "expired";
+            /** Format: date-time */
+            requestedAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+            revision: number;
+            /** Format: date-time */
+            approvedAt: string | null;
+            /** Format: date-time */
+            codeExpiresAt: string | null;
+        };
+        PasswordResetQueue: {
+            requests: components["schemas"]["PasswordResetRequest"][];
+            pendingCount: number;
+        };
+        PasswordResetRequestAccepted: {
+            /** @constant */
+            outcome: "accepted";
+        };
+        PasswordResetSecret: {
+            request: components["schemas"]["PasswordResetRequest"];
+            code: string;
+        };
+        PasswordResetMutation: {
+            request: components["schemas"]["PasswordResetRequest"];
+            /** @constant */
+            outcome: "declined";
+            replayed?: boolean;
+        };
+        PasswordResetCompleted: {
+            /** @constant */
+            outcome: "completed";
         };
         AuthSession: {
             staff: components["schemas"]["Staff"];
@@ -2992,6 +3287,14 @@ export interface components {
         };
         Error: {
             error: string;
+            /** @description Stable caller-safe account failure code, when available. */
+            code?: string;
+            replayed?: boolean;
+            currentStaff?: components["schemas"]["StaffAccount"];
+            currentInvitation?: components["schemas"]["StaffInvitation"];
+            currentRequest?: components["schemas"]["PasswordResetRequest"];
+            invitation?: components["schemas"]["StaffInvitation"];
+            request?: components["schemas"]["PasswordResetRequest"];
         };
     };
     responses: {
@@ -3011,6 +3314,7 @@ export interface components {
         CountId: string;
         Limit: number;
         CsrfToken: string;
+        PasswordResetId: string;
     };
     requestBodies: never;
     headers: never;
@@ -3228,6 +3532,15 @@ export interface operations {
             };
         };
         responses: {
+            /** @description Exact staff-creation replay confirmed; no credential is returned */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffDirectory"];
+                };
+            };
             /** @description Staff account created; no credential is returned */
             201: {
                 headers: {
@@ -3279,6 +3592,437 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    revokeStaffSessions: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                staffId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountRevisionCommand"];
+            };
+        };
+        responses: {
+            /** @description Sessions revoked, or an exact replay confirmed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffSessionRevocation"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    acceptStaffInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StaffInvitationAccept"];
+            };
+        };
+        responses: {
+            /** @description Exact acceptance replay confirmed; sign-in is required */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffInvitationAcceptance"];
+                };
+            };
+            /** @description Invitation accepted and staff account created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffInvitationAcceptance"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listStaffInvitations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded invitation list without plaintext secrets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffInvitationList"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    createStaffInvitation: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StaffInvitationCreate"];
+            };
+        };
+        responses: {
+            /** @description Invitation created; plaintext secret is returned only now */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffInvitationSecret"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    revokeStaffInvitation: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                invitationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountRevisionCommand"];
+            };
+        };
+        responses: {
+            /** @description Invitation revoked, or an exact replay confirmed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffInvitationMutation"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listPasswordResetRequests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded approval queue and pending count without reset codes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordResetQueue"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    requestPasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description Recovery request accepted for processing */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordResetRequestAccepted"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    approvePasswordReset: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                requestId: components["parameters"]["PasswordResetId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountRevisionCommand"];
+            };
+        };
+        responses: {
+            /** @description Reset approved; plaintext code is returned only now */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordResetSecret"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    declinePasswordReset: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                requestId: components["parameters"]["PasswordResetId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountRevisionCommand"];
+            };
+        };
+        responses: {
+            /** @description Reset declined without revoking sessions, or an exact replay confirmed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordResetMutation"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    reissuePasswordReset: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                requestId: components["parameters"]["PasswordResetId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountRevisionCommand"];
+            };
+        };
+        responses: {
+            /** @description Replacement reset code issued; plaintext code is returned only now */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordResetSecret"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    completePasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetComplete"];
+            };
+        };
+        responses: {
+            /** @description Password replaced and prior sessions revoked; sign-in is required */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordResetCompleted"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    changeOwnPassword: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordChange"];
+            };
+        };
+        responses: {
+            /** @description Password changed and fresh session/CSRF cookies set */
+            200: {
+                headers: {
+                    /** @description Separate replacement v3_session and v3_csrf cookies */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSession"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             405: components["responses"]["Error"];
             409: components["responses"]["Error"];
             413: components["responses"]["Error"];

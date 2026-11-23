@@ -22,17 +22,20 @@ DECLARE
   v_role_count integer;
 BEGIN
   SELECT count(*) INTO v_role_count
-  FROM v3.list_staff_roles('77000000-0000-4000-8000-000000000001');
+  FROM v3.list_staff_roles('77000000-0000-4000-8000-000000000001')
+  WHERE role_name IN ('manager', 'operator', 'qc-manager', 'warehouse');
   IF v_role_count <> 4 THEN
-    RAISE EXCEPTION 'V3 staff directory does not expose the two reviewed role equivalents';
+    RAISE EXCEPTION 'V3 staff directory does not expose manager, operator, and the two reviewed role equivalents';
   END IF;
 
-  SELECT v3.create_staff_account(
+  SELECT (v3.create_staff_account(
     '77000000-0000-4000-8000-000000000001',
     'V3WarehouseRoleTest',
     'argon2id$v=19$m=19456,t=2,p=1$c2FsdA==$aGFzaA==',
-    'warehouse'
-  ) INTO v_outcome;
+    'warehouse',
+    'role-equivalent-warehouse',
+    repeat('1', 64)
+  ))->>'outcome' INTO v_outcome;
   IF v_outcome IS DISTINCT FROM 'created' THEN
     RAISE EXCEPTION 'Manager could not assign the reviewed warehouse role';
   END IF;
@@ -40,12 +43,14 @@ BEGIN
   FROM v3.staff_accounts
   WHERE username = 'V3WarehouseRoleTest';
 
-  SELECT v3.create_staff_account(
+  SELECT (v3.create_staff_account(
     '77000000-0000-4000-8000-000000000001',
     'V3QcManagerRoleTest',
     'argon2id$v=19$m=19456,t=2,p=1$c2FsdA==$aGFzaA==',
-    'qc-manager'
-  ) INTO v_outcome;
+    'qc-manager',
+    'role-equivalent-qc-manager',
+    repeat('2', 64)
+  ))->>'outcome' INTO v_outcome;
   IF v_outcome IS DISTINCT FROM 'created' THEN
     RAISE EXCEPTION 'Manager could not assign the reviewed qc-manager role';
   END IF;

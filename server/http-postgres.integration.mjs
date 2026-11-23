@@ -175,10 +175,31 @@ async function main() {
         username: cutoverBatch.staff[0].username,
         password: OPERATOR_PASSWORD,
         roleName: "operator",
+        requestId: "integration-create-operator-1",
       }),
     });
     assert.equal(createStaff.status, 201);
     const directory = await jsonResponse(createStaff);
+    const createStaffReplay = await fetch(`${baseUrl}/api/v3/auth/staff`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: manager.cookieHeader,
+        "X-CSRF-Token": manager.csrfToken,
+        Origin: baseUrl,
+        "Sec-Fetch-Site": "same-origin",
+      },
+      body: JSON.stringify({
+        username: cutoverBatch.staff[0].username,
+        password: OPERATOR_PASSWORD,
+        roleName: "operator",
+        requestId: "integration-create-operator-1",
+      }),
+    });
+    assert.equal(createStaffReplay.status, 200);
+    assert.equal((await jsonResponse(createStaffReplay)).staff.filter(
+      (staff) => staff.username === "v3integrationoperator",
+    ).length, 1);
     assert.ok(directory.staff.some((staff) => staff.username.toLowerCase() === "v3integrationmanager"));
     assert.ok(directory.staff.some((staff) => staff.username.toLowerCase() === "v3integrationoperator"));
     assert.ok(directory.roles.some((role) => role.name === "manager"));
@@ -368,6 +389,7 @@ async function main() {
         username: "V3IntegrationSetupManager",
         password: "v3-test-setup-manager-password",
         roleName: "manager",
+        requestId: "integration-create-setup-manager-1",
       }),
     });
     assert.equal(createSetupManager.status, 201, await createSetupManager.clone().text());
@@ -1119,7 +1141,11 @@ async function main() {
         Origin: baseUrl,
         "Sec-Fetch-Site": "same-origin",
       },
-      body: JSON.stringify({ roleName: "manager" }),
+      body: JSON.stringify({
+        roleName: "manager",
+        expectedRevision: directory.staff.find((staff) => staff.username === "v3integrationoperator").revision,
+        requestId: "integration-promote-operator-1",
+      }),
     });
     assert.equal(roleChange.status, 200);
     const changedDirectory = await jsonResponse(roleChange);
@@ -1143,9 +1169,14 @@ async function main() {
         Origin: baseUrl,
         "Sec-Fetch-Site": "same-origin",
       },
-      body: JSON.stringify({ roleName: "operator" }),
+      body: JSON.stringify({
+        roleName: "operator",
+        expectedRevision: changedDirectory.staff.find((staff) => staff.username === "v3integrationoperator").revision,
+        requestId: "integration-demote-operator-1",
+      }),
     });
     assert.equal(demoteOperator.status, 200);
+    const demotedDirectory = await jsonResponse(demoteOperator);
     const demotedOperator = await signIn(baseUrl, "V3IntegrationOperator", OPERATOR_PASSWORD);
 
     const disableOperator = await fetch(`${baseUrl}/api/v3/auth/staff/${directory.staff.find((staff) => staff.username === "v3integrationoperator").userId}`, {
@@ -1157,7 +1188,11 @@ async function main() {
         Origin: baseUrl,
         "Sec-Fetch-Site": "same-origin",
       },
-      body: JSON.stringify({ disabled: true }),
+      body: JSON.stringify({
+        disabled: true,
+        expectedRevision: demotedDirectory.staff.find((staff) => staff.username === "v3integrationoperator").revision,
+        requestId: "integration-disable-operator-1",
+      }),
     });
     assert.equal(disableOperator.status, 200);
     assert.equal((await fetch(`${baseUrl}/api/v3/auth/session`, {
@@ -1179,9 +1214,165 @@ async function main() {
         Origin: baseUrl,
         "Sec-Fetch-Site": "same-origin",
       },
-      body: JSON.stringify({ disabled: true }),
+      body: JSON.stringify({
+        disabled: true,
+        expectedRevision: directory.staff.find((staff) => staff.userId === bootstrapBody.staff.userId).revision,
+        requestId: "integration-disable-last-manager-1",
+      }),
     });
     assert.equal(lastManagerChange.status, 409);
+
+    const invitationCommand = { roleName: "operator", requestId: "integration-create-invitation-1" };
+    const invitationResponse = await managerPost("/api/v3/auth/invitations", invitationCommand);
+    assert.equal(invitationResponse.status, 201);
+    const invitationBody = await jsonResponse(invitationResponse);
+    const invitationSecret = invitationBody.secret;
+    assert.match(invitationSecret, /^[A-Za-z0-9_-]{43}$/);
+    const invitationSecretReplay = await managerPost("/api/v3/auth/invitations", invitationCommand);
+    assert.equal(invitationSecretReplay.status, 409);
+    const invitationSecretReplayBody = await jsonResponse(invitationSecretReplay);
+    assert.equal(invitationSecretReplayBody.code, "secret_replay_unavailable");
+    assert.equal(JSON.stringify(invitationSecretReplayBody).includes(invitationSecret), false);
+
+    const revocableResponse = await managerPost("/api/v3/auth/invitations", {
+      roleName: "operator", requestId: "integration-create-invitation-revocable-1",
+    });
+    assert.equal(revocableResponse.status, 201);
+    const revocableInvitation = (await jsonResponse(revocableResponse)).invitation;
+    const revokedInvitation = await managerPost(`/api/v3/auth/invitations/${revocableInvitation.invitationId}/revoke`, {
+      expectedRevision: revocableInvitation.revision,
+      requestId: "integration-revoke-invitation-1",
+    });
+    assert.equal(revokedInvitation.status, 200);
+    assert.equal((await jsonResponse(revokedInvitation)).invitation.status, "revoked");
+
+    const invitedPassword = "v3-test-invited-password";
+    const invitedResetPassword = "v3-test-invited-reset-password";
+    const invitedFinalPassword = "v3-test-invited-final-password";
+    const invitationAcceptanceCommand = {
+      secret: invitationSecret,
+      username: "V3IntegrationInvited",
+      password: invitedPassword,
+      requestId: "integration-accept-invitation-1",
+    };
+    const acceptInvitation = await fetch(`${baseUrl}/api/v3/auth/invitations/accept`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl, "Sec-Fetch-Site": "same-origin" },
+      body: JSON.stringify(invitationAcceptanceCommand),
+    });
+    assert.equal(acceptInvitation.status, 201);
+    const invitedAcceptance = await jsonResponse(acceptInvitation);
+    const acceptInvitationReplay = await fetch(`${baseUrl}/api/v3/auth/invitations/accept`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl, "Sec-Fetch-Site": "same-origin" },
+      body: JSON.stringify(invitationAcceptanceCommand),
+    });
+    assert.equal(acceptInvitationReplay.status, 200);
+    assert.equal((await jsonResponse(acceptInvitationReplay)).outcome, "accepted_sign_in_required");
+    assert.equal(acceptInvitationReplay.headers.getSetCookie().length, 0);
+    const invitedSession = await signIn(baseUrl, "V3IntegrationInvited", invitedPassword);
+
+    const forgotPassword = await fetch(`${baseUrl}/api/v3/auth/password-reset-requests`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl, "Sec-Fetch-Site": "same-origin" },
+      body: JSON.stringify({ username: "V3IntegrationInvited", requestId: "integration-request-reset-1" }),
+    });
+    assert.equal(forgotPassword.status, 202);
+    assert.deepEqual(await jsonResponse(forgotPassword), { outcome: "accepted" });
+    const resetQueue = await fetch(`${baseUrl}/api/v3/auth/password-reset-requests`, {
+      headers: { Cookie: manager.cookieHeader, Origin: baseUrl, "Sec-Fetch-Site": "same-origin" },
+    });
+    assert.equal(resetQueue.status, 200);
+    const resetQueueBody = await jsonResponse(resetQueue);
+    assert.equal(resetQueueBody.pendingCount, 1);
+    const pendingReset = resetQueueBody.requests.find((request) => request.staffId === invitedAcceptance.staff.userId);
+    assert.ok(pendingReset);
+    const approvalCommand = {
+      expectedRevision: pendingReset.revision,
+      requestId: "integration-approve-reset-1",
+    };
+    const approveReset = await managerPost(`/api/v3/auth/password-reset-requests/${pendingReset.requestId}/approve`, approvalCommand);
+    assert.equal(approveReset.status, 200);
+    const approvedReset = await jsonResponse(approveReset);
+    const recoveryCode = approvedReset.code;
+    assert.match(recoveryCode, /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$/);
+    const approvalReplay = await managerPost(`/api/v3/auth/password-reset-requests/${pendingReset.requestId}/approve`, approvalCommand);
+    assert.equal(approvalReplay.status, 409);
+    const approvalReplayBody = await jsonResponse(approvalReplay);
+    assert.equal(approvalReplayBody.code, "secret_replay_unavailable");
+    assert.equal(JSON.stringify(approvalReplayBody).includes(recoveryCode), false);
+    const approvedOldSession = await fetch(`${baseUrl}/api/v3/auth/session`, { headers: { Cookie: invitedSession.cookieHeader } });
+    assert.equal(approvedOldSession.status, 401);
+
+    const completeReset = await fetch(`${baseUrl}/api/v3/auth/password-reset`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl, "Sec-Fetch-Site": "same-origin" },
+      body: JSON.stringify({
+        username: "V3IntegrationInvited",
+        code: recoveryCode.replace("-", "  ").toLowerCase(),
+        password: invitedResetPassword,
+        requestId: "integration-complete-reset-1",
+      }),
+    });
+    assert.equal(completeReset.status, 200);
+    assert.deepEqual(await jsonResponse(completeReset), { outcome: "completed" });
+    const oldPasswordSignIn = await fetch(`${baseUrl}/api/v3/auth/sign-in`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl, "Sec-Fetch-Site": "same-origin" },
+      body: JSON.stringify({ username: "V3IntegrationInvited", password: invitedPassword }),
+    });
+    assert.equal(oldPasswordSignIn.status, 401);
+    const invitedResetSession = await signIn(baseUrl, "V3IntegrationInvited", invitedResetPassword);
+
+    const passwordChangeCommand = {
+      currentPassword: invitedResetPassword,
+      newPassword: invitedFinalPassword,
+      requestId: "integration-change-own-password-1",
+    };
+    const changedPassword = await sessionPost(invitedResetSession, "/api/v3/auth/change-password", passwordChangeCommand);
+    assert.equal(changedPassword.status, 200);
+    const changedCookies = changedPassword.headers.getSetCookie().map((cookie) => cookie.split(";", 1)[0]);
+    const changedInvitedSession = {
+      cookieHeader: changedCookies.join("; "),
+      csrfToken: changedCookies.find((cookie) => cookie.startsWith("v3_csrf="))?.slice("v3_csrf=".length),
+    };
+    assert.match(changedInvitedSession.csrfToken ?? "", /^[A-Za-z0-9_-]{43}$/);
+    const changedPasswordReplay = await sessionPost(changedInvitedSession, "/api/v3/auth/change-password", passwordChangeCommand);
+    assert.equal(changedPasswordReplay.status, 200, "an exact password-change replay should return a canonical fresh session");
+    const rosterBeforeInvitedRevocation = await fetch(`${baseUrl}/api/v3/auth/staff`, {
+      headers: { Cookie: manager.cookieHeader },
+    });
+    assert.equal(rosterBeforeInvitedRevocation.status, 200);
+    const invitedBeforeRevocation = (await jsonResponse(rosterBeforeInvitedRevocation)).staff.find(
+      (staff) => staff.userId === invitedAcceptance.staff.userId,
+    );
+    assert.ok(invitedBeforeRevocation);
+    const revokedInvitedSessions = await managerPost(`/api/v3/auth/staff/${invitedAcceptance.staff.userId}/revoke-sessions`, {
+      expectedRevision: invitedBeforeRevocation.revision,
+      requestId: "integration-revoke-invited-sessions-1",
+    });
+    assert.equal(revokedInvitedSessions.status, 200);
+    const revokedInvitedSession = await fetch(`${baseUrl}/api/v3/auth/session`, { headers: { Cookie: changedInvitedSession.cookieHeader } });
+    assert.equal(revokedInvitedSession.status, 401);
+
+    await adminPool.query("INSERT INTO v3.roles (name, capabilities, builtin) VALUES ('reset-approver', '[\"approve-password-resets\"]'::jsonb, false) ON CONFLICT (name) DO NOTHING");
+    const createResetApprover = await managerPost("/api/v3/auth/staff", {
+      username: "V3IntegrationResetApprover",
+      password: "v3-test-reset-approver-password",
+      roleName: "reset-approver",
+      requestId: "integration-create-reset-approver-1",
+    });
+    assert.equal(createResetApprover.status, 201);
+    const resetApprover = await signIn(baseUrl, "V3IntegrationResetApprover", "v3-test-reset-approver-password");
+    const resetOnlyQueue = await fetch(`${baseUrl}/api/v3/auth/password-reset-requests`, {
+      headers: { Cookie: resetApprover.cookieHeader, Origin: baseUrl, "Sec-Fetch-Site": "same-origin" },
+    });
+    assert.equal(resetOnlyQueue.status, 200);
+    assert.equal((await jsonResponse(resetOnlyQueue)).pendingCount, 0);
+    const resetOnlyDirectory = await fetch(`${baseUrl}/api/v3/auth/staff`, {
+      headers: { Cookie: resetApprover.cookieHeader, Origin: baseUrl, "Sec-Fetch-Site": "same-origin" },
+    });
+    assert.equal(resetOnlyDirectory.status, 403);
 
     const signOut = await fetch(`${baseUrl}/api/v3/auth/sign-out`, {
       method: "POST",
@@ -1202,7 +1393,10 @@ async function main() {
     assert.equal(JSON.stringify(logs).includes(OPERATOR_PASSWORD), false);
     assert.equal(JSON.stringify(logs).includes(BOOTSTRAP_CODE), false);
     assert.equal(JSON.stringify(logs).includes("Synthetic schedule note"), false);
-    for (const cookie of [manager.cookieHeader, operator.cookieHeader, secondManager.cookieHeader, promotedOperator.cookieHeader, demotedOperator.cookieHeader]) {
+    for (const secret of [invitationSecret, recoveryCode, invitedPassword, invitedResetPassword, invitedFinalPassword, "v3-test-reset-approver-password"]) {
+      assert.equal(JSON.stringify(logs).includes(secret), false);
+    }
+    for (const cookie of [manager.cookieHeader, operator.cookieHeader, secondManager.cookieHeader, promotedOperator.cookieHeader, demotedOperator.cookieHeader, invitedSession.cookieHeader, invitedResetSession.cookieHeader, changedInvitedSession.cookieHeader, resetApprover.cookieHeader]) {
       assert.equal(JSON.stringify(logs).includes(cookie), false);
     }
     console.log("V3 HTTP/PostgreSQL check passed: manager schedules, reviewed import, idempotent retries, conflicts, and role restrictions are persistent.");

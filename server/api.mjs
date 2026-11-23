@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { createAccountApi } from "./account-api.mjs";
+import { createAccountService } from "./account-service.mjs";
 import { createAuthApi } from "./auth-api.mjs";
 import { createInventoryApi } from "./inventory-api.mjs";
 import { createMixApi } from "./mix-api.mjs";
@@ -98,6 +100,14 @@ function safeRouteName(url) {
   if (url.pathname === "/api/v3/auth/bootstrap") return "auth.bootstrap";
   if (url.pathname === "/api/v3/auth/staff") return "auth.staff";
   if (/^\/api\/v3\/auth\/staff\/[0-9a-f-]{36}$/i.test(url.pathname)) return "auth.staff_item";
+  if (/^\/api\/v3\/auth\/staff\/[0-9a-f-]{36}\/revoke-sessions$/i.test(url.pathname)) return "account.revoke_sessions";
+  if (url.pathname === "/api/v3/auth/invitations") return "account.invitations";
+  if (url.pathname === "/api/v3/auth/invitations/accept") return "account.invitation_accept";
+  if (/^\/api\/v3\/auth\/invitations\/[0-9a-f-]{36}\/revoke$/i.test(url.pathname)) return "account.invitation_revoke";
+  if (url.pathname === "/api/v3/auth/password-reset-requests") return "account.reset_requests";
+  if (/^\/api\/v3\/auth\/password-reset-requests\/[0-9a-f-]{36}\/(approve|decline|reissue)$/i.test(url.pathname)) return "account.reset_action";
+  if (url.pathname === "/api/v3/auth/password-reset") return "account.reset_complete";
+  if (url.pathname === "/api/v3/auth/change-password") return "account.password_change";
   if (url.pathname === "/api/v3/runs") return "runs.collection";
   if (url.pathname === "/api/v3/runs/products") return "runs.products";
   if (/^\/api\/v3\/runs\/[^/]+\/commands$/.test(url.pathname)) return "runs.command";
@@ -161,8 +171,20 @@ export function createV3Api({
     verifyCsrf: (request, auth) => authAdapter.verifyCsrf(request, auth),
     logger,
   });
+  const accountService = createAccountService({
+    query: (text, values) => pool.query(text, values),
+    logger,
+  });
+  const accountApi = createAccountApi({
+    accounts: accountService,
+    auth: authAdapter,
+    getClientKey,
+    secureCookies,
+    logger,
+  });
   const authApi = createAuthApi({
     auth: authAdapter,
+    accounts: accountService,
     getClientKey,
     secureCookies,
     logger,
@@ -247,6 +269,7 @@ export function createV3Api({
         return;
       }
 
+      if (await accountApi(request, response)) return;
       if (await authApi(request, response)) return;
       if (await inventoryApi(request, response)) return;
       if (await scheduleApi(request, response)) return;

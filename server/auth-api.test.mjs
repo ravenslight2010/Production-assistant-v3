@@ -361,6 +361,7 @@ test("manager staff routes require authorization and CSRF and accept only known 
       username: "NewOperator",
       password: "strong-test-password",
       roleName: "operator",
+      requestId: "create-operator-1",
       clientKey: "test-client",
     });
     return true;
@@ -377,7 +378,7 @@ test("manager staff routes require authorization and CSRF and accept only known 
     const missingCsrf = await fetch(`${baseUrl}/api/v3/auth/staff`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: `v3_session=${token}` },
-      body: JSON.stringify({ username: "NewOperator", password: "strong-test-password", roleName: "operator" }),
+      body: JSON.stringify({ username: "NewOperator", password: "strong-test-password", roleName: "operator", requestId: "create-operator-1" }),
     });
     assert.equal(missingCsrf.status, 403);
 
@@ -392,6 +393,7 @@ test("manager staff routes require authorization and CSRF and accept only known 
         username: "NewOperator",
         password: "strong-test-password",
         roleName: "operator",
+        requestId: "create-operator-1",
         passwordHash: "not-allowed",
       }),
     });
@@ -404,7 +406,7 @@ test("manager staff routes require authorization and CSRF and accept only known 
         cookie: `v3_session=${token}; v3_csrf=${csrfToken}`,
         "x-csrf-token": csrfToken,
       },
-      body: JSON.stringify({ username: "NewOperator", password: "strong-test-password", roleName: "operator" }),
+      body: JSON.stringify({ username: "NewOperator", password: "strong-test-password", roleName: "operator", requestId: "create-operator-1" }),
     });
     assert.equal(created.status, 201);
     assert.equal((await created.json()).staff[0].username, "manager");
