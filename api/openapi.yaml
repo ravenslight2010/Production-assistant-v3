@@ -583,6 +583,51 @@ paths:
           $ref: "#/components/responses/Error"
         "405":
           $ref: "#/components/responses/Error"
+  /api/v3/runs/{runId}/run-to-time:
+    post:
+      operationId: applyRunToTime
+      summary: Set the server-owned Run to Time target for a non-completed run
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunToTimeCommand"
+      responses:
+        "200":
+          description: Run to Time accepted; includes canonical run state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunCommandAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          description: Stale revision or completed-run edit; includes canonical state
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/RunConflict"
+                  - $ref: "#/components/schemas/RunToTimeInvalidTransition"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /api/v3/runs/{runId}/commands:
     post:
       operationId: applyRunCommand
@@ -2589,6 +2634,7 @@ components:
         - resumedAt
         - completedAt
         - serverNow
+        - runToTime
         - setupSnapshot
         - doughCapacity
         - inventoryConsumption
@@ -2645,6 +2691,10 @@ components:
         serverNow:
           type: string
           format: date-time
+        runToTime:
+          type: string
+          pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+          description: Server-owned America/Chicago wall-time operator target; not a lifecycle scheduling instruction.
         setupSnapshot:
           $ref: "#/components/schemas/RunSetup"
         doughCapacity:
@@ -2748,6 +2798,35 @@ components:
           enum: [conflict, invalid_transition]
         expectedRevision:
           type: integer
+        currentRun:
+          $ref: "#/components/schemas/Run"
+    RunToTimeCommand:
+      type: object
+      additionalProperties: false
+      required: [commandId, expectedRevision, runToTime]
+      properties:
+        commandId:
+          type: string
+          minLength: 1
+          maxLength: 200
+        expectedRevision:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        runToTime:
+          type: string
+          minLength: 4
+          maxLength: 12
+          description: 12-hour or 24-hour America/Chicago wall time, for example 7:15 PM or 19:15.
+    RunToTimeInvalidTransition:
+      type: object
+      required: [outcome, currentStatus, currentRun]
+      properties:
+        outcome:
+          const: invalid_transition
+        currentStatus:
+          type: string
+          const: completed
         currentRun:
           $ref: "#/components/schemas/Run"
     RunCreated:
@@ -4387,6 +4466,21 @@ components:
         timeZone:
           type: string
           const: America/Chicago
+    ScheduleReadinessWarning:
+      type: object
+      additionalProperties: false
+      required: [code, message, setupSection]
+      properties:
+        code:
+          type: string
+          enum: [product_unavailable, production_setup_unavailable, run_template_unavailable, recipe_rows_missing, dough_yield_unavailable, case_capacity_unavailable]
+        message:
+          type: string
+          minLength: 1
+          maxLength: 240
+        setupSection:
+          type: string
+          enum: [products, production-setups, run-templates, recipes]
     PlannedScheduleRun:
       type: object
       additionalProperties: false
@@ -4419,6 +4513,11 @@ components:
           type: integer
           minimum: 0
           description: Target cases minus carried-in surplus.
+        readinessWarnings:
+          type: array
+          description: Server-derived advisory diagnostics on confirmed schedule reads; never accepted as schedule command input.
+          items:
+            $ref: "#/components/schemas/ScheduleReadinessWarning"
     ScheduleBreak:
       type: object
       additionalProperties: false

@@ -66,6 +66,8 @@ async function main() {
   const failedResponses = [];
   const browserWrites = [];
   let offlineCheckActive = false;
+  let loseRunToTimeResponse = false;
+  const runToTimeRequests = [];
   let loseScheduleUpdateResponse = false;
   let loseSetupStageResponse = false;
   let setupImportId;
@@ -125,6 +127,25 @@ async function main() {
       });
     }
     observePage(page);
+    await context.route("**/api/v3/runs/*/run-to-time", async (route) => {
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON();
+        runToTimeRequests.push(body);
+        assert.deepEqual(Object.keys(body).sort(), ["commandId", "expectedRevision", "runToTime"]);
+        if (loseRunToTimeResponse) {
+          loseRunToTimeResponse = false;
+          const committed = await route.fetch();
+          assert.equal(committed.status(), 200, await committed.text());
+          await route.fulfill({
+            status: 500,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "Synthetic Run to Time response loss after the disposable database commit." }),
+          });
+          return;
+        }
+      }
+      await route.continue();
+    });
     await page.route("**/api/v3/schedules/commands", async (route) => {
       const body = route.request().postDataJSON();
       if (loseScheduleUpdateResponse && body.command.type === "update") {
@@ -216,6 +237,53 @@ async function main() {
     assert.equal(createdRun.doughCapacity.doughballYield, 645.19);
     assert.equal(createdRun.doughCapacity.pizzasPerCase, 12);
 
+    const runToTimePath = `/api/v3/runs/${createdRun.id}/run-to-time`;
+    const runToTime = page.locator('section[aria-labelledby="run-to-time-heading"]');
+    const targetInput = runToTime.getByLabel("Target time (Central)", { exact: true });
+    await targetInput.waitFor();
+    assert.equal(await targetInput.inputValue(), "19:15");
+    await runToTime.getByText("Informational only; it never starts runs or advances worker progress.", { exact: false }).waitFor();
+    loseRunToTimeResponse = true;
+    await targetInput.fill("6:45 PM");
+    const lostTargetResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === runToTimePath && response.request().method() === "POST");
+    await runToTime.getByRole("button", { name: "Save target", exact: true }).click();
+    const lostTargetResponse = await lostTargetResponsePromise;
+    assert.equal(lostTargetResponse.status(), 500);
+    await runToTime.getByRole("alert").filter({ hasText: "Synthetic Run to Time response loss" }).waitFor();
+    const retryTargetResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === runToTimePath && response.request().method() === "POST");
+    await runToTime.getByRole("button", { name: "Save target", exact: true }).click();
+    const retryTargetResponse = await retryTargetResponsePromise;
+    assert.equal(retryTargetResponse.status(), 200);
+    const retryTargetBody = await retryTargetResponse.json();
+    assert.equal(retryTargetBody.replayed, true);
+    assert.equal(retryTargetBody.run.runToTime, "18:45");
+    await page.getByRole("status").filter({ hasText: "Run to Time confirmed for 6:45 PM Central." }).waitFor();
+    assert.equal(runToTimeRequests.length, 2);
+    assert.equal(runToTimeRequests[0].commandId, runToTimeRequests[1].commandId);
+    assert.equal(runToTimeRequests[0].expectedRevision, 0);
+    assert.equal(runToTimeRequests[1].expectedRevision, 0);
+
+    await page.reload();
+    await page.getByRole("heading", { name: "Run control", exact: true }).waitFor();
+    await selectRun(page, createdRun.id, runLabel);
+    await targetInput.waitFor();
+    assert.equal(await targetInput.inputValue(), "18:45");
+    const writesBeforeRunToTimeOffline = browserWrites.length;
+    offlineCheckActive = true;
+    await context.setOffline(true);
+    await runToTime.getByText("Reconnect to change the server-owned target.", { exact: true }).waitFor();
+    assert.equal(await targetInput.isDisabled(), true);
+    assert.equal(await runToTime.getByRole("button", { name: "Save target", exact: true }).isDisabled(), true);
+    assert.equal(await runToTime.getByRole("button", { name: "Reset to 7:15 PM", exact: true }).isDisabled(), true);
+    assert.equal(browserWrites.length, writesBeforeRunToTimeOffline, "offline Run to Time mode must not issue writes");
+    await context.setOffline(false);
+    offlineCheckActive = false;
+    await runToTime.getByText("Reconnect to change the server-owned target.", { exact: true }).waitFor({ state: "hidden" });
+    assert.equal(await targetInput.isDisabled(), false);
+    assert.equal(await targetInput.inputValue(), "18:45");
+
     const startResponsePromise = page.waitForResponse((response) =>
       new URL(response.url()).pathname === `/api/v3/runs/${createdRun.id}/commands`
       && response.request().method() === "POST");
@@ -224,7 +292,7 @@ async function main() {
     assert.equal(startResponse.status(), 200);
     const startedRun = (await startResponse.json()).run;
     assert.equal(startedRun.status, "running");
-    assert.equal(startedRun.revision, 1);
+    assert.equal(startedRun.revision, 2);
     await page.getByText("start confirmed by the server.").waitFor();
 
     await page.getByLabel("Cases Produced", { exact: true }).fill("2");
@@ -236,6 +304,10 @@ async function main() {
     await secondPage.goto(baseUrl);
     await selectRun(secondPage, createdRun.id, runLabel);
     assert.equal(await secondPage.getByLabel("Cases Produced", { exact: true }).inputValue(), "2");
+    const targetStalePage = await context.newPage();
+    observePage(targetStalePage);
+    await targetStalePage.goto(baseUrl);
+    await selectRun(targetStalePage, createdRun.id, runLabel);
 
     await page.getByLabel("Cases Produced", { exact: true }).fill("3");
     await page.getByRole("button", { name: "Save station update", exact: true }).click();
@@ -244,6 +316,28 @@ async function main() {
     await secondPage.getByRole("button", { name: "Save station update", exact: true }).click();
     await secondPage.getByText("Stale station change discarded; the latest server state is now displayed.").waitFor();
     assert.equal(await secondPage.getByLabel("Cases Produced", { exact: true }).inputValue(), "3");
+
+    const staleRunToTime = targetStalePage.locator('section[aria-labelledby="run-to-time-heading"]');
+    const staleTargetInput = staleRunToTime.getByLabel("Target time (Central)", { exact: true });
+    await staleTargetInput.fill("8:00 PM");
+    const staleTargetResponsePromise = targetStalePage.waitForResponse((response) =>
+      new URL(response.url()).pathname === runToTimePath && response.request().method() === "POST");
+    await staleRunToTime.getByRole("button", { name: "Save target", exact: true }).click();
+    const staleTargetResponse = await staleTargetResponsePromise;
+    assert.equal(staleTargetResponse.status(), 409);
+    await targetStalePage.getByRole("status").filter({ hasText: "Run to Time changed elsewhere; the latest server state is now displayed." }).waitFor();
+    assert.equal(await staleTargetInput.inputValue(), "18:45");
+    await targetStalePage.close();
+
+    const resetTargetResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === runToTimePath && response.request().method() === "POST");
+    await runToTime.getByRole("button", { name: "Reset to 7:15 PM", exact: true }).click();
+    const resetTargetResponse = await resetTargetResponsePromise;
+    assert.equal(resetTargetResponse.status(), 200);
+    assert.equal((await resetTargetResponse.json()).run.runToTime, "19:15");
+    await page.getByRole("status").filter({ hasText: "Run to Time confirmed for 7:15 PM Central." }).waitFor();
+    assert.equal(runToTimeRequests.length, 4);
+    assert.notEqual(runToTimeRequests[3].commandId, runToTimeRequests[0].commandId);
 
     for (const [command, expectedStatus] of [["pause", "paused"], ["resume", "running"], ["complete", "completed"]]) {
       const commandResponsePromise = page.waitForResponse((response) =>
@@ -268,6 +362,11 @@ async function main() {
     const currentRun = page.locator('section[aria-labelledby="current-run-heading"]');
     await currentRun.getByText("completed", { exact: true }).waitFor();
     await currentRun.getByText("Revision", { exact: true }).waitFor();
+    await runToTime.getByText("Completed runs are read-only.", { exact: true }).waitFor();
+    assert.equal(await targetInput.inputValue(), "19:15");
+    assert.equal(await targetInput.isDisabled(), true);
+    assert.equal(await runToTime.getByRole("button", { name: "Save target", exact: true }).isDisabled(), true);
+    assert.equal(await runToTime.getByRole("button", { name: "Reset to 7:15 PM", exact: true }).isDisabled(), true);
 
     for (const viewport of [
       { width: 1280, height: 900 },
@@ -1233,8 +1332,14 @@ async function main() {
 
     assert.deepEqual(errors, [], "the real React/PostgreSQL browser journey should have no unexpected browser or server errors");
     const conflictPath = `/api/v3/runs/${createdRun.id}/stations/line/commands`;
+    assert.equal(browserWrites.filter((entry) => entry === `POST /api/v3/runs/${createdRun.id}/commands`).length, 4,
+      "Run to Time must not add lifecycle writes");
+    assert.equal(browserWrites.filter((entry) => entry === `POST ${conflictPath}`).length, 3,
+      "Run to Time must not add station writes");
     assert.deepEqual(failedResponses, [
+      `500 ${runToTimePath}`,
       `409 ${conflictPath}`,
+      `409 ${runToTimePath}`,
       "500 /api/v3/schedules/commands",
       "409 /api/v3/schedules/commands",
       "500 /api/v3/setup-catalog/imports",
@@ -1256,6 +1361,13 @@ async function main() {
       await selectRun(webkitPage, createdRun.id, runLabel);
       await webkitPage.locator('section[aria-labelledby="current-run-heading"]')
         .getByText("completed", { exact: true }).waitFor();
+      const webkitRunToTime = webkitPage.locator('section[aria-labelledby="run-to-time-heading"]');
+      const webkitTargetInput = webkitRunToTime.getByLabel("Target time (Central)", { exact: true });
+      await webkitRunToTime.getByText("Completed runs are read-only.", { exact: true }).waitFor();
+      assert.equal(await webkitTargetInput.inputValue(), "19:15");
+      assert.equal(await webkitTargetInput.isDisabled(), true);
+      assert.equal(await webkitRunToTime.getByRole("button", { name: "Save target", exact: true }).isDisabled(), true);
+      assert.equal(await webkitRunToTime.getByRole("button", { name: "Reset to 7:15 PM", exact: true }).isDisabled(), true);
       assert.ok(await webkitPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
       await webkitPage.getByRole("button", { name: "Schedule", exact: true }).click();
       await webkitPage.getByLabel("Production date", { exact: true }).fill(SCHEDULE_DATE);

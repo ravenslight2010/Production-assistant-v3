@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { DIE_DEFAULT_FIELDS, isDieLineSettings } from "./die-defaults.mjs";
+import { normalizeRunToTimeInput } from "./run-to-time.mjs";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STATUSES = new Set(["planned", "running", "paused", "completed"]);
@@ -187,6 +188,7 @@ function validateRun(value) {
     || !validCanonicalTimestamp(value.pausedAt, true)
     || !validCanonicalTimestamp(value.resumedAt, true)
     || !validCanonicalTimestamp(value.completedAt, true)
+    || normalizeRunToTimeInput(value.runToTime) !== value.runToTime
     || !Array.isArray(value.pauseIntervals)
   ) {
     throw new RunServiceError("INVALID_STORAGE_RESPONSE", "Run storage returned invalid data.", 502);

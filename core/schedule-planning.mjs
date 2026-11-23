@@ -7,6 +7,11 @@ const CODE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const CLOCK = /^(?:[01]\d|2[0-3]):[0-5]\d$/u;
+const READINESS_CODES = new Set([
+  "product_unavailable", "production_setup_unavailable", "run_template_unavailable",
+  "recipe_rows_missing", "dough_yield_unavailable", "case_capacity_unavailable",
+]);
+const SETUP_SECTIONS = new Set(["products", "production-setups", "run-templates", "recipes"]);
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -116,13 +121,27 @@ export function normalizeSchedule(value) {
       id: run?.id, productCode: run?.productCode, productionSetupCode: run?.productionSetupCode,
       runTemplateCode: run?.runTemplateCode, targetCases: run?.targetCases, notes: run?.notes,
     }, index);
-    if (!Object.hasOwn(run, "carriedInCases") && !Object.hasOwn(run, "effectiveTargetCases")) return normalized;
-    if (!hasExactKeys(run, ["id", "productCode", "productionSetupCode", "runTemplateCode", "targetCases", "notes", "carriedInCases", "effectiveTargetCases"])
+    if (!Object.hasOwn(run, "carriedInCases") && !Object.hasOwn(run, "effectiveTargetCases")
+      && !Object.hasOwn(run, "readinessWarnings")) return normalized;
+    if (!hasExactKeys(run, ["id", "productCode", "productionSetupCode", "runTemplateCode", "targetCases", "notes", "carriedInCases", "effectiveTargetCases", "readinessWarnings"])
       || !Number.isSafeInteger(run.carriedInCases) || run.carriedInCases < 0 || run.carriedInCases > normalized.targetCases
-      || run.effectiveTargetCases !== normalized.targetCases - run.carriedInCases) {
-      throw new ScheduleValidationError(`Planned run ${index + 1} has invalid carry-in totals.`, 502);
+      || run.effectiveTargetCases !== normalized.targetCases - run.carriedInCases
+      || !Array.isArray(run.readinessWarnings)
+      || run.readinessWarnings.some((warning) => !isObject(warning)
+        || !hasExactKeys(warning, ["code", "message", "setupSection"])
+        || !READINESS_CODES.has(warning.code)
+        || typeof warning.message !== "string" || warning.message.length < 1 || warning.message.length > 240
+        || !SETUP_SECTIONS.has(warning.setupSection))) {
+      throw new ScheduleValidationError(`Planned run ${index + 1} has invalid server-derived readiness data.`, 502);
     }
-    return { ...normalized, carriedInCases: run.carriedInCases, effectiveTargetCases: run.effectiveTargetCases };
+    return {
+      ...normalized,
+      carriedInCases: run.carriedInCases,
+      effectiveTargetCases: run.effectiveTargetCases,
+      readinessWarnings: run.readinessWarnings.map((warning) => ({
+        code: warning.code, message: warning.message, setupSection: warning.setupSection,
+      })),
+    };
   });
   if (new Set(runs.map((run) => run.id)).size !== runs.length) {
     throw new ScheduleValidationError("The schedule response contains duplicate planned-run IDs.", 502);
@@ -265,7 +284,10 @@ export function calculateScheduleTimeline(schedule, templates, { nowMs = Date.no
 }
 
 export function applyScheduleCommand(schedule, command) {
-  const runs = schedule.runs.map((run) => ({ ...run }));
+  const runs = schedule.runs.map((run, index) => normalizeScheduleRun({
+    id: run.id, productCode: run.productCode, productionSetupCode: run.productionSetupCode,
+    runTemplateCode: run.runTemplateCode, targetCases: run.targetCases, notes: run.notes,
+  }, index));
   const breaks = schedule.breaks.map((item) => ({ ...item }));
   const find = (id) => runs.findIndex((run) => run.id === id);
   switch (command?.type) {

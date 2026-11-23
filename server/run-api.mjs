@@ -1,5 +1,6 @@
 import { createRunCommandService } from "../core/run-command-service.mjs";
 import { createRunService } from "../core/run-service.mjs";
+import { createRunToTimeService } from "../core/run-to-time-service.mjs";
 import { createStationCommandService } from "../core/station-command-service.mjs";
 
 const API_PREFIX = "/api/v3/runs";
@@ -64,6 +65,7 @@ function requireExactKeys(value, expectedKeys) {
 function safeStatus(error) {
   const knownService = error?.name === "RunServiceError"
     || error?.name === "RunCommandServiceError"
+    || error?.name === "RunToTimeServiceError"
     || error?.name === "RunStationServiceError"
     || error?.name === "V3AuthError";
   if (error instanceof RunApiError) return error.status;
@@ -77,6 +79,7 @@ function safeMessage(error) {
   if (error instanceof RunApiError
     || error?.name === "RunServiceError"
     || error?.name === "RunCommandServiceError"
+    || error?.name === "RunToTimeServiceError"
     || error?.name === "RunStationServiceError"
     || error?.name === "V3AuthError") {
     return error.message;
@@ -111,6 +114,7 @@ function normalizePathRunId(value) {
 export function createRunApi({
   runs,
   commands,
+  runToTimes,
   stations,
   authenticate,
   verifyCsrf,
@@ -123,6 +127,9 @@ export function createRunApi({
   }
   if (!commands || typeof commands.execute !== "function") {
     throw new TypeError("The lifecycle command service is required.");
+  }
+  if (!runToTimes || typeof runToTimes.execute !== "function") {
+    throw new TypeError("The Run to Time command service is required.");
   }
   if (stations !== undefined && typeof stations?.execute !== "function") {
     throw new TypeError("The station command service must provide execute().");
@@ -174,6 +181,17 @@ export function createRunApi({
           setupSnapshot: body.setupSnapshot,
         });
         sendJson(response, result.replayed ? 200 : 201, result);
+        return;
+      }
+
+      const runToTimeMatch = url.pathname.match(/^\/api\/v3\/runs\/([^/]+)\/run-to-time$/);
+      if (runToTimeMatch && request.method === "POST") {
+        if (url.search) throw new RunApiError(400, "Run to Time query parameters are not supported.");
+        const runId = normalizePathRunId(runToTimeMatch[1]);
+        const body = await readJsonBody(request, maxBodyBytes);
+        requireExactKeys(body, ["commandId", "expectedRevision", "runToTime"]);
+        const result = await runToTimes.execute({ auth, command: { ...body, runId } });
+        sendJson(response, result?.outcome === "accepted" ? 200 : 409, result);
         return;
       }
 
@@ -259,6 +277,7 @@ export function createRunApiForDatabase({
   const query = (sql, params) => pool.query(sql, params);
   const runs = createRunService({ query, authorize });
   const commands = createRunCommandService({ query, authorize });
+  const runToTimes = createRunToTimeService({ query, authorize });
   const stations = createStationCommandService({ query, authorize });
-  return createRunApi({ runs, commands, stations, authenticate, verifyCsrf, maxBodyBytes, logger });
+  return createRunApi({ runs, commands, runToTimes, stations, authenticate, verifyCsrf, maxBodyBytes, logger });
 }

@@ -80,6 +80,33 @@ test("unknown run duration blocks later estimates and the projected finish", () 
   assert.equal(missing.incomplete, true);
 });
 
+test("confirmed schedules validate advisory readiness and commands strip derived fields", () => {
+  const confirmedRun = {
+    ...product,
+    carriedInCases: 2,
+    effectiveTargetCases: 18,
+    readinessWarnings: [{
+      code: "dough_yield_unavailable",
+      message: "Dough yield is unavailable. Review Product dough yield in Setup.",
+      setupSection: "recipes",
+    }],
+  };
+  const schedule = normalizeSchedule({
+    ...emptySchedule("2026-07-01"),
+    runs: [confirmedRun],
+    updatedAt: "2026-07-01T12:00:00.000Z",
+  });
+  assert.equal(schedule.runs[0].readinessWarnings[0].code, "dough_yield_unavailable");
+  assert.deepEqual(applyScheduleCommand(schedule, {
+    type: "update", runId: product.id, changes: { notes: "Reviewed" },
+  }).runs[0], { ...product, notes: "Reviewed" });
+  assert.throws(() => normalizeSchedule({
+    ...emptySchedule("2026-07-01"),
+    runs: [{ ...confirmedRun, readinessWarnings: [{ code: "client_invented", message: "Bad", setupSection: "products" }] }],
+    updatedAt: null,
+  }), (error) => error.status === 502);
+});
+
 test("date-scoped commands preserve unrelated runs and unassign removed-run breaks", () => {
   const second = { ...product, id: "88000000-0000-4000-8000-000000000102" };
   const schedule = normalizeSchedule({

@@ -78,7 +78,16 @@ async function installScheduleApi(context, baseUrl, { manager = true } = {}) {
   };
   const projectSurplus = (schedule) => ({
     ...schedule,
-    runs: schedule.runs.map((run) => ({ ...run, carriedInCases: 0, effectiveTargetCases: run.targetCases })),
+    runs: schedule.runs.map((run) => ({
+      ...run,
+      carriedInCases: 0,
+      effectiveTargetCases: run.targetCases,
+      readinessWarnings: run.targetCases >= 20 ? [{
+        code: "recipe_rows_missing",
+        message: "Recipe rows are missing for this product.",
+        setupSection: "recipes",
+      }] : [],
+    })),
   });
 
   await context.addCookies([{ name: "v3_csrf", value: CSRF_TOKEN, url: baseUrl }]);
@@ -191,14 +200,20 @@ test("React schedule confirms commands, exact retry, conflicts, import review, a
   const firstRun = page.getByRole("article", { name: "Planned run 1", exact: true });
   await firstRun.getByText("Freezer carry-in: 0 cases", { exact: false }).waitFor();
   await firstRun.getByText("Effective production target: 20 of 20 planned cases", { exact: false }).waitFor();
+  await firstRun.getByText("Setup review recommended", { exact: true }).waitFor();
+  await firstRun.getByText("Recipe rows are missing for this product.", { exact: true }).waitFor();
+  assert.equal(await firstRun.getByRole("link", { name: "Open Setup", exact: true }).getAttribute("href"), "#setup");
+  await firstRun.getByText("Advisory only. These warnings do not block scheduling or production.", { exact: true }).waitFor();
   await page.getByText("20 effective / 20 planned cases", { exact: false }).first().waitFor();
   await firstRun.getByLabel(/^Target cases for /).fill("25");
+  assert.equal(await firstRun.getByText("Setup review recommended", { exact: true }).count(), 0);
   api.loseNextResponse();
   await firstRun.getByRole("button", { name: "Save run 1" }).click();
   await page.getByText(/Retry the same request; its request ID prevents duplicate changes/).waitFor();
   const updateRequest = api.commands.at(-1);
   await page.getByRole("button", { name: "Retry the same save" }).click();
   await page.getByRole("status").filter({ hasText: "The previous save was confirmed. The current server plan has been reloaded." }).waitFor();
+  await firstRun.getByText("Setup review recommended", { exact: true }).waitFor();
   assert.equal(api.commands.at(-1).requestId, updateRequest.requestId);
   assert.equal(api.getSchedule(DATE).runs.length, 1);
   assert.equal(api.getSchedule(DATE).runs[0].targetCases, 25);
@@ -255,6 +270,13 @@ test("React schedule confirms commands, exact retry, conflicts, import review, a
   await page.getByRole("status").filter({ hasText: "Schedule change saved to the server." }).waitFor();
   assert.equal(api.commands.at(-1).command.type, "merge-import");
   assert.equal(api.getSchedule(DATE).runs.length, 3);
+
+  await page.reload();
+  await page.getByRole("heading", { name: "Production schedule", exact: true }).waitFor();
+  await page.getByLabel("Production date", { exact: true }).fill(DATE);
+  await page.getByRole("article", { name: "Planned run 3", exact: true }).waitFor();
+  await page.getByRole("article", { name: "Planned run 1", exact: true })
+    .getByText("Setup review recommended", { exact: true }).waitFor();
 
   await context.setOffline(true);
   await page.getByText("Read-only offline", { exact: true }).first().waitFor();

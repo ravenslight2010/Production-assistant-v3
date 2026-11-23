@@ -979,6 +979,43 @@ async function main() {
     assert.equal(completeRetry.status, 200);
     assert.equal((await jsonResponse(completeRetry)).replayed, true);
 
+    const completedTarget = await sessionPost(manager, `/api/v3/runs/${created.run.id}/run-to-time`, {
+      commandId: "73000000-0000-4000-8000-000000000216", expectedRevision: 3, runToTime: "20:00",
+    });
+    assert.equal(completedTarget.status, 409);
+    assert.equal((await jsonResponse(completedTarget)).currentStatus, "completed");
+
+    const plannedTargetResponse = await sessionPost(manager, "/api/v3/runs", {
+      requestId: "73000000-0000-4000-8000-000000000217",
+      setupSnapshot: {
+        label: "Run to Time integration", targetCases: 5, productCode: "DOUGH-A", productionSetupCode: "LINE-A",
+      },
+    });
+    assert.equal(plannedTargetResponse.status, 201);
+    const plannedTarget = await jsonResponse(plannedTargetResponse);
+    assert.equal(plannedTarget.run.runToTime, "19:15");
+    const targetRequest = {
+      commandId: "73000000-0000-4000-8000-000000000218", expectedRevision: 0, runToTime: "6:45 PM",
+    };
+    const targetAccepted = await sessionPost(manager, `/api/v3/runs/${plannedTarget.run.id}/run-to-time`, targetRequest);
+    assert.equal(targetAccepted.status, 200, await targetAccepted.clone().text());
+    const targetAcceptedBody = await jsonResponse(targetAccepted);
+    assert.equal(targetAcceptedBody.run.runToTime, "18:45");
+    assert.equal(targetAcceptedBody.run.revision, 1);
+    const targetReplay = await sessionPost(manager, `/api/v3/runs/${plannedTarget.run.id}/run-to-time`, targetRequest);
+    assert.equal(targetReplay.status, 200);
+    assert.equal((await jsonResponse(targetReplay)).replayed, true);
+    const targetReload = await fetch(`${baseUrl}/api/v3/runs/${plannedTarget.run.id}`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    });
+    assert.equal(targetReload.status, 200);
+    assert.equal((await jsonResponse(targetReload)).run.runToTime, "18:45");
+    const staleTarget = await sessionPost(manager, `/api/v3/runs/${plannedTarget.run.id}/run-to-time`, {
+      ...targetRequest, commandId: "73000000-0000-4000-8000-000000000219",
+    });
+    assert.equal(staleTarget.status, 409);
+    assert.equal((await jsonResponse(staleTarget)).currentRun.revision, 1);
+
     const movementsBeforeSurplus = await adminPool.query("SELECT count(*)::integer AS count FROM v3.inventory_movements");
     const operatorSurplusRead = await fetch(`${baseUrl}/api/v3/inventory/freezer-surplus`, {
       headers: { Cookie: operator.cookieHeader, Accept: "application/json" },

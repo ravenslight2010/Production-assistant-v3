@@ -47,6 +47,7 @@ const RUN = {
   pausedAt: null,
   resumedAt: null,
   completedAt: null,
+  runToTime: "19:15",
   setupSnapshot: { ...SETUP, productionPlan: PRODUCTION_PLAN },
   pauseIntervals: [],
 };
@@ -248,13 +249,17 @@ test("reads runs only in the authenticated facility scope and enforces bounded l
 });
 
 test("fails explicitly on malformed canonical storage results", async () => {
-  const service = makeService({
-    query: async () => ({ rows: [{ result: { ...RUN, createdAt: "2026-11-10T12:00:00+00:00" } }] }),
-  });
-  await assert.rejects(
-    service.get({ auth: AUTH, runId: RUN_ID }),
-    (error) => error.status === 502 && error.code === "INVALID_STORAGE_RESPONSE",
-  );
+  for (const malformed of [
+    { ...RUN, createdAt: "2026-11-10T12:00:00+00:00" },
+    { ...RUN, runToTime: "7:15 PM" },
+    { ...RUN, runToTime: undefined },
+  ]) {
+    const service = makeService({ query: async () => ({ rows: [{ result: malformed }] }) });
+    await assert.rejects(
+      service.get({ auth: AUTH, runId: RUN_ID }),
+      (error) => error.status === 502 && error.code === "INVALID_STORAGE_RESPONSE",
+    );
+  }
 });
 
 test("strict imported rules reject preparation with a safe definitive response", async () => {

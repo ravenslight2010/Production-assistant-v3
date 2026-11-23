@@ -279,6 +279,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/runs/{runId}/run-to-time": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set the server-owned Run to Time target for a non-completed run */
+        post: operations["applyRunToTime"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/runs/{runId}/commands": {
         parameters: {
             query?: never;
@@ -1201,6 +1218,8 @@ export interface components {
             completedAt: string | null;
             /** Format: date-time */
             serverNow: string;
+            /** @description Server-owned America/Chicago wall-time operator target; not a lifecycle scheduling instruction. */
+            runToTime: string;
             setupSnapshot: components["schemas"]["RunSetup"];
             doughCapacity: components["schemas"]["DoughCapacity"];
             inventoryConsumption: components["schemas"]["RunInventoryConsumption"] | null;
@@ -1257,6 +1276,19 @@ export interface components {
             /** @enum {string} */
             outcome: "conflict" | "invalid_transition";
             expectedRevision?: number;
+            currentRun: components["schemas"]["Run"];
+        };
+        RunToTimeCommand: {
+            commandId: string;
+            expectedRevision: number;
+            /** @description 12-hour or 24-hour America/Chicago wall time, for example 7:15 PM or 19:15. */
+            runToTime: string;
+        };
+        RunToTimeInvalidTransition: {
+            /** @constant */
+            outcome: "invalid_transition";
+            /** @constant */
+            currentStatus: "completed";
             currentRun: components["schemas"]["Run"];
         };
         RunCreated: {
@@ -2140,6 +2172,13 @@ export interface components {
             /** @constant */
             timeZone: "America/Chicago";
         };
+        ScheduleReadinessWarning: {
+            /** @enum {string} */
+            code: "product_unavailable" | "production_setup_unavailable" | "run_template_unavailable" | "recipe_rows_missing" | "dough_yield_unavailable" | "case_capacity_unavailable";
+            message: string;
+            /** @enum {string} */
+            setupSection: "products" | "production-setups" | "run-templates" | "recipes";
+        };
         PlannedScheduleRun: {
             /** Format: uuid */
             id: string;
@@ -2152,6 +2191,8 @@ export interface components {
             carriedInCases?: number;
             /** @description Target cases minus carried-in surplus. */
             effectiveTargetCases?: number;
+            /** @description Server-derived advisory diagnostics on confirmed schedule reads; never accepted as schedule command input. */
+            readinessWarnings?: components["schemas"]["ScheduleReadinessWarning"][];
         };
         ScheduleBreak: {
             /** @enum {integer} */
@@ -2836,6 +2877,50 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             405: components["responses"]["Error"];
+        };
+    };
+    applyRunToTime: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                runId: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunToTimeCommand"];
+            };
+        };
+        responses: {
+            /** @description Run to Time accepted; includes canonical run state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunCommandAccepted"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            /** @description Stale revision or completed-run edit; includes canonical state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConflict"] | components["schemas"]["RunToTimeInvalidTransition"];
+                };
+            };
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            500: components["responses"]["Error"];
         };
     };
     applyRunCommand: {

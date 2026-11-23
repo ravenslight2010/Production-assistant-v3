@@ -172,6 +172,19 @@ export async function applyRunCommand(run: Run, commandType: RunCommand, command
   return { run: accepted.run, conflict: false };
 }
 
+export async function applyRunToTime(run: Run, runToTime: string, commandId: string): Promise<RunCommandResult> {
+  const result = await client.POST("/api/v3/runs/{runId}/run-to-time", {
+    params: { path: { runId: run.id }, header: mutationHeaders() },
+    body: { commandId, expectedRevision: run.revision, runToTime },
+  });
+  if (result.response.status === 409) {
+    const conflict = result.error as { currentRun?: Run } | undefined;
+    if (conflict?.currentRun) return { run: conflict.currentRun, conflict: true };
+  }
+  const accepted = await unwrap(result);
+  return { run: accepted.run, conflict: false };
+}
+
 export async function applyStationCommand(
   run: Run,
   stationKey: StationKey,
@@ -222,6 +235,7 @@ function isProductionSchedule(value: unknown): value is ProductionSchedule {
     && candidate.timeZone === "America/Chicago"
     && typeof candidate.productionStartTime === "string"
     && Array.isArray(candidate.runs)
+    && candidate.runs.every((run) => Array.isArray(run.readinessWarnings))
     && Array.isArray(candidate.breaks)
     && candidate.breaks.length === 3;
 }

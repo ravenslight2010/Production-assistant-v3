@@ -16,6 +16,7 @@ const RUN = {
   pausedAt: null,
   resumedAt: null,
   completedAt: null,
+  runToTime: "19:15",
   setupSnapshot: { label: "Run A", targetCases: 12 },
   pauseIntervals: [],
 };
@@ -87,6 +88,14 @@ async function withApi(t, overrides = {}, options = {}) {
         : { outcome: "conflict", expectedRevision: 0, currentRun: { ...RUN, status: "running", revision: 1 } };
     },
   };
+  const runToTimes = {
+    execute: async (input) => {
+      calls.push(["runToTime", input]);
+      return input.command.expectedRevision === 0
+        ? { outcome: "accepted", replayed: false, commandId: input.command.commandId, run: { ...RUN, runToTime: "18:45", revision: 1 } }
+        : { outcome: "conflict", expectedRevision: input.command.expectedRevision, currentRun: { ...RUN, runToTime: "18:45", revision: 1 } };
+    },
+  };
   const stations = {
     execute: async (input) => {
       calls.push(["station", input]);
@@ -102,6 +111,7 @@ async function withApi(t, overrides = {}, options = {}) {
   const handler = createRunApi({
     runs: { ...runs, ...overrides.runs },
     commands: { ...commands, ...overrides.commands },
+    runToTimes: { ...runToTimes, ...overrides.runToTimes },
     stations: { ...stations, ...overrides.stations },
     authenticate: overrides.authenticate ?? (async () => AUTH),
     verifyCsrf: overrides.verifyCsrf ?? (async (request, auth) => auth === AUTH && request.headers["x-csrf-token"] === "ok"),
@@ -251,6 +261,25 @@ test("returns accepted lifecycle commands and preserves conflicts as 409 outcome
   assert.equal((await conflict.json()).outcome, "conflict");
 });
 
+test("accepts exact Run to Time requests and preserves canonical conflicts", async (t) => {
+  const { baseUrl, calls } = await withApi(t);
+  const path = `/api/v3/runs/${RUN_ID}/run-to-time`;
+  const body = { commandId: "run-to-time-once", expectedRevision: 0, runToTime: "6:45 PM" };
+  const accepted = await send(baseUrl, path, { method: "POST", body });
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json()).run.runToTime, "18:45");
+  assert.deepEqual(calls[0], ["runToTime", { auth: AUTH, command: { ...body, runId: RUN_ID } }]);
+
+  const conflict = await send(baseUrl, path, {
+    method: "POST", body: { ...body, commandId: "run-to-time-stale", expectedRevision: 1 },
+  });
+  assert.equal(conflict.status, 409);
+  assert.equal((await conflict.json()).currentRun.runToTime, "18:45");
+
+  const unsupported = await send(baseUrl, path, { method: "POST", body: { ...body, actorId: AUTH.actorId } });
+  assert.equal(unsupported.status, 400);
+});
+
 test("rejects unauthenticated requests and mutations without CSRF verification", async (t) => {
   const noAuth = await withApi(t, { authenticate: async () => null });
   const unauthenticated = await send(noAuth.baseUrl, "/api/v3/runs");
@@ -334,6 +363,18 @@ test("composes the HTTP API with server services and a parameterized PostgreSQL 
             }],
           };
         }
+        if (sql.includes("v3.apply_run_to_time_command")) {
+          return {
+            rows: [{
+              result: {
+                outcome: "accepted",
+                replayed: false,
+                commandId: "run-to-time-integrated",
+                run: { ...RUN, runToTime: params[5], revision: 1 },
+              },
+            }],
+          };
+        }
         if (sql.includes("v3.apply_run_lifecycle_command")) {
           return {
             rows: [{
@@ -384,9 +425,17 @@ test("composes the HTTP API with server services and a parameterized PostgreSQL 
   assert.equal(commandResponse.status, 200);
   assert.equal((await commandResponse.json()).run.status, "running");
 
-  assert.equal(queries.length, 4);
+  const runToTimeResponse = await send(baseUrl, `/api/v3/runs/${RUN_ID}/run-to-time`, {
+    method: "POST",
+    body: { commandId: "run-to-time-integrated", expectedRevision: 0, runToTime: "6:45 PM" },
+  });
+  assert.equal(runToTimeResponse.status, 200);
+  assert.equal((await runToTimeResponse.json()).run.runToTime, "18:45");
+
+  assert.equal(queries.length, 5);
   assert.ok(queries.every(({ sql, params }) => sql.includes("$1") && Array.isArray(params)));
-  assert.deepEqual(authorizations.map(({ action }) => action), ["run.read", "run.read", "run.create", "run.lifecycle.command"]);
+  assert.deepEqual(authorizations.map(({ action }) => action), ["run.read", "run.read", "run.create", "run.lifecycle.command", "run.lifecycle.command"]);
   assert.equal(authorizations[3].commandType, "start");
+  assert.equal(authorizations[4].commandType, "run_to_time");
   assert.ok(authorizations.every(({ auth }) => auth === AUTH));
 });

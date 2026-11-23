@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Trash2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 import type { PlannedScheduleRun, ScheduleCatalog } from "../api";
 import { scheduleProduct, scheduleRunTitle } from "./schedule-utils";
 
@@ -139,6 +139,22 @@ export function ScheduleRunCard({
           />
         </label>
       </div>
+
+      {!isNew && !dirty && run.readinessWarnings?.length ? (
+        <div className="mt-5 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4" role="status">
+          <div className="flex items-center gap-2 text-sm font-semibold text-amber-200">
+            <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+            Setup review recommended
+          </div>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-amber-100/90">
+            {run.readinessWarnings.map((warning) => <li key={warning.code}>{warning.message}</li>)}
+          </ul>
+          <a className="mt-3 inline-flex text-xs font-semibold text-amber-100 underline underline-offset-4" href="#setup">
+            Open Setup
+          </a>
+          <p className="mt-2 text-[11px] text-amber-100/70">Advisory only. These warnings do not block scheduling or production.</p>
+        </div>
+      ) : null}
 
       {!isNew && !dirty && run.carriedInCases !== undefined && run.effectiveTargetCases !== undefined ? (
         <div className="notice-banner mt-5" role="status">

@@ -718,7 +718,9 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0013-warehouse-operations.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0014-setup-catalog-editors.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0015-setup-management.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0016-planning-readiness-run-to-time.sql" >/dev/null
 "${PSQL[@]}" -c "
+  GRANT EXECUTE ON FUNCTION v3.apply_run_to_time_command(uuid, uuid, uuid, text, text, time, bigint) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_setup_catalog_records(uuid, text, integer, text) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.stage_setup_catalog_edit(uuid, uuid, text, text, text, jsonb, text) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_setup_master_records(uuid, text, integer, text) TO v3_api_test;
@@ -770,7 +772,9 @@ INVENTORY_COMPLETION_PRIVILEGES="$("${PSQL[@]}" -c "
   SELECT has_function_privilege(current_user,
     'v3.set_production_warehouse(uuid,uuid,text,text,uuid)', 'EXECUTE')
     AND has_function_privilege(current_user,
-    'v3.complete_run_with_inventory(uuid,uuid,uuid,text,text,text,bigint)', 'EXECUTE');
+    'v3.complete_run_with_inventory(uuid,uuid,uuid,text,text,text,bigint)', 'EXECUTE')
+    AND has_function_privilege(current_user,
+    'v3.apply_run_to_time_command(uuid,uuid,uuid,text,text,time,bigint)', 'EXECUTE');
   RESET ROLE;
 ")"
 if [[ "$INVENTORY_COMPLETION_PRIVILEGES" != "t" ]]; then
@@ -786,6 +790,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0013-warehouse-operations.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0014-setup-catalog-editors.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0015-setup-management.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0016-planning-readiness-run-to-time.test.sql"
 SETUP_EDITOR_PRIVILEGES="$("${PSQL[@]}" -c "
   SET ROLE v3_api_test;
   SELECT has_function_privilege(current_user,

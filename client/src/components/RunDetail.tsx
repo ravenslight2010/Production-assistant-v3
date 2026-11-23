@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError, applyRunCommand, applyStationCommand, type Run, type RunCommand, type StationKey } from "../api";
+import { RunToTimeControl } from "./RunToTimeControl";
 
 const stationOrder: StationKey[] = ["line", "dough", "cheese", "pepperoni", "sauce", "frontline", "packaging"];
 const stationFields: Record<StationKey, { inputs: string[]; progress: string[] }> = {
@@ -149,6 +150,7 @@ export function RunDetail({ run, online, onUpdated }: {
         <div className="metric"><dt>Revision</dt><dd>{run.revision}</dd></div>
         <div className="metric"><dt>Server update</dt><dd>{new Date(run.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</dd></div>
       </dl>
+      <RunToTimeControl run={run} online={online} onUpdated={onUpdated} />
       {run.productionRules?.length ? (
         <div className="mt-4 rounded-lg border border-border p-3 text-xs text-muted-foreground">
           Production rules: {run.productionRules.map((rule) => `${rule.name}: ${rule.status}`).join(" · ")}
