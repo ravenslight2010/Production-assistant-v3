@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
 import { DIE_DEFAULT_FIELDS, isDieLineSettings } from "./die-defaults.mjs";
 import { normalizeRunToTimeInput } from "./run-to-time.mjs";
+import { isValidProductionDate } from "./schedule-planning.mjs";
+import { isValidSubstitutionOverlay } from "./substitution-planning.mjs";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STATUSES = new Set(["planned", "running", "paused", "completed"]);
 const MAX_SAFE_REVISION = Number.MAX_SAFE_INTEGER;
 const MAX_RUN_LIST_LIMIT = 100;
 
-const CREATE_SQL = `SELECT v3.create_planned_run($1::uuid, $2::uuid, $3::text, $4::text, $5::jsonb) AS result`;
+const CREATE_SQL = `SELECT v3.create_planned_run($1::uuid, $2::uuid, $3::text, $4::text, $5::date, $6::jsonb) AS result`;
 const GET_SQL = `SELECT v3.get_run($1::uuid, $2::uuid) AS result`;
 const LIST_SQL = `SELECT v3.list_runs($1::uuid, $2::integer) AS result`;
 const LIST_PRODUCTS_SQL = `SELECT v3.list_run_products($1::uuid) AS result`;
@@ -156,7 +158,7 @@ function validInventoryPlanLine(line) {
     && Number(line.quantity) > 0;
 }
 
-function validProductionPlan(value) {
+function validProductionPlan(value, { allowEmptyIngredients = false } = {}) {
   return value && typeof value === "object" && !Array.isArray(value)
     && typeof value.code === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(value.code)
     && typeof value.name === "string" && value.name.length >= 1 && value.name.length <= 120
@@ -168,7 +170,7 @@ function validProductionPlan(value) {
       && typeof recipe.code === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(recipe.code)
       && typeof recipe.name === "string" && recipe.name.length >= 1 && recipe.name.length <= 120
       && ["dough", "cheese", "pepperoni", "sauce", "frontline"].includes(recipe.stationKey)
-      && Array.isArray(recipe.ingredients) && recipe.ingredients.length >= 1 && recipe.ingredients.length <= 200
+      && Array.isArray(recipe.ingredients) && recipe.ingredients.length >= (allowEmptyIngredients ? 0 : 1) && recipe.ingredients.length <= 200
       && recipe.ingredients.every(validInventoryPlanLine))
     && Array.isArray(value.packagingPerCase) && value.packagingPerCase.length >= 1 && value.packagingPerCase.length <= 200
     && value.packagingPerCase.every(validInventoryPlanLine);
@@ -179,6 +181,7 @@ function validateRun(value) {
     !value || typeof value !== "object" || Array.isArray(value)
     || !UUID_PATTERN.test(value.id)
     || !STATUSES.has(value.status)
+    || !isValidProductionDate(value.productionDate)
     || !Number.isSafeInteger(value.revision)
     || value.revision < 0
     || value.revision > MAX_SAFE_REVISION
@@ -204,6 +207,15 @@ function validateRun(value) {
     && (!value.setupSnapshot.productCode || !value.setupSnapshot.productionSetupCode
       || !validProductionPlan(value.setupSnapshot.productionPlan))) {
     throw new RunServiceError("INVALID_STORAGE_RESPONSE", "Run storage returned invalid production setup data.", 502);
+  }
+  if (value.setupSnapshot.productionPlan === undefined
+    ? value.effectiveProductionPlan !== null
+    : !validProductionPlan(value.effectiveProductionPlan, { allowEmptyIngredients: true })) {
+    throw new RunServiceError("INVALID_STORAGE_RESPONSE", "Run storage returned an invalid effective production plan.", 502);
+  }
+  if (value.substitutionOverlay !== null
+    && !isValidSubstitutionOverlay(value.substitutionOverlay, value.productionDate)) {
+    throw new RunServiceError("INVALID_STORAGE_RESPONSE", "Run storage returned an invalid substitution overlay.", 502);
   }
   if (value.inventoryConsumption !== undefined && !validInventoryConsumption(value.inventoryConsumption)) {
     throw new RunServiceError("INVALID_STORAGE_RESPONSE", "Run storage returned invalid inventory consumption data.", 502);
@@ -286,9 +298,10 @@ export function createRunService({ query, authorize: authorizeAction }) {
   }
 
   return Object.freeze({
-    async create({ auth, requestId, setupSnapshot }) {
+    async create({ auth, requestId, productionDate, setupSnapshot }) {
       const identity = normalizeAuth(auth);
       const normalizedRequestId = normalizeUuid(requestId, "requestId");
+      if (!isValidProductionDate(productionDate)) throw invalidRequest("Choose a valid production date.");
       const normalizedSetup = normalizeSetupSnapshot(setupSnapshot, { requireProductionSetup: true });
       await authorize(authorizeAction, auth, "run.create");
 
@@ -296,6 +309,7 @@ export function createRunService({ query, authorize: authorizeAction }) {
         facilityId: identity.facilityId,
         actorId: identity.actorId,
         requestId: normalizedRequestId,
+        productionDate,
         setupSnapshot: normalizedSetup,
       }), "utf8").digest("hex");
 
@@ -306,6 +320,7 @@ export function createRunService({ query, authorize: authorizeAction }) {
           identity.actorId,
           normalizedRequestId,
           requestHash,
+          productionDate,
           JSON.stringify(normalizedSetup),
         ]);
       } catch (error) {
@@ -320,6 +335,7 @@ export function createRunService({ query, authorize: authorizeAction }) {
       validateRun(response.run);
       if (
         response.run.status !== "planned"
+        || response.run.productionDate !== productionDate
         || !response.run.setupSnapshot.productionPlan
         || response.run.setupSnapshot.label !== normalizedSetup.label
         || response.run.setupSnapshot.targetCases !== normalizedSetup.targetCases

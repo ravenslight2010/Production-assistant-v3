@@ -23,6 +23,10 @@ export type ScheduleBreak = components["schemas"]["ScheduleBreak"];
 export type ScheduleCommand = components["schemas"]["ProductionScheduleCommandRequest"]["command"];
 export type ScheduleCommandRequest = Omit<components["schemas"]["ProductionScheduleCommandRequest"], "date"> & { date: string };
 export type ScheduleWorkbookPreview = components["schemas"]["ScheduleWorkbookPreviewResponse"]["preview"];
+export type SubstitutionOverlay = components["schemas"]["SubstitutionOverlay"];
+export type SubstitutionRule = components["schemas"]["SubstitutionRule"];
+export type SubstitutionProduct = components["schemas"]["SubstitutionProduct"];
+export type SubstitutionCommandRequest = components["schemas"]["SubstitutionCommandRequest"];
 export type SetupCatalogFamily = components["schemas"]["SetupCatalogStageResponse"]["family"];
 export type SetupCatalogRecord = components["schemas"]["SetupCatalogRecord"];
 export type SetupCatalogHistoryItem = components["schemas"]["SetupCatalogHistoryItem"];
@@ -78,6 +82,11 @@ export type AdjustFreezerSurplusRequest = components["schemas"]["AdjustFreezerSu
 export type InventoryMovementPage = { movements: InventoryMovement[]; nextCursor: { occurredAt: string; id: string } | null };
 export type ScheduleCommandResult = {
   schedule: ProductionSchedule;
+  replayed: boolean;
+  conflict: boolean;
+};
+export type SubstitutionCommandResult = {
+  overlay: SubstitutionOverlay;
   replayed: boolean;
   conflict: boolean;
 };
@@ -150,15 +159,16 @@ export async function listRunProducts(): Promise<RunProduct[]> {
 
 export async function createRun(input: {
   requestId: string;
+  productionDate: string;
   label: string;
   targetCases: number;
   productCode: string;
   productionSetupCode: string;
 }): Promise<Run> {
-  const { requestId, ...setupSnapshot } = input;
+  const { requestId, productionDate, ...setupSnapshot } = input;
   const result = await unwrap(await client.POST("/api/v3/runs", {
     params: { header: mutationHeaders() },
-    body: { requestId, setupSnapshot },
+    body: { requestId, productionDate, setupSnapshot },
   }));
   return result.run;
 }
@@ -287,7 +297,8 @@ function isProductionSchedule(value: unknown): value is ProductionSchedule {
     && Array.isArray(candidate.runs)
     && candidate.runs.every((run) => Array.isArray(run.readinessWarnings))
     && Array.isArray(candidate.breaks)
-    && candidate.breaks.length === 3;
+    && candidate.breaks.length === 3
+    && isSubstitutionOverlay(candidate.substitutionOverlay, candidate.date);
 }
 
 function isScheduleCatalog(value: unknown): value is ScheduleCatalog {
@@ -330,6 +341,58 @@ export async function applyProductionScheduleCommand(
     throw new ApiError("The server did not confirm the schedule change. Retry the same request.", 502);
   }
   return { schedule: accepted.schedule, replayed: accepted.replayed, conflict: false };
+}
+
+function isSubstitutionOverlay(value: unknown, productionDate?: string): value is SubstitutionOverlay {
+  const candidate = value as Partial<SubstitutionOverlay> | undefined;
+  return typeof candidate?.productionDate === "string"
+    && (productionDate === undefined || candidate.productionDate === productionDate)
+    && Number.isSafeInteger(candidate.revision) && Number(candidate.revision) >= 0
+    && Array.isArray(candidate.rules)
+    && candidate.rules.every((rule) => typeof rule.id === "string"
+      && typeof rule.ingredient === "string" && ["swap", "add", "remove"].includes(rule.action))
+    && (candidate.updatedAt === null || typeof candidate.updatedAt === "string");
+}
+
+export async function getSubstitutionOverlay(productionDate: string): Promise<SubstitutionOverlay> {
+  const result = await unwrap(await client.GET("/api/v3/schedules/substitutions", {
+    params: { query: { date: productionDate } },
+  }));
+  if (!isSubstitutionOverlay(result.overlay, productionDate)) {
+    throw new ApiError("The server returned an incomplete substitution overlay. Refresh and retry.", 502);
+  }
+  return result.overlay;
+}
+
+export async function listSubstitutionProducts(): Promise<SubstitutionProduct[]> {
+  const result = await unwrap(await client.GET("/api/v3/schedules/substitution-products"));
+  if (!Array.isArray(result.products) || result.products.some((product) => typeof product.productId !== "string"
+    || typeof product.productCode !== "string" || typeof product.productName !== "string"
+    || typeof product.baseUnit !== "string")) {
+    throw new ApiError("The substitution product list was incomplete. Refresh and retry.", 502);
+  }
+  return result.products;
+}
+
+export async function applySubstitutionCommand(
+  request: SubstitutionCommandRequest,
+): Promise<SubstitutionCommandResult> {
+  const result = await client.POST("/api/v3/schedules/substitutions/commands", {
+    params: { header: mutationHeaders() },
+    body: request,
+  });
+  if (result.response.status === 409) {
+    const conflict = result.error as Partial<components["schemas"]["SubstitutionCommandConflict"]> | undefined;
+    if (conflict?.outcome === "conflict" && isSubstitutionOverlay(conflict.currentOverlay, request.date)) {
+      return { overlay: conflict.currentOverlay, replayed: false, conflict: true };
+    }
+  }
+  const accepted = await unwrap(result);
+  if (accepted.outcome !== "accepted" || accepted.commandId !== request.requestId.toLowerCase()
+    || !isSubstitutionOverlay(accepted.overlay, request.date)) {
+    throw new ApiError("The server did not confirm the substitution change. Retry the same request.", 502);
+  }
+  return { overlay: accepted.overlay, replayed: accepted.replayed, conflict: false };
 }
 
 export async function previewProductionScheduleWorkbook(input: {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError, applyRunCommand, applyStationCommand, type Run, type RunCommand, type StationKey } from "../api";
 import { RunToTimeControl } from "./RunToTimeControl";
 import { RunOperationsPanel } from "./RunOperationsPanel";
+import { EffectiveProductionPlan } from "./EffectiveProductionPlan";
 
 const stationOrder: StationKey[] = ["line", "dough", "cheese", "pepperoni", "sauce", "frontline", "packaging"];
 const stationFields: Record<StationKey, { inputs: string[]; progress: string[] }> = {
@@ -146,12 +147,14 @@ export function RunDetail({ run, online, canManageReasons, onUpdated }: {
         </div>
         <span className={`status-pill status-${run.status}`}>{run.status}</span>
       </div>
-      <dl className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <dl className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <div className="metric"><dt>Target</dt><dd>{run.setupSnapshot.targetCases} cases</dd></div>
         <div className="metric"><dt>Product</dt><dd>{run.setupSnapshot.productCode ?? "—"}</dd></div>
+        <div className="metric"><dt>Production date</dt><dd>{run.productionDate}</dd></div>
         <div className="metric"><dt>Revision</dt><dd>{run.revision}</dd></div>
         <div className="metric"><dt>Server update</dt><dd>{new Date(run.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</dd></div>
       </dl>
+      <EffectiveProductionPlan run={run} />
       <RunToTimeControl run={run} online={online} onUpdated={onUpdated} />
       <RunOperationsPanel run={run} online={online} canManageReasons={canManageReasons} onUpdated={onUpdated} />
       {run.productionRules?.length ? (

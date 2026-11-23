@@ -8,6 +8,7 @@ import {
   SCHEDULE_TIME_ZONE,
 } from "../core/schedule-planning.mjs";
 import { parseScheduleWorkbook, scheduleWorkbookLimits } from "../core/schedule-workbook-import.mjs";
+import { createSubstitutionService } from "../core/substitution-service.mjs";
 
 const API_PREFIX = "/api/v3/schedules";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -242,6 +243,9 @@ export function createScheduleApi({ pool, authenticate, verifyCsrf, logger = () 
 
   const rateBuckets = new Map();
   const query = (config) => pool.query({ ...config, query_timeout: 5_000 });
+  const substitutions = createSubstitutionService({
+    query: (text, values) => query({ text, values }),
+  });
   function rateLimit(identity, route, maximum, windowMs) {
     const now = Date.now();
     const key = `${identity}:${route}`;
@@ -277,14 +281,28 @@ export function createScheduleApi({ pool, authenticate, verifyCsrf, logger = () 
       const { facilityId, actorId } = requireManager(auth);
       const routeName = url.pathname === `${API_PREFIX}/import-preview`
         ? "import-preview"
-        : url.pathname === `${API_PREFIX}/commands`
+        : [`${API_PREFIX}/commands`, `${API_PREFIX}/substitutions/commands`].includes(url.pathname)
           ? "command"
           : url.pathname.endsWith("/catalog")
             ? "catalog"
             : "read";
-      const limit = rateLimit(actorId, routeName, routeName === "import-preview" ? 5 : routeName === "command" ? 60 : 60, 60_000);
+      const limit = rateLimit(actorId, routeName, routeName === "import-preview" ? 5 : 60, 60_000);
       if (limit > 0) {
         sendJson(response, 429, { error: "Too many schedule requests. Wait briefly and try again." }, { "Retry-After": String(limit) });
+        return true;
+      }
+      if (request.method === "GET" && url.pathname === `${API_PREFIX}/substitutions`) {
+        const keys = [...url.searchParams.keys()];
+        if (keys.length !== 1 || keys[0] !== "date" || url.searchParams.getAll("date").length !== 1) {
+          throw new ScheduleApiError(400, "Specify one production date.");
+        }
+        const overlay = await substitutions.get({ auth, productionDate: parseDate(url.searchParams.get("date")) });
+        sendJson(response, 200, { overlay });
+        return true;
+      }
+      if (request.method === "GET" && url.pathname === `${API_PREFIX}/substitution-products`) {
+        if (url.search) throw new ScheduleApiError(400, "Substitution product query parameters are not supported.");
+        sendJson(response, 200, { products: await substitutions.listProducts({ auth }) });
         return true;
       }
       if (request.method === "GET" && url.pathname === `${API_PREFIX}/catalog`) {
@@ -320,6 +338,18 @@ export function createScheduleApi({ pool, authenticate, verifyCsrf, logger = () 
         throw new ScheduleApiError(403, "Refresh your session before changing a schedule.");
       }
       const body = await readJsonBody(request);
+      if (url.pathname === `${API_PREFIX}/substitutions/commands`) {
+        exactKeys(body, ["requestId", "date", "expectedRevision", "command"]);
+        const result = await substitutions.execute({
+          auth,
+          requestId: body.requestId,
+          productionDate: body.date,
+          expectedRevision: body.expectedRevision,
+          command: body.command,
+        });
+        sendJson(response, result.outcome === "conflict" ? 409 : 200, result);
+        return true;
+      }
       if (url.pathname === `${API_PREFIX}/import-preview`) {
         sendJson(response, 200, { preview: parseWorkbookBody(body) });
         return true;
@@ -358,12 +388,14 @@ export function createScheduleApi({ pool, authenticate, verifyCsrf, logger = () 
       }
       return true;
     } catch (error) {
+      const substitutionError = error?.name === "SubstitutionServiceError"
+        && Number.isInteger(error.status) && error.status >= 400 && error.status <= 599;
       const status = error instanceof ScheduleApiError
         ? error.status
-        : error instanceof ScheduleValidationError
+        : error instanceof ScheduleValidationError || substitutionError
           ? error.status
           : safeDbStatus(error);
-      const message = error instanceof ScheduleApiError || error instanceof ScheduleValidationError
+      const message = error instanceof ScheduleApiError || error instanceof ScheduleValidationError || substitutionError
         ? error.message
         : safeDbMessage(error, status);
       if (status >= 500) {

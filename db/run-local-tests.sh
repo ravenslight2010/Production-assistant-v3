@@ -720,7 +720,12 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0015-setup-management.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0016-planning-readiness-run-to-time.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0017-run-operations.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0018-temporary-substitutions.sql" >/dev/null
 "${PSQL[@]}" -c "
+  GRANT EXECUTE ON FUNCTION v3.create_planned_run(uuid, uuid, text, text, date, jsonb) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.get_substitution_overlay(uuid, date) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.list_substitution_products(uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.apply_substitution_command(uuid, uuid, date, text, text, bigint, jsonb) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.apply_run_to_time_command(uuid, uuid, uuid, text, text, time, bigint) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_setup_catalog_records(uuid, text, integer, text) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.stage_setup_catalog_edit(uuid, uuid, text, text, text, jsonb, text) TO v3_api_test;
@@ -740,7 +745,7 @@ fi
   GRANT EXECUTE ON FUNCTION v3.get_stop_reason_settings(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.save_stop_reason_settings(uuid, uuid, text, text, bigint, jsonb) TO v3_api_test;
 " >/dev/null
-for table in v3.cycle_count_schedules v3.cycle_count_confirmations v3.inventory_lots v3.inventory_lot_movements v3.freezer_surplus_lots v3.freezer_surplus_confirmations v3.freezer_surplus_allocations v3.freezer_surplus_events v3.warehouse_guidance_settings v3.inventory_reorder_points v3.run_stoppages v3.facility_stop_reason_settings v3.facility_operation_events; do
+for table in v3.cycle_count_schedules v3.cycle_count_confirmations v3.inventory_lots v3.inventory_lot_movements v3.freezer_surplus_lots v3.freezer_surplus_confirmations v3.freezer_surplus_allocations v3.freezer_surplus_events v3.warehouse_guidance_settings v3.inventory_reorder_points v3.run_stoppages v3.facility_stop_reason_settings v3.facility_operation_events v3.substitution_overlays v3.substitution_rules v3.substitution_rule_history v3.completed_run_substitutions; do
   assert_no_direct_table_access "$table"
 done
 "${PSQL[@]}" -c "
@@ -796,6 +801,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0015-setup-management.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0016-planning-readiness-run-to-time.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0017-run-operations.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0018-temporary-substitutions.test.sql"
 SETUP_EDITOR_PRIVILEGES="$("${PSQL[@]}" -c "
   SET ROLE v3_api_test;
   SELECT has_function_privilege(current_user,

@@ -345,11 +345,15 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [requestId, setupSnapshot]
+              required: [requestId, productionDate, setupSnapshot]
               properties:
                 requestId:
                   type: string
                   format: uuid
+                productionDate:
+                  type: string
+                  format: date
+                  description: Explicit immutable production date; the client initially defaults it to the current America/Chicago date.
                 setupSnapshot:
                   $ref: "#/components/schemas/RunCreateSetup"
       responses:
@@ -382,6 +386,117 @@ paths:
         "413":
           $ref: "#/components/responses/Error"
         "415":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+  /api/v3/schedules/substitutions:
+    get:
+      operationId: getSubstitutionOverlay
+      summary: Read temporary substitutions for one production date
+      description: Requires the manager production-plan capability. The overlay applies only to this facility and date.
+      parameters:
+        - in: query
+          name: date
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Canonical dated substitution overlay
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [overlay]
+                properties:
+                  overlay:
+                    $ref: "#/components/schemas/SubstitutionOverlay"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /api/v3/schedules/substitution-products:
+    get:
+      operationId: listSubstitutionProducts
+      summary: List active products eligible for temporary substitution
+      responses:
+        "200":
+          description: Facility-scoped active product choices
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [products]
+                properties:
+                  products:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SubstitutionProduct"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /api/v3/schedules/substitutions/commands:
+    post:
+      operationId: applySubstitutionCommand
+      summary: Upsert, remove, or clear temporary substitutions
+      description: >
+        Commands are online, manager-only, revision-checked, audited, and idempotent
+        per manager and requestId. Exact retries return the original response with
+        replayed true. A stale revision returns 409 with the canonical current overlay.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubstitutionCommandRequest"
+      responses:
+        "200":
+          description: Accepted change or exact retry with canonical overlay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubstitutionCommandAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          description: Stale revision or unavailable reference
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SubstitutionCommandConflict"
+                  - $ref: "#/components/schemas/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
           $ref: "#/components/responses/Error"
         "405":
           $ref: "#/components/responses/Error"
@@ -2653,6 +2768,201 @@ components:
           minItems: 1
           items:
             $ref: "#/components/schemas/ProductionPlanLine"
+    EffectiveProductionRecipeSnapshot:
+      type: object
+      required: [code, name, stationKey, ingredients]
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        stationKey:
+          type: string
+          enum: [dough, cheese, pepperoni, sauce, frontline]
+        ingredients:
+          type: array
+          minItems: 0
+          description: Effective rows after dated swap, add, and remove rules; may be empty after removals.
+          items:
+            $ref: "#/components/schemas/ProductionPlanLine"
+    EffectiveProductionPlanSnapshot:
+      type: object
+      required: [code, name, warehouse, recipes, packagingPerCase]
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        warehouse:
+          $ref: "#/components/schemas/ProductionWarehouse"
+        recipes:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/EffectiveProductionRecipeSnapshot"
+        packagingPerCase:
+          type: array
+          minItems: 1
+          description: Packaging remains identical to the immutable setup snapshot.
+          items:
+            $ref: "#/components/schemas/ProductionPlanLine"
+    SubstitutionRule:
+      type: object
+      additionalProperties: false
+      required: [id, ingredient, action]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ingredient:
+          type: string
+          minLength: 1
+          maxLength: 120
+        action:
+          type: string
+          enum: [swap, add, remove]
+        substituteProductId:
+          type: string
+          format: uuid
+        substituteProductCode:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+        substituteProductName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        quantity:
+          type: string
+          pattern: "^(0|[1-9][0-9]{0,13})(\\.[0-9]{1,6})?$"
+          description: Required for add; optional for swap; omitted for remove. Swap without quantity preserves each original row quantity.
+    SubstitutionOverlay:
+      type: object
+      additionalProperties: false
+      required: [productionDate, revision, rules, updatedAt]
+      properties:
+        productionDate:
+          type: string
+          format: date
+        revision:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        rules:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/SubstitutionRule"
+        updatedAt:
+          type: [string, "null"]
+          format: date-time
+    SubstitutionProduct:
+      type: object
+      additionalProperties: false
+      required: [productId, productCode, productName, baseUnit]
+      properties:
+        productId:
+          type: string
+          format: uuid
+        productCode:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+        productName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        baseUnit:
+          type: string
+          pattern: "^[A-Za-z][A-Za-z0-9._/-]{0,15}$"
+    SubstitutionRuleInput:
+      type: object
+      additionalProperties: false
+      required: [id, ingredient, action, substituteProductId, quantity]
+      properties:
+        id:
+          type: [string, "null"]
+          format: uuid
+          description: Null creates a rule; an existing stable ID updates it. Case-insensitive ingredient upsert retains the existing ID.
+        ingredient:
+          type: string
+          minLength: 1
+          maxLength: 120
+        action:
+          type: string
+          enum: [swap, add, remove]
+        substituteProductId:
+          type: [string, "null"]
+          format: uuid
+        quantity:
+          type: [string, "null"]
+          pattern: "^(0|[1-9][0-9]{0,13})(\\.[0-9]{1,6})?$"
+    SubstitutionCommand:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [type, rule]
+          properties:
+            type:
+              const: upsert
+            rule:
+              $ref: "#/components/schemas/SubstitutionRuleInput"
+        - type: object
+          additionalProperties: false
+          required: [type, ruleId]
+          properties:
+            type:
+              const: remove
+            ruleId:
+              type: string
+              format: uuid
+        - type: object
+          additionalProperties: false
+          required: [type]
+          properties:
+            type:
+              const: clear
+    SubstitutionCommandRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, date, expectedRevision, command]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date
+        expectedRevision:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        command:
+          $ref: "#/components/schemas/SubstitutionCommand"
+    SubstitutionCommandAccepted:
+      type: object
+      required: [outcome, replayed, commandId, overlay]
+      properties:
+        outcome:
+          const: accepted
+        replayed:
+          type: boolean
+        commandId:
+          type: string
+          format: uuid
+        overlay:
+          $ref: "#/components/schemas/SubstitutionOverlay"
+    SubstitutionCommandConflict:
+      type: object
+      required: [outcome, replayed, expectedRevision, currentOverlay]
+      properties:
+        outcome:
+          const: conflict
+        replayed:
+          type: boolean
+        expectedRevision:
+          type: integer
+          minimum: 0
+        currentOverlay:
+          $ref: "#/components/schemas/SubstitutionOverlay"
     InventoryConsumptionLine:
       type: object
       required: [productId, productCode, productName, unit, required, deducted, shortfall]
@@ -2727,6 +3037,7 @@ components:
       required:
         - id
         - status
+        - productionDate
         - revision
         - createdAt
         - updatedAt
@@ -2738,6 +3049,8 @@ components:
         - runToTime
         - operationalNotes
         - setupSnapshot
+        - effectiveProductionPlan
+        - substitutionOverlay
         - doughCapacity
         - inventoryConsumption
         - stoppages
@@ -2769,6 +3082,10 @@ components:
         status:
           type: string
           enum: [planned, running, paused, completed]
+        productionDate:
+          type: string
+          format: date
+          description: Immutable facility production date in America/Chicago.
         revision:
           type: integer
           minimum: 0
@@ -2807,6 +3124,16 @@ components:
             $ref: "#/components/schemas/Stoppage"
         setupSnapshot:
           $ref: "#/components/schemas/RunSetup"
+        effectiveProductionPlan:
+          oneOf:
+            - $ref: "#/components/schemas/EffectiveProductionPlanSnapshot"
+            - type: "null"
+          description: Current effective plan for planned, running, or paused runs; the exact retained completion plan for completed runs.
+        substitutionOverlay:
+          oneOf:
+            - $ref: "#/components/schemas/SubstitutionOverlay"
+            - type: "null"
+          description: Current dated overlay, or the retained overlay used at completion. Null only for legacy unscoped records.
         doughCapacity:
           $ref: "#/components/schemas/DoughCapacity"
         inventoryConsumption:
@@ -4712,7 +5039,7 @@ components:
     ProductionSchedule:
       type: object
       additionalProperties: false
-      required: [date, revision, timeZone, productionStartTime, runs, breaks, updatedAt]
+      required: [date, revision, timeZone, productionStartTime, runs, breaks, updatedAt, substitutionOverlay]
       properties:
         date:
           type: [string, "null"]
@@ -4740,6 +5067,8 @@ components:
         updatedAt:
           type: [string, "null"]
           format: date-time
+        substitutionOverlay:
+          $ref: "#/components/schemas/SubstitutionOverlay"
     ProductionScheduleCommandRequest:
       type: object
       additionalProperties: false

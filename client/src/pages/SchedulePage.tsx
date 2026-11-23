@@ -19,6 +19,7 @@ import {
 import { ScheduleImport } from "../components/ScheduleImport";
 import { ScheduleRunCard } from "../components/ScheduleRunCard";
 import { ScheduleTimeline } from "../components/ScheduleTimeline";
+import { SubstitutionManager } from "../components/SubstitutionManager";
 import { scheduleRunTitle, validateScheduleRun } from "../components/schedule-utils";
 import {
   clearPendingScheduleCommand,
@@ -358,6 +359,20 @@ export function SchedulePage({ session, online }: { session: AuthSession; online
 
       {schedule && catalog && schedule.date === date ? (
         <>
+          <div className="mt-6">
+            <SubstitutionManager
+              productionDate={schedule.date}
+              overlay={schedule.substitutionOverlay}
+              online={online}
+              onOverlay={(substitutionOverlay) => {
+                const next = { ...schedule, substitutionOverlay };
+                setSchedule(next);
+                setLastConfirmed(new Date().toISOString());
+                const cacheWarning = cacheConfirmed(next, catalog);
+                if (cacheWarning) setError(cacheWarning);
+              }}
+            />
+          </div>
           <div className="mt-6 grid items-start gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(20rem,1fr)]">
             <div className="min-w-0 space-y-5">
               <div className="flex flex-wrap items-center justify-between gap-3">

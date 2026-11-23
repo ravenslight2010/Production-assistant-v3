@@ -845,6 +845,7 @@ async function main() {
       },
       body: JSON.stringify({
         requestId: "73000000-0000-4000-8000-000000000101",
+        productionDate: "2026-11-18",
         setupSnapshot: {
           label: "Two-session check", targetCases: 5, productCode: "DOUGH-A", productionSetupCode: "LINE-A",
         },
@@ -987,6 +988,7 @@ async function main() {
 
     const plannedTargetResponse = await sessionPost(manager, "/api/v3/runs", {
       requestId: "73000000-0000-4000-8000-000000000217",
+      productionDate: "2026-11-18",
       setupSnapshot: {
         label: "Run to Time integration", targetCases: 5, productCode: "DOUGH-A", productionSetupCode: "LINE-A",
       },

@@ -171,6 +171,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/schedules/substitutions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read temporary substitutions for one production date
+         * @description Requires the manager production-plan capability. The overlay applies only to this facility and date.
+         */
+        get: operations["getSubstitutionOverlay"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/schedules/substitution-products": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List active products eligible for temporary substitution */
+        get: operations["listSubstitutionProducts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/schedules/substitutions/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upsert, remove, or clear temporary substitutions
+         * @description Commands are online, manager-only, revision-checked, audited, and idempotent per manager and requestId. Exact retries return the original response with replayed true. A stale revision returns 409 with the canonical current overlay.
+         */
+        post: operations["applySubstitutionCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/schedules/catalog": {
         parameters: {
             query?: never;
@@ -1194,6 +1251,99 @@ export interface components {
             recipes: components["schemas"]["ProductionRecipeSnapshot"][];
             packagingPerCase: components["schemas"]["ProductionPlanLine"][];
         };
+        EffectiveProductionRecipeSnapshot: {
+            code: string;
+            name: string;
+            /** @enum {string} */
+            stationKey: "dough" | "cheese" | "pepperoni" | "sauce" | "frontline";
+            /** @description Effective rows after dated swap, add, and remove rules; may be empty after removals. */
+            ingredients: components["schemas"]["ProductionPlanLine"][];
+        };
+        EffectiveProductionPlanSnapshot: {
+            code: string;
+            name: string;
+            warehouse: components["schemas"]["ProductionWarehouse"];
+            recipes: components["schemas"]["EffectiveProductionRecipeSnapshot"][];
+            /** @description Packaging remains identical to the immutable setup snapshot. */
+            packagingPerCase: components["schemas"]["ProductionPlanLine"][];
+        };
+        SubstitutionRule: {
+            /** Format: uuid */
+            id: string;
+            ingredient: string;
+            /** @enum {string} */
+            action: "swap" | "add" | "remove";
+            /** Format: uuid */
+            substituteProductId?: string;
+            substituteProductCode?: string;
+            substituteProductName?: string;
+            /** @description Required for add; optional for swap; omitted for remove. Swap without quantity preserves each original row quantity. */
+            quantity?: string;
+        };
+        SubstitutionOverlay: {
+            /** Format: date */
+            productionDate: string;
+            revision: number;
+            rules: components["schemas"]["SubstitutionRule"][];
+            /** Format: date-time */
+            updatedAt: string | null;
+        };
+        SubstitutionProduct: {
+            /** Format: uuid */
+            productId: string;
+            productCode: string;
+            productName: string;
+            baseUnit: string;
+        };
+        SubstitutionRuleInput: {
+            /**
+             * Format: uuid
+             * @description Null creates a rule; an existing stable ID updates it. Case-insensitive ingredient upsert retains the existing ID.
+             */
+            id: string | null;
+            ingredient: string;
+            /** @enum {string} */
+            action: "swap" | "add" | "remove";
+            /** Format: uuid */
+            substituteProductId: string | null;
+            quantity: string | null;
+        };
+        SubstitutionCommand: {
+            /** @constant */
+            type: "upsert";
+            rule: components["schemas"]["SubstitutionRuleInput"];
+        } | {
+            /** @constant */
+            type: "remove";
+            /** Format: uuid */
+            ruleId: string;
+        } | {
+            /** @constant */
+            type: "clear";
+        };
+        SubstitutionCommandRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: date */
+            date: string;
+            expectedRevision: number;
+            command: components["schemas"]["SubstitutionCommand"];
+        };
+        SubstitutionCommandAccepted: {
+            /** @constant */
+            outcome: "accepted";
+            replayed: boolean;
+            /** Format: uuid */
+            commandId: string;
+            overlay: components["schemas"]["SubstitutionOverlay"];
+        };
+        SubstitutionCommandConflict: {
+            /** @constant */
+            outcome: "conflict";
+            replayed: boolean;
+            expectedRevision: number;
+            currentOverlay: components["schemas"]["SubstitutionOverlay"];
+        };
         InventoryConsumptionLine: {
             /** Format: uuid */
             productId: string;
@@ -1252,6 +1402,11 @@ export interface components {
             id: string;
             /** @enum {string} */
             status: "planned" | "running" | "paused" | "completed";
+            /**
+             * Format: date
+             * @description Immutable facility production date in America/Chicago.
+             */
+            productionDate: string;
             revision: number;
             /** Format: date-time */
             createdAt: string;
@@ -1272,6 +1427,10 @@ export interface components {
             operationalNotes: string;
             stoppages: components["schemas"]["Stoppage"][];
             setupSnapshot: components["schemas"]["RunSetup"];
+            /** @description Current effective plan for planned, running, or paused runs; the exact retained completion plan for completed runs. */
+            effectiveProductionPlan: components["schemas"]["EffectiveProductionPlanSnapshot"] | null;
+            /** @description Current dated overlay, or the retained overlay used at completion. Null only for legacy unscoped records. */
+            substitutionOverlay: components["schemas"]["SubstitutionOverlay"] | null;
             doughCapacity: components["schemas"]["DoughCapacity"];
             inventoryConsumption: components["schemas"]["RunInventoryConsumption"] | null;
             pauseIntervals: components["schemas"]["PauseInterval"][];
@@ -2312,6 +2471,7 @@ export interface components {
             breaks: components["schemas"]["ScheduleBreak"][];
             /** Format: date-time */
             updatedAt: string | null;
+            substitutionOverlay: components["schemas"]["SubstitutionOverlay"];
         };
         ProductionScheduleCommandRequest: {
             /** Format: uuid */
@@ -2749,6 +2909,11 @@ export interface operations {
                 "application/json": {
                     /** Format: uuid */
                     requestId: string;
+                    /**
+                     * Format: date
+                     * @description Explicit immutable production date; the client initially defaults it to the current America/Chicago date.
+                     */
+                    productionDate: string;
                     setupSnapshot: components["schemas"]["RunCreateSetup"];
                 };
             };
@@ -2788,6 +2953,107 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    getSubstitutionOverlay: {
+        parameters: {
+            query: {
+                date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical dated substitution overlay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        overlay: components["schemas"]["SubstitutionOverlay"];
+                    };
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+        };
+    };
+    listSubstitutionProducts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Facility-scoped active product choices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        products: components["schemas"]["SubstitutionProduct"][];
+                    };
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+        };
+    };
+    applySubstitutionCommand: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubstitutionCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted change or exact retry with canonical overlay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubstitutionCommandAccepted"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            /** @description Stale revision or unavailable reference */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubstitutionCommandConflict"] | components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
         };
     };
     getScheduleCatalog: {

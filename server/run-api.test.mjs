@@ -6,9 +6,11 @@ import { RunCommandServiceError } from "../core/run-command-service.mjs";
 import { RunServiceError } from "../core/run-service.mjs";
 
 const RUN_ID = "00000000-0000-4000-8000-000000000004";
+const PRODUCTION_DATE = "2026-11-10";
 const RUN = {
   id: RUN_ID,
   status: "planned",
+  productionDate: PRODUCTION_DATE,
   revision: 0,
   createdAt: "2026-11-10T12:00:00.000Z",
   updatedAt: "2026-11-10T12:00:00.000Z",
@@ -19,6 +21,8 @@ const RUN = {
   runToTime: "19:15",
   operationalNotes: "",
   setupSnapshot: { label: "Run A", targetCases: 12 },
+  effectiveProductionPlan: null,
+  substitutionOverlay: null,
   stoppages: [],
   pauseIntervals: [],
 };
@@ -159,7 +163,7 @@ test("production rule blocks are definitive 422 responses and client bypasses ar
   assert.equal(command.status, 422);
   assert.match((await command.json()).error, /Production rules require review/);
   const prepare = await send(baseUrl, "/api/v3/runs", {
-    method: "POST", body: { requestId: RUN_ID, setupSnapshot: { label: "Synthetic", targetCases: 10 } },
+    method: "POST", body: { requestId: RUN_ID, productionDate: PRODUCTION_DATE, setupSnapshot: { label: "Synthetic", targetCases: 10 } },
   });
   assert.equal(prepare.status, 422);
   const bypass = await send(baseUrl, `/api/v3/runs/${RUN_ID}/commands`, {
@@ -239,6 +243,7 @@ test("creates runs with server authorization and returns replay status", async (
   const { baseUrl, calls } = await withApi(t);
   const input = {
     requestId: "00000000-0000-4000-8000-000000000005",
+    productionDate: PRODUCTION_DATE,
     setupSnapshot: { label: "Night shift", targetCases: 48 },
   };
   const created = await send(baseUrl, "/api/v3/runs", { method: "POST", body: input });
@@ -306,7 +311,7 @@ test("rejects unauthenticated requests and mutations without CSRF verification",
   const csrfDenied = await withApi(t, { verifyCsrf: async () => false });
   const response = await send(csrfDenied.baseUrl, "/api/v3/runs", {
     method: "POST",
-    body: { requestId: "00000000-0000-4000-8000-000000000005", setupSnapshot: { label: "Run", targetCases: 1 } },
+    body: { requestId: "00000000-0000-4000-8000-000000000005", productionDate: PRODUCTION_DATE, setupSnapshot: { label: "Run", targetCases: 1 } },
   });
   assert.equal(response.status, 403);
   assert.deepEqual(await response.json(), { error: "Refresh your session before changing run state." });
@@ -369,13 +374,17 @@ test("composes the HTTP API with server services and a parameterized PostgreSQL 
           dieTypes: [],
         } }] };
         if (sql.includes("v3.create_planned_run")) {
-          const setupSnapshot = JSON.parse(params[4]);
+          const setupSnapshot = JSON.parse(params[5]);
           return {
             rows: [{
               result: {
                 outcome: "created",
                 replayed: false,
-                run: { ...RUN, setupSnapshot: { ...setupSnapshot, productionPlan: PRODUCTION_PLAN } },
+                run: {
+                  ...RUN,
+                  setupSnapshot: { ...setupSnapshot, productionPlan: PRODUCTION_PLAN },
+                  effectiveProductionPlan: PRODUCTION_PLAN,
+                },
               },
             }],
           };
@@ -428,6 +437,7 @@ test("composes the HTTP API with server services and a parameterized PostgreSQL 
     method: "POST",
     body: {
       requestId: "00000000-0000-4000-8000-000000000005",
+      productionDate: PRODUCTION_DATE,
       setupSnapshot: {
         label: "Integrated run", targetCases: 24, productCode: "DOUGH-A", productionSetupCode: "LINE-A",
       },

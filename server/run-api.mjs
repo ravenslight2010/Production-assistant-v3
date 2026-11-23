@@ -199,10 +199,11 @@ export function createRunApi({
 
       if (url.pathname === API_PREFIX && request.method === "POST") {
         const body = await readJsonBody(request, maxBodyBytes);
-        requireExactKeys(body, ["requestId", "setupSnapshot"]);
+        requireExactKeys(body, ["requestId", "productionDate", "setupSnapshot"]);
         const result = await runs.create({
           auth,
           requestId: body.requestId,
+          productionDate: body.productionDate,
           setupSnapshot: body.setupSnapshot,
         });
         sendJson(response, result.replayed ? 200 : 201, result);

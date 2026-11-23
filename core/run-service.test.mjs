@@ -5,6 +5,7 @@ import { createRunService, RunServiceError } from "./run-service.mjs";
 const FACILITY_ID = "00000000-0000-4000-8000-000000000001";
 const ACTOR_ID = "00000000-0000-4000-8000-000000000002";
 const REQUEST_ID = "00000000-0000-4000-8000-000000000003";
+const PRODUCTION_DATE = "2026-11-10";
 const RUN_ID = "00000000-0000-4000-8000-000000000004";
 const AUTH = { verified: true, facilityId: FACILITY_ID, actorId: ACTOR_ID };
 const SETUP = {
@@ -40,6 +41,7 @@ const PRODUCTION_PLAN = {
 const RUN = {
   id: RUN_ID,
   status: "planned",
+  productionDate: PRODUCTION_DATE,
   revision: 0,
   createdAt: "2026-11-10T12:00:00.000Z",
   updatedAt: "2026-11-10T12:00:00.000Z",
@@ -50,6 +52,8 @@ const RUN = {
   runToTime: "19:15",
   operationalNotes: "",
   setupSnapshot: { ...SETUP, productionPlan: PRODUCTION_PLAN },
+  effectiveProductionPlan: PRODUCTION_PLAN,
+  substitutionOverlay: null,
   stoppages: [],
   pauseIntervals: [],
 };
@@ -70,21 +74,22 @@ test("creates a server-owned run using verified identity and a canonical idempot
     },
   });
 
-  const result = await service.create({ auth: AUTH, requestId: REQUEST_ID, setupSnapshot: SETUP });
+  const result = await service.create({ auth: AUTH, requestId: REQUEST_ID, productionDate: PRODUCTION_DATE, setupSnapshot: SETUP });
 
   assert.equal(result.outcome, "created");
   assert.equal(result.run.id, RUN_ID);
   assert.match(call.sql, /v3\.create_planned_run/);
   assert.deepEqual(call.params.slice(0, 3), [FACILITY_ID, ACTOR_ID, REQUEST_ID]);
   assert.match(call.params[3], /^[0-9a-f]{64}$/);
-  assert.deepEqual(JSON.parse(call.params[4]), SETUP);
+  assert.equal(call.params[4], PRODUCTION_DATE);
+  assert.deepEqual(JSON.parse(call.params[5]), SETUP);
 });
 
 test("trims a run label before hashing and persistence", async () => {
   let storedSetup;
   const service = makeService({
     query: async (_sql, params) => {
-      storedSetup = JSON.parse(params[4]);
+      storedSetup = JSON.parse(params[5]);
       return {
         rows: [{
           result: {
@@ -100,6 +105,7 @@ test("trims a run label before hashing and persistence", async () => {
   const result = await service.create({
     auth: AUTH,
     requestId: REQUEST_ID,
+    productionDate: PRODUCTION_DATE,
     setupSnapshot: { label: "  Morning run  ", targetCases: 12, productCode: "PIZZA", productionSetupCode: "LINE" },
   });
 
@@ -121,7 +127,7 @@ test("persists a die setup snapshot and compares JSON values independent of key 
   const storedLineSettings = Object.fromEntries(Object.entries(lineSettings).reverse());
   const service = makeService({
     query: async (_sql, params) => {
-      const submitted = JSON.parse(params[4]);
+      const submitted = JSON.parse(params[5]);
       return {
         rows: [{
           result: {
@@ -146,7 +152,7 @@ test("persists a die setup snapshot and compares JSON values independent of key 
       };
     },
   });
-  const result = await service.create({ auth: AUTH, requestId: REQUEST_ID, setupSnapshot: requestSetup });
+  const result = await service.create({ auth: AUTH, requestId: REQUEST_ID, productionDate: PRODUCTION_DATE, setupSnapshot: requestSetup });
   assert.deepEqual(JSON.parse(JSON.stringify(result.run.setupSnapshot.dieSetup.lineSettings)), lineSettings);
 });
 
@@ -170,7 +176,7 @@ test("rejects unsupported setup fields and invalid values before database work",
   ];
   for (const setupSnapshot of invalidSetups) {
     await assert.rejects(
-      service.create({ auth: AUTH, requestId: REQUEST_ID, setupSnapshot }),
+      service.create({ auth: AUTH, requestId: REQUEST_ID, productionDate: PRODUCTION_DATE, setupSnapshot }),
       (error) => error instanceof RunServiceError && error.status === 400,
     );
   }
@@ -192,11 +198,11 @@ test("rejects invalid request IDs, missing verified identity, and denied authori
     (error) => error.status === 400,
   );
   await assert.rejects(
-    service.create({ auth: { facilityId: FACILITY_ID, actorId: ACTOR_ID }, requestId: REQUEST_ID, setupSnapshot: SETUP }),
+    service.create({ auth: { facilityId: FACILITY_ID, actorId: ACTOR_ID }, requestId: REQUEST_ID, productionDate: PRODUCTION_DATE, setupSnapshot: SETUP }),
     (error) => error.status === 401,
   );
   await assert.rejects(
-    service.create({ auth: AUTH, requestId: REQUEST_ID, setupSnapshot: SETUP }),
+    service.create({ auth: AUTH, requestId: REQUEST_ID, productionDate: PRODUCTION_DATE, setupSnapshot: SETUP }),
     (error) => error.status === 403,
   );
   assert.equal(queryCount, 0);
@@ -206,7 +212,7 @@ test("returns idempotent creation replay and maps reused request IDs to conflict
   const service = makeService({
     query: async () => ({ rows: [{ result: { outcome: "created", replayed: true, run: RUN } }] }),
   });
-  const result = await service.create({ auth: AUTH, requestId: REQUEST_ID, setupSnapshot: SETUP });
+  const result = await service.create({ auth: AUTH, requestId: REQUEST_ID, productionDate: PRODUCTION_DATE, setupSnapshot: SETUP });
   assert.equal(result.replayed, true);
 
   const conflict = makeService({
@@ -217,14 +223,14 @@ test("returns idempotent creation replay and maps reused request IDs to conflict
     },
   });
   await assert.rejects(
-    conflict.create({ auth: AUTH, requestId: REQUEST_ID, setupSnapshot: SETUP }),
+    conflict.create({ auth: AUTH, requestId: REQUEST_ID, productionDate: PRODUCTION_DATE, setupSnapshot: SETUP }),
     (error) => error.status === 409 && !error.message.includes("sensitive"),
   );
   const stale = makeService({
     query: async () => { throw Object.assign(new Error("stale revision"), { code: "40001" }); },
   });
   await assert.rejects(
-    stale.create({ auth: AUTH, requestId: REQUEST_ID, setupSnapshot: SETUP }),
+    stale.create({ auth: AUTH, requestId: REQUEST_ID, productionDate: PRODUCTION_DATE, setupSnapshot: SETUP }),
     (error) => error.status === 409 && error.code === "STALE_DIE_DEFAULT",
   );
 });
@@ -269,7 +275,7 @@ test("strict imported rules reject preparation with a safe definitive response",
     query: async () => { throw Object.assign(new Error("private storage details"), { code: "P2001" }); },
   });
   await assert.rejects(
-    service.create({ auth: AUTH, requestId: REQUEST_ID, setupSnapshot: SETUP }),
+    service.create({ auth: AUTH, requestId: REQUEST_ID, productionDate: PRODUCTION_DATE, setupSnapshot: SETUP }),
     (error) => error.status === 422 && error.code === "PRODUCTION_RULES_BLOCKED"
       && !error.message.includes("private storage details"),
   );

@@ -25,11 +25,18 @@ const CATALOG = {
   productionStartTime: "06:00",
   timeZone: "America/Chicago",
 };
+const SUBSTITUTE_PRODUCTS = [{
+  productId: "00000000-0000-4000-8000-000000000006",
+  productCode: "FLOUR-B",
+  productName: "Flour B",
+  baseUnit: "lb",
+}];
 
-async function withApi(t, { auth = AUTH, csrf = true } = {}) {
+async function withApi(t, { auth = AUTH, csrf = true, substitutionError = null } = {}) {
   const calls = [];
   let schedule = emptySchedule("2026-11-18");
   const receipts = new Map();
+  const substitutionReceipts = new Map();
   const pool = {
     async query(config) {
       assert.equal(config.query_timeout, 5_000);
@@ -37,6 +44,61 @@ async function withApi(t, { auth = AUTH, csrf = true } = {}) {
       if (config.text.includes("list_run_products")) return { rows: [{ result: { products: CATALOG.products } }] };
       if (config.text.includes("list_schedule_run_templates")) return { rows: [{ result: CATALOG.templates }] };
       if (config.text.includes("schedule_default_start_time")) return { rows: [{ result: "06:00" }] };
+      if (config.text.includes("get_substitution_overlay")) {
+        if (substitutionError) throw substitutionError;
+        const date = config.values[1];
+        return { rows: [{ result: date === schedule.date
+          ? schedule.substitutionOverlay
+          : emptySchedule(date).substitutionOverlay }] };
+      }
+      if (config.text.includes("list_substitution_products")) {
+        if (substitutionError) throw substitutionError;
+        return { rows: [{ result: SUBSTITUTE_PRODUCTS }] };
+      }
+      if (config.text.includes("apply_substitution_command")) {
+        if (substitutionError) throw substitutionError;
+        const [facility, actor, date, requestId, requestHash, expectedRevision, jsonCommand] = config.values;
+        assert.equal(facility, FACILITY_ID);
+        assert.equal(actor, ACTOR_ID);
+        const current = date === schedule.date ? schedule.substitutionOverlay : emptySchedule(date).substitutionOverlay;
+        const previous = substitutionReceipts.get(requestId);
+        if (previous) {
+          assert.equal(previous.hash, requestHash);
+          return { rows: [{ result: { ...previous.response, replayed: true } }] };
+        }
+        if (Number(expectedRevision) !== current.revision) {
+          return { rows: [{ result: { outcome: "conflict", replayed: false, expectedRevision: Number(expectedRevision), currentOverlay: current } }] };
+        }
+        const command = JSON.parse(jsonCommand);
+        let rules = [...current.rules];
+        if (command.type === "clear") rules = [];
+        if (command.type === "remove") rules = rules.filter((rule) => rule.id !== command.ruleId);
+        if (command.type === "upsert") {
+          const product = SUBSTITUTE_PRODUCTS.find((item) => item.productId === command.rule.substituteProductId);
+          const rule = {
+            id: command.rule.id ?? RUN_C,
+            ingredient: command.rule.ingredient,
+            action: command.rule.action,
+            ...(command.rule.action === "remove" ? {} : {
+              substituteProductId: product.productId,
+              substituteProductCode: product.productCode,
+              substituteProductName: product.productName,
+              ...(command.rule.quantity === null ? {} : { quantity: command.rule.quantity }),
+            }),
+          };
+          rules = [...rules.filter((item) => item.id !== rule.id), rule];
+        }
+        const overlay = {
+          productionDate: date,
+          revision: current.revision + 1,
+          rules,
+          updatedAt: "2026-11-18T12:00:00.000Z",
+        };
+        if (date === schedule.date) schedule = { ...schedule, substitutionOverlay: overlay };
+        const response = { outcome: "accepted", replayed: false, commandId: requestId, overlay };
+        substitutionReceipts.set(requestId, { hash: requestHash, response });
+        return { rows: [{ result: response }] };
+      }
       if (config.text.includes("get_production_schedule")) {
         const date = config.values[1];
         if (date !== schedule.date) schedule = emptySchedule(date);
@@ -198,4 +260,84 @@ test("schedule workbook preview is manager-only, CSRF-protected, and never appli
   assert.equal(updatedPreview.preview.rows[0].targetCases, 13);
   assert.equal(updatedPreview.preview.rows[0].importRunId, result.preview.rows[0].importRunId);
   assert.equal(fixture.calls.length, 0);
+});
+
+
+test("substitution reads and commands are dated, replayable, revision-fenced, and clearable", async (t) => {
+  const { baseUrl } = await withApi(t);
+  const empty = await send(baseUrl, "/api/v3/schedules/substitutions?date=2026-11-18");
+  assert.equal(empty.status, 200);
+  assert.deepEqual((await empty.json()).overlay.rules, []);
+  const products = await send(baseUrl, "/api/v3/schedules/substitution-products");
+  assert.equal(products.status, 200);
+  assert.deepEqual((await products.json()).products, SUBSTITUTE_PRODUCTS);
+
+  const request = {
+    requestId: "00000000-0000-4000-8000-000000000031",
+    date: "2026-11-18",
+    expectedRevision: 0,
+    command: {
+      type: "upsert",
+      rule: {
+        id: null,
+        ingredient: " Flour ",
+        action: "swap",
+        substituteProductId: SUBSTITUTE_PRODUCTS[0].productId,
+        quantity: null,
+      },
+    },
+  };
+  const accepted = await send(baseUrl, "/api/v3/schedules/substitutions/commands", { method: "POST", body: request });
+  assert.equal(accepted.status, 200, await accepted.clone().text());
+  const acceptedBody = await accepted.json();
+  assert.equal(acceptedBody.overlay.revision, 1);
+  assert.equal(acceptedBody.overlay.rules[0].ingredient, "Flour");
+  assert.equal(acceptedBody.overlay.rules[0].substituteProductCode, "FLOUR-B");
+  const retry = await send(baseUrl, "/api/v3/schedules/substitutions/commands", { method: "POST", body: request });
+  assert.equal(retry.status, 200);
+  assert.equal((await retry.json()).replayed, true);
+
+  const stale = await send(baseUrl, "/api/v3/schedules/substitutions/commands", {
+    method: "POST",
+    body: { ...request, requestId: "00000000-0000-4000-8000-000000000032" },
+  });
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).currentOverlay.revision, 1);
+
+  const cleared = await send(baseUrl, "/api/v3/schedules/substitutions/commands", {
+    method: "POST",
+    body: {
+      requestId: "00000000-0000-4000-8000-000000000033",
+      date: "2026-11-18",
+      expectedRevision: 1,
+      command: { type: "clear" },
+    },
+  });
+  assert.equal(cleared.status, 200);
+  assert.deepEqual((await cleared.json()).overlay.rules, []);
+});
+
+test("substitution mutations require manager permission and CSRF; storage errors stay safe", async (t) => {
+  const deniedManager = await withApi(t, { auth: { ...AUTH, capabilities: [] } });
+  const managerResponse = await send(deniedManager.baseUrl, "/api/v3/schedules/substitution-products");
+  assert.equal(managerResponse.status, 403);
+  assert.equal(deniedManager.calls.length, 0);
+
+  const deniedCsrf = await withApi(t, { csrf: false });
+  const csrfResponse = await send(deniedCsrf.baseUrl, "/api/v3/schedules/substitutions/commands", {
+    method: "POST",
+    body: {
+      requestId: "00000000-0000-4000-8000-000000000034",
+      date: "2026-11-18",
+      expectedRevision: 0,
+      command: { type: "clear" },
+    },
+  });
+  assert.equal(csrfResponse.status, 403);
+  assert.equal(deniedCsrf.calls.length, 0);
+
+  const failing = await withApi(t, { substitutionError: new Error("private storage detail") });
+  const failure = await send(failing.baseUrl, "/api/v3/schedules/substitution-products");
+  assert.equal(failure.status, 500);
+  assert.deepEqual(await failure.json(), { error: "The schedule request could not be completed. Refresh and try again." });
 });

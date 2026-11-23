@@ -23,7 +23,9 @@ export function readScheduleCache(userId: string, date: string): ScheduleCache |
     const value = JSON.parse(localStorage.getItem(key) ?? "null") as Partial<ScheduleCache> | null;
     if (!value || typeof value.cachedAt !== "string" || !Number.isFinite(Date.parse(value.cachedAt))
       || value.schedule?.date !== date || !Array.isArray(value.schedule.runs)
-      || !Array.isArray(value.schedule.breaks) || value.schedule.breaks.length !== 3) {
+      || !Array.isArray(value.schedule.breaks) || value.schedule.breaks.length !== 3
+      || value.schedule.substitutionOverlay?.productionDate !== date
+      || !Array.isArray(value.schedule.substitutionOverlay.rules)) {
       return null;
     }
     return value as ScheduleCache;

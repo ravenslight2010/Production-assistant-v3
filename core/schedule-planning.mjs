@@ -1,3 +1,5 @@
+import { emptySubstitutionOverlay, isValidSubstitutionOverlay } from "./substitution-planning.mjs";
+
 export const SCHEDULE_TIME_ZONE = "America/Chicago";
 export const DEFAULT_PRODUCTION_START_TIME = "06:00";
 export const STANDARD_BREAK_MINUTES = 30;
@@ -105,7 +107,7 @@ export function normalizeScheduleBreaks(value, runs) {
 }
 
 export function normalizeSchedule(value) {
-  if (!isObject(value) || !hasExactKeys(value, ["date", "revision", "timeZone", "productionStartTime", "runs", "breaks", "updatedAt"])) {
+  if (!isObject(value) || !hasExactKeys(value, ["date", "revision", "timeZone", "productionStartTime", "runs", "breaks", "updatedAt", "substitutionOverlay"])) {
     throw new ScheduleValidationError("The schedule response is incomplete.", 502);
   }
   if (!isValidProductionDate(value.date)
@@ -113,6 +115,7 @@ export function normalizeSchedule(value) {
     || value.timeZone !== SCHEDULE_TIME_ZONE
     || typeof value.productionStartTime !== "string" || !CLOCK.test(value.productionStartTime)
     || !Array.isArray(value.runs) || value.runs.length > MAX_SCHEDULE_RUNS
+    || !isValidSubstitutionOverlay(value.substitutionOverlay, value.date)
     || !(value.updatedAt === null || (typeof value.updatedAt === "string" && Number.isFinite(Date.parse(value.updatedAt))))) {
     throw new ScheduleValidationError("The schedule response contains invalid values.", 502);
   }
@@ -154,6 +157,7 @@ export function normalizeSchedule(value) {
     runs,
     breaks: normalizeScheduleBreaks(value.breaks, runs),
     updatedAt: value.updatedAt,
+    substitutionOverlay: value.substitutionOverlay,
   };
 }
 
@@ -170,6 +174,7 @@ export function emptySchedule(date, productionStartTime = DEFAULT_PRODUCTION_STA
     runs: [],
     breaks: [1, 2, 3].map((slot) => ({ slot, enabled: false, runId: null })),
     updatedAt: null,
+    substitutionOverlay: emptySubstitutionOverlay(date),
   };
 }
 
