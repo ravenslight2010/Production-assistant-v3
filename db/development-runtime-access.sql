@@ -4,6 +4,9 @@ CREATE ROLE v3_runtime_access
 
 GRANT USAGE ON SCHEMA v3 TO v3_runtime_access;
 GRANT EXECUTE ON FUNCTION
+  v3.apply_mix_plan_command(uuid, uuid, text, text, bigint, jsonb),
+  v3.apply_mix_recipe_command(uuid, uuid, text, text, bigint, jsonb),
+  v3.apply_mix_surplus_command(uuid, uuid, text, text, bigint, jsonb),
   v3.apply_opening_count(uuid, uuid, uuid),
   v3.apply_substitution_command(uuid, uuid, date, text, text, bigint, jsonb),
   v3.apply_run_lifecycle_command(uuid, uuid, uuid, text, text, text, bigint),
@@ -18,6 +21,8 @@ GRANT EXECUTE ON FUNCTION
   v3.create_planned_run(uuid, uuid, text, text, date, jsonb),
   v3.create_staff_account(uuid, text, text, text),
   v3.find_staff_for_sign_in(text),
+  v3.get_mix_plan(uuid, date),
+  v3.get_mix_surplus(uuid),
   v3.get_opening_count(uuid, uuid),
   v3.get_run(uuid, uuid),
   v3.get_stop_reason_settings(uuid),
@@ -30,6 +35,7 @@ GRANT EXECUTE ON FUNCTION
   v3.list_inventory_products(uuid),
   v3.list_inventory_stock(uuid, uuid),
   v3.list_inventory_warehouses(uuid),
+  v3.list_mix_recipes(uuid),
   v3.list_opening_counts(uuid, integer),
   v3.list_run_products(uuid),
   v3.list_runs(uuid, integer),

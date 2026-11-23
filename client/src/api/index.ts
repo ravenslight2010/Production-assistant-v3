@@ -27,6 +27,23 @@ export type SubstitutionOverlay = components["schemas"]["SubstitutionOverlay"];
 export type SubstitutionRule = components["schemas"]["SubstitutionRule"];
 export type SubstitutionProduct = components["schemas"]["SubstitutionProduct"];
 export type SubstitutionCommandRequest = components["schemas"]["SubstitutionCommandRequest"];
+export type MixRecipe = components["schemas"]["MixRecipe"];
+export type MixRecipeInput = components["schemas"]["MixRecipeInput"];
+export type MixRecipeCatalog = components["schemas"]["MixRecipeCatalog"];
+export type MixRecipeCommand = components["schemas"]["MixRecipeCommand"];
+export type MixRecipeCommandRequest = components["schemas"]["MixRecipeCommandRequest"];
+export type MixPlan = components["schemas"]["MixPlan"];
+export type MixPlanEntry = components["schemas"]["MixPlanEntry"];
+export type MixPlanContribution = components["schemas"]["MixPlanContribution"];
+export type MixPlanCommand = components["schemas"]["MixPlanCommandRequest"]["command"];
+export type MixPlanCommandRequest = components["schemas"]["MixPlanCommandRequest"];
+export type MixSurplus = components["schemas"]["MixSurplus"];
+export type MixSurplusLot = components["schemas"]["MixSurplusLot"];
+export type MixSurplusCommand = components["schemas"]["MixSurplusCommand"];
+export type MixSurplusCommandRequest = components["schemas"]["MixSurplusCommandRequest"];
+export type MixRecipeCommandResult = { catalog: MixRecipeCatalog; recipe: MixRecipe | null; replayed: boolean; conflict: boolean };
+export type MixPlanCommandResult = { plan: MixPlan; replayed: boolean; conflict: boolean; reason: "finalized" | null };
+export type MixSurplusCommandResult = { surplus: MixSurplus; replayed: boolean; conflict: boolean; reason: "over_allocation" | null };
 export type SetupCatalogFamily = components["schemas"]["SetupCatalogStageResponse"]["family"];
 export type SetupCatalogRecord = components["schemas"]["SetupCatalogRecord"];
 export type SetupCatalogHistoryItem = components["schemas"]["SetupCatalogHistoryItem"];
@@ -393,6 +410,162 @@ export async function applySubstitutionCommand(
     throw new ApiError("The server did not confirm the substitution change. Retry the same request.", 502);
   }
   return { overlay: accepted.overlay, replayed: accepted.replayed, conflict: false };
+}
+
+function isMixRecipe(value: unknown): value is MixRecipe {
+  return object(value) && UUID.test(String(value.id)) && ["product", "prep"].includes(String(value.kind))
+    && (value.productId === null || UUID.test(String(value.productId)))
+    && (value.productName === null || typeof value.productName === "string")
+    && typeof value.name === "string" && typeof value.notes === "string" && typeof value.batchSizeLbs === "string"
+    && Number.isSafeInteger(value.daysEarly) && Number(value.daysEarly) >= 0 && Number(value.daysEarly) <= 365
+    && typeof value.enabled === "boolean" && Number.isSafeInteger(value.revision) && Number(value.revision) >= 0
+    && typeof value.updatedAt === "string" && Array.isArray(value.components)
+    && value.components.every((component) => object(component) && UUID.test(String(component.ingredientProductId))
+      && typeof component.ingredientName === "string" && typeof component.ouncesPerPizza === "string"
+      && (component.referencePoundsPerBatch === null || typeof component.referencePoundsPerBatch === "string"));
+}
+
+export function isMixRecipeCatalog(value: unknown): value is MixRecipeCatalog {
+  return object(value) && Array.isArray(value.recipes) && value.recipes.every(isMixRecipe)
+    && Array.isArray(value.products) && value.products.every((product) => object(product)
+      && UUID.test(String(product.productId)) && typeof product.productCode === "string"
+      && typeof product.productName === "string" && typeof product.baseUnit === "string");
+}
+
+function finiteFields(value: Record<string, unknown>, fields: string[]): boolean {
+  return fields.every((field) => typeof value[field] === "number" && Number.isFinite(value[field]) && Number(value[field]) >= 0);
+}
+
+function isMixContribution(value: unknown): value is MixPlanContribution {
+  return object(value) && typeof value.key === "string" && (value.runId === null || UUID.test(String(value.runId)))
+    && (value.scheduleRunId === null || UUID.test(String(value.scheduleRunId)))
+    && ["schedule", "live"].includes(String(value.source)) && typeof value.label === "string"
+    && (value.productId === null || UUID.test(String(value.productId))) && typeof value.productName === "string"
+    && finiteFields(value, ["cases", "pizzas", "componentLbs"])
+    && Array.isArray(value.ingredients) && value.ingredients.every((ingredient) => object(ingredient)
+      && (ingredient.productId === null || UUID.test(String(ingredient.productId)))
+      && typeof ingredient.name === "string"
+      && (ingredient.ouncesPerPizza === null || (typeof ingredient.ouncesPerPizza === "number" && Number.isFinite(ingredient.ouncesPerPizza))))
+    && Array.isArray(value.warnings) && value.warnings.every((warning) => typeof warning === "string");
+}
+
+function isMixPlanEntry(value: unknown): value is MixPlanEntry {
+  return object(value) && typeof value.key === "string" && typeof value.productionDate === "string"
+    && UUID.test(String(value.mixId)) && ["product", "prep"].includes(String(value.kind))
+    && (value.productId === null || UUID.test(String(value.productId)))
+    && (value.productName === null || typeof value.productName === "string")
+    && typeof value.name === "string" && typeof value.notes === "string"
+    && finiteFields(value, ["batchSizeLbs", "componentLbs", "wasteLbs", "startupLbs", "totalLbs",
+      "manualAlreadyMadeLbs", "allocatedSurplusLbs", "alreadyMadeLbs", "remainingLbs", "actualMadeLbs"])
+    && (value.batches === null || (typeof value.batches === "number" && Number.isFinite(value.batches) && value.batches >= 0))
+    && Number.isSafeInteger(value.daysEarly) && Number.isSafeInteger(value.daysUntil) && Number.isSafeInteger(value.revision)
+    && Array.isArray(value.components) && value.components.every((component) => object(component)
+      && UUID.test(String(component.ingredientProductId)) && typeof component.ingredientName === "string"
+      && finiteFields(component, ["plannedLbs", "pullLbs"])
+      && (component.referencePoundsPerBatch === null || (typeof component.referencePoundsPerBatch === "number"
+        && Number.isFinite(component.referencePoundsPerBatch) && component.referencePoundsPerBatch >= 0))
+      && Array.isArray(component.missingRuns) && component.missingRuns.every((run) => typeof run === "string"))
+    && Array.isArray(value.contributions) && value.contributions.every(isMixContribution)
+    && Array.isArray(value.warnings) && value.warnings.every((warning) => typeof warning === "string")
+    && typeof value.finalized === "boolean"
+    && (value.finalization === null || (object(value.finalization)
+      && finiteFields(value.finalization, ["actualMadeLbs", "freshLbs", "surplusLbs"])
+      && UUID.test(String(value.finalization.firstRunId)) && typeof value.finalization.createdAt === "string"
+      && Array.isArray(value.finalization.contributions) && value.finalization.contributions.every(isMixContribution)));
+}
+
+export function isMixPlan(value: unknown, makeDate?: string): value is MixPlan {
+  return object(value) && typeof value.makeDate === "string" && (makeDate === undefined || value.makeDate === makeDate)
+    && typeof value.derivedAt === "string" && Number.isFinite(Date.parse(value.derivedAt))
+    && Array.isArray(value.groups) && value.groups.every((group) => object(group)
+      && typeof group.productionDate === "string" && Number.isSafeInteger(group.daysUntil)
+      && Array.isArray(group.entries) && group.entries.every(isMixPlanEntry));
+}
+
+export function isMixSurplus(value: unknown): value is MixSurplus {
+  return object(value) && Number.isSafeInteger(value.revision) && Number(value.revision) >= 0
+    && Array.isArray(value.lots) && value.lots.every((lot) => object(lot) && UUID.test(String(lot.id))
+      && UUID.test(String(lot.mixId)) && (lot.productId === null || UUID.test(String(lot.productId)))
+      && typeof lot.mixName === "string" && (lot.productName === null || typeof lot.productName === "string")
+      && typeof lot.productionDate === "string" && ["manual", "automatic"].includes(String(lot.source))
+      && ["amountMadeLbs", "surplusLbs", "allocatedLbs", "remainingLbs"].every((key) => typeof lot[key] === "string")
+      && typeof lot.location === "string" && (lot.sourceFinalizationRunId === null || UUID.test(String(lot.sourceFinalizationRunId)))
+      && typeof lot.voided === "boolean" && typeof lot.createdAt === "string"
+      && Array.isArray(lot.allocations) && lot.allocations.every((allocation) => object(allocation)
+        && UUID.test(String(allocation.id)) && typeof allocation.targetDate === "string"
+        && typeof allocation.quantityLbs === "string" && typeof allocation.createdAt === "string"));
+}
+
+export async function getMixRecipeCatalog(): Promise<MixRecipeCatalog> {
+  const result = await unwrap(await client.GET("/api/v3/mix-recipes"));
+  if (!isMixRecipeCatalog(result.catalog)) throw new ApiError("The mix recipe catalog was incomplete. Refresh and retry.", 502);
+  return result.catalog;
+}
+
+export async function getMixPlan(makeDate: string): Promise<MixPlan> {
+  const result = await unwrap(await client.GET("/api/v3/mix-plan", { params: { query: { makeDate } } }));
+  if (!isMixPlan(result.plan, makeDate)) throw new ApiError("The Mix Plan was incomplete. Refresh and retry.", 502);
+  return result.plan;
+}
+
+export async function getMixSurplus(): Promise<MixSurplus> {
+  const result = await unwrap(await client.GET("/api/v3/mix-surplus"));
+  if (!isMixSurplus(result.surplus)) throw new ApiError("The mix surplus ledger was incomplete. Refresh and retry.", 502);
+  return result.surplus;
+}
+
+export async function applyMixRecipeCommand(request: MixRecipeCommandRequest): Promise<MixRecipeCommandResult> {
+  const result = await client.POST("/api/v3/mix-recipes/commands", {
+    params: { header: mutationHeaders() }, body: request,
+  });
+  if (result.response.status === 409) {
+    const conflict = result.error as Partial<components["schemas"]["MixRecipeCommandConflict"]> | undefined;
+    if (conflict?.outcome === "conflict" && isMixRecipeCatalog(conflict.catalog)) {
+      return { catalog: conflict.catalog, recipe: null, replayed: conflict.replayed ?? false, conflict: true };
+    }
+  }
+  const accepted = await unwrap(result);
+  if (accepted.outcome !== "accepted" || accepted.requestId !== request.requestId.toLowerCase()
+    || !isMixRecipe(accepted.recipe) || !isMixRecipeCatalog(accepted.catalog)) {
+    throw new ApiError("The server did not confirm the mix recipe change. Retry the same request.", 502);
+  }
+  return { catalog: accepted.catalog, recipe: accepted.recipe, replayed: accepted.replayed, conflict: false };
+}
+
+export async function applyMixPlanCommand(request: MixPlanCommandRequest): Promise<MixPlanCommandResult> {
+  const result = await client.POST("/api/v3/mix-plan/commands", {
+    params: { header: mutationHeaders() }, body: request,
+  });
+  if (result.response.status === 409) {
+    const conflict = result.error as Partial<components["schemas"]["MixPlanCommandConflict"]> | undefined;
+    if (conflict?.outcome === "conflict" && isMixPlan(conflict.plan, request.command.productionDate)) {
+      return { plan: conflict.plan, replayed: conflict.replayed ?? false, conflict: true, reason: conflict.reason ?? null };
+    }
+  }
+  const accepted = await unwrap(result);
+  if (accepted.outcome !== "accepted" || accepted.requestId !== request.requestId.toLowerCase()
+    || !isMixPlan(accepted.plan, request.command.productionDate)) {
+    throw new ApiError("The server did not confirm the Mix Plan change. Retry the same request.", 502);
+  }
+  return { plan: accepted.plan, replayed: accepted.replayed, conflict: false, reason: null };
+}
+
+export async function applyMixSurplusCommand(request: MixSurplusCommandRequest): Promise<MixSurplusCommandResult> {
+  const result = await client.POST("/api/v3/mix-surplus/commands", {
+    params: { header: mutationHeaders() }, body: request,
+  });
+  if (result.response.status === 409) {
+    const conflict = result.error as Partial<components["schemas"]["MixSurplusCommandConflict"]> | undefined;
+    if (conflict?.outcome === "conflict" && isMixSurplus(conflict.surplus)) {
+      return { surplus: conflict.surplus, replayed: conflict.replayed ?? false, conflict: true, reason: conflict.reason ?? null };
+    }
+  }
+  const accepted = await unwrap(result);
+  if (accepted.outcome !== "accepted" || accepted.requestId !== request.requestId.toLowerCase()
+    || !isMixSurplus(accepted.surplus)) {
+    throw new ApiError("The server did not confirm the mix surplus change. Retry the same request.", 502);
+  }
+  return { surplus: accepted.surplus, replayed: accepted.replayed, conflict: false, reason: null };
 }
 
 export async function previewProductionScheduleWorkbook(input: {

@@ -1547,6 +1547,180 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
+  /api/v3/mix-recipes:
+    get:
+      operationId: getMixRecipeCatalog
+      summary: Read facility mix recipes and active product choices
+      description: Available to every authenticated facility staff member. Writes require the manage-inventory capability.
+      responses:
+        "200":
+          description: Canonical mix recipe catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MixRecipeCatalogResponse"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v3/mix-plan:
+    get:
+      operationId: getMixPlan
+      summary: Derive the operational Mix Plan for one make date
+      description: Server-derived from confirmed schedules, active live runs, dated amounts, finalizations, and explicitly allocated surplus.
+      parameters:
+        - in: query
+          name: makeDate
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Canonical Mix Plan, including warnings and contribution attribution
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MixPlanResponse"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v3/mix-surplus:
+    get:
+      operationId: getMixSurplus
+      summary: Read manual and automatic mix surplus lots
+      responses:
+        "200":
+          description: Dated lot balances, explicit allocations, and voided history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MixSurplusResponse"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v3/mix-recipes/commands:
+    post:
+      operationId: applyMixRecipeCommand
+      summary: Upsert or disable one mix recipe
+      description: Online, revision-checked, audited, and idempotent. Exact retries return the original response with replayed true.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MixRecipeCommandRequest"
+      responses:
+        "200":
+          description: Accepted recipe change or exact retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MixRecipeCommandAccepted"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Stale recipe revision or unavailable state
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/MixRecipeCommandConflict"
+                  - $ref: "#/components/schemas/Error"
+        "413": { $ref: "#/components/responses/Error" }
+        "415": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v3/mix-plan/commands:
+    post:
+      operationId: applyMixPlanCommand
+      summary: Set dated already-made and actual-made amounts
+      description: Never posts inventory. Run completion alone finalizes demand and posts consumption. Finalized aggregates are read-only.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MixPlanCommandRequest"
+      responses:
+        "200":
+          description: Accepted dated amount change or exact retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MixPlanCommandAccepted"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Stale date revision or finalized aggregate; canonical current plan is returned for command conflicts
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/MixPlanCommandConflict"
+                  - $ref: "#/components/schemas/Error"
+        "413": { $ref: "#/components/responses/Error" }
+        "415": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v3/mix-surplus/commands:
+    post:
+      operationId: applyMixSurplusCommand
+      summary: Record, allocate, replace, or void mix surplus
+      description: Allocation is explicit and dated; no hidden FEFO or inventory consumption occurs. Voiding releases allocations.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MixSurplusCommandRequest"
+      responses:
+        "200":
+          description: Accepted surplus change or exact retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MixSurplusCommandAccepted"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Stale surplus revision, over-allocation, or unavailable lot state
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/MixSurplusCommandConflict"
+                  - $ref: "#/components/schemas/Error"
+        "413": { $ref: "#/components/responses/Error" }
+        "415": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
   /api/v3/inventory/die-defaults:
     get:
       operationId: listReviewedDieDefaults
@@ -2963,6 +3137,392 @@ components:
           minimum: 0
         currentOverlay:
           $ref: "#/components/schemas/SubstitutionOverlay"
+    MixDecimal:
+      type: string
+      pattern: "^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,6})?$"
+      description: Non-negative decimal string with at most six fractional digits.
+    MixRecipeComponentInput:
+      type: object
+      additionalProperties: false
+      required: [ingredientProductId, ouncesPerPizza, referencePoundsPerBatch]
+      properties:
+        ingredientProductId: { type: string, format: uuid }
+        ouncesPerPizza: { $ref: "#/components/schemas/MixDecimal" }
+        referencePoundsPerBatch:
+          oneOf:
+            - $ref: "#/components/schemas/MixDecimal"
+            - type: "null"
+    MixRecipeInput:
+      type: object
+      additionalProperties: false
+      required: [id, kind, productId, name, notes, batchSizeLbs, daysEarly, enabled, components]
+      properties:
+        id:
+          type: [string, "null"]
+          format: uuid
+          description: Null creates a recipe; a stable ID updates it using expectedRevision.
+        kind: { type: string, enum: [product, prep] }
+        productId:
+          type: [string, "null"]
+          format: uuid
+          description: Required for product mixes; null for prep mixes.
+        name: { type: string, minLength: 1, maxLength: 120 }
+        notes: { type: string, maxLength: 2000 }
+        batchSizeLbs: { $ref: "#/components/schemas/MixDecimal" }
+        daysEarly: { type: integer, minimum: 0, maximum: 365 }
+        enabled: { type: boolean }
+        components:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: "#/components/schemas/MixRecipeComponentInput" }
+    MixRecipeComponent:
+      type: object
+      additionalProperties: false
+      required: [ingredientProductId, ingredientName, ouncesPerPizza, referencePoundsPerBatch]
+      properties:
+        ingredientProductId: { type: string, format: uuid }
+        ingredientName: { type: string, maxLength: 120 }
+        ouncesPerPizza: { $ref: "#/components/schemas/MixDecimal" }
+        referencePoundsPerBatch:
+          oneOf:
+            - $ref: "#/components/schemas/MixDecimal"
+            - type: "null"
+    MixRecipe:
+      type: object
+      additionalProperties: false
+      required: [id, kind, productId, productName, name, notes, batchSizeLbs, daysEarly, enabled, revision, updatedAt, components]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [product, prep] }
+        productId: { type: [string, "null"], format: uuid }
+        productName: { type: [string, "null"], maxLength: 120 }
+        name: { type: string, maxLength: 120 }
+        notes: { type: string, maxLength: 2000 }
+        batchSizeLbs: { $ref: "#/components/schemas/MixDecimal" }
+        daysEarly: { type: integer, minimum: 0, maximum: 365 }
+        enabled: { type: boolean }
+        revision: { type: integer, minimum: 0 }
+        updatedAt: { type: string, format: date-time }
+        components:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/MixRecipeComponent" }
+    MixRecipeCatalog:
+      type: object
+      additionalProperties: false
+      required: [recipes, products]
+      properties:
+        recipes:
+          type: array
+          items: { $ref: "#/components/schemas/MixRecipe" }
+        products:
+          type: array
+          items: { $ref: "#/components/schemas/SubstitutionProduct" }
+    MixRecipeCatalogResponse:
+      type: object
+      additionalProperties: false
+      required: [catalog]
+      properties:
+        catalog: { $ref: "#/components/schemas/MixRecipeCatalog" }
+    MixPlanIngredient:
+      type: object
+      additionalProperties: false
+      required: [productId, name, ouncesPerPizza]
+      properties:
+        productId: { type: [string, "null"], format: uuid }
+        name: { type: string, maxLength: 120 }
+        ouncesPerPizza: { type: [number, "null"], minimum: 0 }
+    MixPlanContribution:
+      type: object
+      additionalProperties: false
+      required: [key, runId, scheduleRunId, source, label, productId, productName, cases, pizzas, ingredients, warnings, componentLbs]
+      properties:
+        key: { type: string }
+        runId: { type: [string, "null"], format: uuid }
+        scheduleRunId: { type: [string, "null"], format: uuid }
+        source: { type: string, enum: [schedule, live] }
+        label: { type: string }
+        productId: { type: [string, "null"], format: uuid }
+        productName: { type: string }
+        cases: { type: number, minimum: 0 }
+        pizzas: { type: number, minimum: 0 }
+        ingredients:
+          type: array
+          items: { $ref: "#/components/schemas/MixPlanIngredient" }
+        warnings:
+          type: array
+          items: { type: string }
+        componentLbs: { type: number, minimum: 0 }
+    MixPlanComponent:
+      type: object
+      additionalProperties: false
+      required: [ingredientProductId, ingredientName, referencePoundsPerBatch, plannedLbs, missingRuns, pullLbs]
+      properties:
+        ingredientProductId: { type: string, format: uuid }
+        ingredientName: { type: string }
+        referencePoundsPerBatch: { type: [number, "null"], minimum: 0 }
+        plannedLbs: { type: number, minimum: 0 }
+        missingRuns:
+          type: array
+          items: { type: string }
+        pullLbs: { type: number, minimum: 0 }
+    MixFinalization:
+      type: object
+      additionalProperties: false
+      required: [actualMadeLbs, freshLbs, surplusLbs, firstRunId, createdAt, contributions]
+      properties:
+        actualMadeLbs: { type: number, minimum: 0 }
+        freshLbs: { type: number, minimum: 0 }
+        surplusLbs: { type: number, minimum: 0 }
+        firstRunId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        contributions:
+          type: array
+          items: { $ref: "#/components/schemas/MixPlanContribution" }
+    MixPlanEntry:
+      type: object
+      additionalProperties: false
+      required: [key, productionDate, mixId, kind, productId, productName, name, notes, batchSizeLbs, daysEarly, componentLbs, wasteLbs, startupLbs, totalLbs, manualAlreadyMadeLbs, allocatedSurplusLbs, alreadyMadeLbs, remainingLbs, batches, actualMadeLbs, components, contributions, warnings, finalized, finalization, daysUntil, revision]
+      properties:
+        key: { type: string }
+        productionDate: { type: string, format: date }
+        mixId: { type: string, format: uuid }
+        kind: { type: string, enum: [product, prep] }
+        productId: { type: [string, "null"], format: uuid }
+        productName: { type: [string, "null"] }
+        name: { type: string }
+        notes: { type: string }
+        batchSizeLbs: { type: number, minimum: 0 }
+        daysEarly: { type: integer, minimum: 0, maximum: 365 }
+        componentLbs: { type: number, minimum: 0 }
+        wasteLbs: { type: number, minimum: 0 }
+        startupLbs: { type: number, minimum: 0 }
+        totalLbs: { type: number, minimum: 0 }
+        manualAlreadyMadeLbs: { type: number, minimum: 0 }
+        allocatedSurplusLbs: { type: number, minimum: 0 }
+        alreadyMadeLbs: { type: number, minimum: 0 }
+        remainingLbs: { type: number, minimum: 0 }
+        batches: { type: [number, "null"], minimum: 0 }
+        actualMadeLbs: { type: number, minimum: 0 }
+        components:
+          type: array
+          items: { $ref: "#/components/schemas/MixPlanComponent" }
+        contributions:
+          type: array
+          items: { $ref: "#/components/schemas/MixPlanContribution" }
+        warnings:
+          type: array
+          items: { type: string }
+        finalized: { type: boolean }
+        finalization:
+          oneOf:
+            - $ref: "#/components/schemas/MixFinalization"
+            - type: "null"
+        daysUntil: { type: integer, minimum: 0 }
+        revision: { type: integer, minimum: 0 }
+    MixPlanGroup:
+      type: object
+      additionalProperties: false
+      required: [productionDate, daysUntil, entries]
+      properties:
+        productionDate: { type: string, format: date }
+        daysUntil: { type: integer, minimum: 0 }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/MixPlanEntry" }
+    MixPlan:
+      type: object
+      additionalProperties: false
+      required: [makeDate, derivedAt, groups]
+      properties:
+        makeDate: { type: string, format: date }
+        derivedAt: { type: string, format: date-time }
+        groups:
+          type: array
+          maxItems: 367
+          items: { $ref: "#/components/schemas/MixPlanGroup" }
+    MixPlanResponse:
+      type: object
+      additionalProperties: false
+      required: [plan]
+      properties:
+        plan: { $ref: "#/components/schemas/MixPlan" }
+    MixSurplusAllocation:
+      type: object
+      additionalProperties: false
+      required: [id, targetDate, quantityLbs, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        targetDate: { type: string, format: date }
+        quantityLbs: { $ref: "#/components/schemas/MixDecimal" }
+        createdAt: { type: string, format: date-time }
+    MixSurplusLot:
+      type: object
+      additionalProperties: false
+      required: [id, mixId, productId, mixName, productName, productionDate, source, amountMadeLbs, surplusLbs, allocatedLbs, remainingLbs, location, sourceFinalizationRunId, voided, createdAt, allocations]
+      properties:
+        id: { type: string, format: uuid }
+        mixId: { type: string, format: uuid }
+        productId: { type: [string, "null"], format: uuid }
+        mixName: { type: string }
+        productName: { type: [string, "null"] }
+        productionDate: { type: string, format: date }
+        source: { type: string, enum: [manual, automatic] }
+        amountMadeLbs: { $ref: "#/components/schemas/MixDecimal" }
+        surplusLbs: { $ref: "#/components/schemas/MixDecimal" }
+        allocatedLbs: { $ref: "#/components/schemas/MixDecimal" }
+        remainingLbs: { $ref: "#/components/schemas/MixDecimal" }
+        location: { type: string, maxLength: 120 }
+        sourceFinalizationRunId: { type: [string, "null"], format: uuid }
+        voided: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        allocations:
+          type: array
+          items: { $ref: "#/components/schemas/MixSurplusAllocation" }
+    MixSurplus:
+      type: object
+      additionalProperties: false
+      required: [revision, lots]
+      properties:
+        revision: { type: integer, minimum: 0 }
+        lots:
+          type: array
+          items: { $ref: "#/components/schemas/MixSurplusLot" }
+    MixSurplusResponse:
+      type: object
+      additionalProperties: false
+      required: [surplus]
+      properties:
+        surplus: { $ref: "#/components/schemas/MixSurplus" }
+    MixRecipeCommand:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [type, recipe]
+          properties:
+            type: { const: upsert }
+            recipe: { $ref: "#/components/schemas/MixRecipeInput" }
+        - type: object
+          additionalProperties: false
+          required: [type, mixId]
+          properties:
+            type: { const: disable }
+            mixId: { type: string, format: uuid }
+    MixRecipeCommandRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, expectedRevision, command]
+      properties:
+        requestId: { type: string, format: uuid }
+        expectedRevision: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        command: { $ref: "#/components/schemas/MixRecipeCommand" }
+    MixRecipeCommandAccepted:
+      type: object
+      additionalProperties: false
+      required: [outcome, replayed, requestId, recipe, catalog]
+      properties:
+        outcome: { const: accepted }
+        replayed: { type: boolean }
+        requestId: { type: string, format: uuid }
+        recipe: { $ref: "#/components/schemas/MixRecipe" }
+        catalog: { $ref: "#/components/schemas/MixRecipeCatalog" }
+    MixRecipeCommandConflict:
+      type: object
+      additionalProperties: false
+      required: [outcome, replayed, catalog]
+      properties:
+        outcome: { const: conflict }
+        replayed: { type: boolean }
+        catalog: { $ref: "#/components/schemas/MixRecipeCatalog" }
+    MixPlanCommandRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, expectedRevision, command]
+      properties:
+        requestId: { type: string, format: uuid }
+        expectedRevision: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        command:
+          type: object
+          additionalProperties: false
+          required: [type, productionDate, mixId, productId, alreadyMadeLbs, actualMadeLbs]
+          properties:
+            type: { const: set-amount }
+            productionDate: { type: string, format: date }
+            mixId: { type: string, format: uuid }
+            productId: { type: [string, "null"], format: uuid }
+            alreadyMadeLbs: { $ref: "#/components/schemas/MixDecimal" }
+            actualMadeLbs: { $ref: "#/components/schemas/MixDecimal" }
+    MixPlanCommandAccepted:
+      type: object
+      additionalProperties: false
+      required: [outcome, replayed, requestId, plan]
+      properties:
+        outcome: { const: accepted }
+        replayed: { type: boolean }
+        requestId: { type: string, format: uuid }
+        plan: { $ref: "#/components/schemas/MixPlan" }
+    MixPlanCommandConflict:
+      type: object
+      additionalProperties: false
+      required: [outcome, replayed, plan]
+      properties:
+        outcome: { const: conflict }
+        replayed: { type: boolean }
+        reason: { type: string, enum: [finalized] }
+        plan: { $ref: "#/components/schemas/MixPlan" }
+    MixSurplusCommand:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [type, mixId, productId, productionDate, quantityLbs, location]
+          properties:
+            type: { const: record }
+            mixId: { type: string, format: uuid }
+            productId: { type: [string, "null"], format: uuid }
+            productionDate: { type: string, format: date }
+            quantityLbs: { $ref: "#/components/schemas/MixDecimal" }
+            location: { type: string, maxLength: 120 }
+        - type: object
+          additionalProperties: false
+          required: [type, lotId, targetDate, quantityLbs]
+          properties:
+            type: { const: allocate }
+            lotId: { type: string, format: uuid }
+            targetDate: { type: string, format: date }
+            quantityLbs: { $ref: "#/components/schemas/MixDecimal" }
+        - type: object
+          additionalProperties: false
+          required: [type, lotId]
+          properties:
+            type: { const: void }
+            lotId: { type: string, format: uuid }
+    MixSurplusCommandRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, expectedRevision, command]
+      properties:
+        requestId: { type: string, format: uuid }
+        expectedRevision: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        command: { $ref: "#/components/schemas/MixSurplusCommand" }
+    MixSurplusCommandAccepted:
+      type: object
+      additionalProperties: false
+      required: [outcome, replayed, requestId, surplus]
+      properties:
+        outcome: { const: accepted }
+        replayed: { type: boolean }
+        requestId: { type: string, format: uuid }
+        surplus: { $ref: "#/components/schemas/MixSurplus" }
+    MixSurplusCommandConflict:
+      type: object
+      additionalProperties: false
+      required: [outcome, replayed, surplus]
+      properties:
+        outcome: { const: conflict }
+        replayed: { type: boolean }
+        reason: { type: string, enum: [over_allocation] }
+        surplus: { $ref: "#/components/schemas/MixSurplus" }
     InventoryConsumptionLine:
       type: object
       required: [productId, productCode, productName, unit, required, deducted, shortfall]

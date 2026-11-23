@@ -718,6 +718,123 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/mix-recipes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read facility mix recipes and active product choices
+         * @description Available to every authenticated facility staff member. Writes require the manage-inventory capability.
+         */
+        get: operations["getMixRecipeCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/mix-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Derive the operational Mix Plan for one make date
+         * @description Server-derived from confirmed schedules, active live runs, dated amounts, finalizations, and explicitly allocated surplus.
+         */
+        get: operations["getMixPlan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/mix-surplus": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read manual and automatic mix surplus lots */
+        get: operations["getMixSurplus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/mix-recipes/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upsert or disable one mix recipe
+         * @description Online, revision-checked, audited, and idempotent. Exact retries return the original response with replayed true.
+         */
+        post: operations["applyMixRecipeCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/mix-plan/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set dated already-made and actual-made amounts
+         * @description Never posts inventory. Run completion alone finalizes demand and posts consumption. Finalized aggregates are read-only.
+         */
+        post: operations["applyMixPlanCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/mix-surplus/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record, allocate, replace, or void mix surplus
+         * @description Allocation is explicit and dated; no hidden FEFO or inventory consumption occurs. Voiding releases allocations.
+         */
+        post: operations["applyMixSurplusCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/inventory/die-defaults": {
         parameters: {
             query?: never;
@@ -1343,6 +1460,310 @@ export interface components {
             replayed: boolean;
             expectedRevision: number;
             currentOverlay: components["schemas"]["SubstitutionOverlay"];
+        };
+        /** @description Non-negative decimal string with at most six fractional digits. */
+        MixDecimal: string;
+        MixRecipeComponentInput: {
+            /** Format: uuid */
+            ingredientProductId: string;
+            ouncesPerPizza: components["schemas"]["MixDecimal"];
+            referencePoundsPerBatch: components["schemas"]["MixDecimal"] | null;
+        };
+        MixRecipeInput: {
+            /**
+             * Format: uuid
+             * @description Null creates a recipe; a stable ID updates it using expectedRevision.
+             */
+            id: string | null;
+            /** @enum {string} */
+            kind: "product" | "prep";
+            /**
+             * Format: uuid
+             * @description Required for product mixes; null for prep mixes.
+             */
+            productId: string | null;
+            name: string;
+            notes: string;
+            batchSizeLbs: components["schemas"]["MixDecimal"];
+            daysEarly: number;
+            enabled: boolean;
+            components: components["schemas"]["MixRecipeComponentInput"][];
+        };
+        MixRecipeComponent: {
+            /** Format: uuid */
+            ingredientProductId: string;
+            ingredientName: string;
+            ouncesPerPizza: components["schemas"]["MixDecimal"];
+            referencePoundsPerBatch: components["schemas"]["MixDecimal"] | null;
+        };
+        MixRecipe: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            kind: "product" | "prep";
+            /** Format: uuid */
+            productId: string | null;
+            productName: string | null;
+            name: string;
+            notes: string;
+            batchSizeLbs: components["schemas"]["MixDecimal"];
+            daysEarly: number;
+            enabled: boolean;
+            revision: number;
+            /** Format: date-time */
+            updatedAt: string;
+            components: components["schemas"]["MixRecipeComponent"][];
+        };
+        MixRecipeCatalog: {
+            recipes: components["schemas"]["MixRecipe"][];
+            products: components["schemas"]["SubstitutionProduct"][];
+        };
+        MixRecipeCatalogResponse: {
+            catalog: components["schemas"]["MixRecipeCatalog"];
+        };
+        MixPlanIngredient: {
+            /** Format: uuid */
+            productId: string | null;
+            name: string;
+            ouncesPerPizza: number | null;
+        };
+        MixPlanContribution: {
+            key: string;
+            /** Format: uuid */
+            runId: string | null;
+            /** Format: uuid */
+            scheduleRunId: string | null;
+            /** @enum {string} */
+            source: "schedule" | "live";
+            label: string;
+            /** Format: uuid */
+            productId: string | null;
+            productName: string;
+            cases: number;
+            pizzas: number;
+            ingredients: components["schemas"]["MixPlanIngredient"][];
+            warnings: string[];
+            componentLbs: number;
+        };
+        MixPlanComponent: {
+            /** Format: uuid */
+            ingredientProductId: string;
+            ingredientName: string;
+            referencePoundsPerBatch: number | null;
+            plannedLbs: number;
+            missingRuns: string[];
+            pullLbs: number;
+        };
+        MixFinalization: {
+            actualMadeLbs: number;
+            freshLbs: number;
+            surplusLbs: number;
+            /** Format: uuid */
+            firstRunId: string;
+            /** Format: date-time */
+            createdAt: string;
+            contributions: components["schemas"]["MixPlanContribution"][];
+        };
+        MixPlanEntry: {
+            key: string;
+            /** Format: date */
+            productionDate: string;
+            /** Format: uuid */
+            mixId: string;
+            /** @enum {string} */
+            kind: "product" | "prep";
+            /** Format: uuid */
+            productId: string | null;
+            productName: string | null;
+            name: string;
+            notes: string;
+            batchSizeLbs: number;
+            daysEarly: number;
+            componentLbs: number;
+            wasteLbs: number;
+            startupLbs: number;
+            totalLbs: number;
+            manualAlreadyMadeLbs: number;
+            allocatedSurplusLbs: number;
+            alreadyMadeLbs: number;
+            remainingLbs: number;
+            batches: number | null;
+            actualMadeLbs: number;
+            components: components["schemas"]["MixPlanComponent"][];
+            contributions: components["schemas"]["MixPlanContribution"][];
+            warnings: string[];
+            finalized: boolean;
+            finalization: components["schemas"]["MixFinalization"] | null;
+            daysUntil: number;
+            revision: number;
+        };
+        MixPlanGroup: {
+            /** Format: date */
+            productionDate: string;
+            daysUntil: number;
+            entries: components["schemas"]["MixPlanEntry"][];
+        };
+        MixPlan: {
+            /** Format: date */
+            makeDate: string;
+            /** Format: date-time */
+            derivedAt: string;
+            groups: components["schemas"]["MixPlanGroup"][];
+        };
+        MixPlanResponse: {
+            plan: components["schemas"]["MixPlan"];
+        };
+        MixSurplusAllocation: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date */
+            targetDate: string;
+            quantityLbs: components["schemas"]["MixDecimal"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        MixSurplusLot: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            mixId: string;
+            /** Format: uuid */
+            productId: string | null;
+            mixName: string;
+            productName: string | null;
+            /** Format: date */
+            productionDate: string;
+            /** @enum {string} */
+            source: "manual" | "automatic";
+            amountMadeLbs: components["schemas"]["MixDecimal"];
+            surplusLbs: components["schemas"]["MixDecimal"];
+            allocatedLbs: components["schemas"]["MixDecimal"];
+            remainingLbs: components["schemas"]["MixDecimal"];
+            location: string;
+            /** Format: uuid */
+            sourceFinalizationRunId: string | null;
+            voided: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            allocations: components["schemas"]["MixSurplusAllocation"][];
+        };
+        MixSurplus: {
+            revision: number;
+            lots: components["schemas"]["MixSurplusLot"][];
+        };
+        MixSurplusResponse: {
+            surplus: components["schemas"]["MixSurplus"];
+        };
+        MixRecipeCommand: {
+            /** @constant */
+            type: "upsert";
+            recipe: components["schemas"]["MixRecipeInput"];
+        } | {
+            /** @constant */
+            type: "disable";
+            /** Format: uuid */
+            mixId: string;
+        };
+        MixRecipeCommandRequest: {
+            /** Format: uuid */
+            requestId: string;
+            expectedRevision: number;
+            command: components["schemas"]["MixRecipeCommand"];
+        };
+        MixRecipeCommandAccepted: {
+            /** @constant */
+            outcome: "accepted";
+            replayed: boolean;
+            /** Format: uuid */
+            requestId: string;
+            recipe: components["schemas"]["MixRecipe"];
+            catalog: components["schemas"]["MixRecipeCatalog"];
+        };
+        MixRecipeCommandConflict: {
+            /** @constant */
+            outcome: "conflict";
+            replayed: boolean;
+            catalog: components["schemas"]["MixRecipeCatalog"];
+        };
+        MixPlanCommandRequest: {
+            /** Format: uuid */
+            requestId: string;
+            expectedRevision: number;
+            command: {
+                /** @constant */
+                type: "set-amount";
+                /** Format: date */
+                productionDate: string;
+                /** Format: uuid */
+                mixId: string;
+                /** Format: uuid */
+                productId: string | null;
+                alreadyMadeLbs: components["schemas"]["MixDecimal"];
+                actualMadeLbs: components["schemas"]["MixDecimal"];
+            };
+        };
+        MixPlanCommandAccepted: {
+            /** @constant */
+            outcome: "accepted";
+            replayed: boolean;
+            /** Format: uuid */
+            requestId: string;
+            plan: components["schemas"]["MixPlan"];
+        };
+        MixPlanCommandConflict: {
+            /** @constant */
+            outcome: "conflict";
+            replayed: boolean;
+            /** @enum {string} */
+            reason?: "finalized";
+            plan: components["schemas"]["MixPlan"];
+        };
+        MixSurplusCommand: {
+            /** @constant */
+            type: "record";
+            /** Format: uuid */
+            mixId: string;
+            /** Format: uuid */
+            productId: string | null;
+            /** Format: date */
+            productionDate: string;
+            quantityLbs: components["schemas"]["MixDecimal"];
+            location: string;
+        } | {
+            /** @constant */
+            type: "allocate";
+            /** Format: uuid */
+            lotId: string;
+            /** Format: date */
+            targetDate: string;
+            quantityLbs: components["schemas"]["MixDecimal"];
+        } | {
+            /** @constant */
+            type: "void";
+            /** Format: uuid */
+            lotId: string;
+        };
+        MixSurplusCommandRequest: {
+            /** Format: uuid */
+            requestId: string;
+            expectedRevision: number;
+            command: components["schemas"]["MixSurplusCommand"];
+        };
+        MixSurplusCommandAccepted: {
+            /** @constant */
+            outcome: "accepted";
+            replayed: boolean;
+            /** Format: uuid */
+            requestId: string;
+            surplus: components["schemas"]["MixSurplus"];
+        };
+        MixSurplusCommandConflict: {
+            /** @constant */
+            outcome: "conflict";
+            replayed: boolean;
+            /** @enum {string} */
+            reason?: "over_allocation";
+            surplus: components["schemas"]["MixSurplus"];
         };
         InventoryConsumptionLine: {
             /** Format: uuid */
@@ -4059,6 +4480,221 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    getMixRecipeCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical mix recipe catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MixRecipeCatalogResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    getMixPlan: {
+        parameters: {
+            query: {
+                makeDate: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical Mix Plan, including warnings and contribution attribution */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MixPlanResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    getMixSurplus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dated lot balances, explicit allocations, and voided history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MixSurplusResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    applyMixRecipeCommand: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MixRecipeCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted recipe change or exact retry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MixRecipeCommandAccepted"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            /** @description Stale recipe revision or unavailable state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MixRecipeCommandConflict"] | components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    applyMixPlanCommand: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MixPlanCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted dated amount change or exact retry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MixPlanCommandAccepted"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            /** @description Stale date revision or finalized aggregate; canonical current plan is returned for command conflicts */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MixPlanCommandConflict"] | components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    applyMixSurplusCommand: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MixSurplusCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted surplus change or exact retry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MixSurplusCommandAccepted"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            /** @description Stale surplus revision, over-allocation, or unavailable lot state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MixSurplusCommandConflict"] | components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
         };
     };
     listReviewedDieDefaults: {

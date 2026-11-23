@@ -1,5 +1,5 @@
 import { useEffect, useState, type ComponentType } from "react";
-import { Activity, BarChart3, Boxes, CalendarDays, ClipboardCheck, Settings2, Users, Warehouse } from "lucide-react";
+import { Activity, BarChart3, Boxes, CalendarDays, ClipboardCheck, CookingPot, Settings2, Users, Warehouse } from "lucide-react";
 import type { AuthSession } from "../api";
 import { RunPage } from "../pages/RunPage";
 import { FeaturePage, type FeatureKey } from "../pages/FeaturePage";
@@ -7,13 +7,15 @@ import { StaffPage } from "../pages/StaffPage";
 import { SchedulePage } from "../pages/SchedulePage";
 import { SetupPage } from "../pages/SetupPage";
 import { InventoryPage } from "../pages/InventoryPage";
+import { MixPlanPage } from "../pages/MixPlanPage";
 
-type View = "run" | "schedule" | "setup" | "inventory" | "warehouse" | "qc" | "reports" | "staff";
+type View = "run" | "schedule" | "mix" | "setup" | "inventory" | "warehouse" | "qc" | "reports" | "staff";
 type NavItem = { id: View; label: string; icon: ComponentType<{ className?: string }> };
 
 const navigation: NavItem[] = [
   { id: "run", label: "Live run", icon: Activity },
   { id: "schedule", label: "Schedule", icon: CalendarDays },
+  { id: "mix", label: "Mix Plan", icon: CookingPot },
   { id: "setup", label: "Setup", icon: Settings2 },
   { id: "inventory", label: "Inventory", icon: Boxes },
   { id: "warehouse", label: "Warehouse", icon: Warehouse },
@@ -98,10 +100,11 @@ export function AppShell({ session, onSignOut }: { session: AuthSession; onSignO
       <main className="app-shell py-6 sm:py-8">
         {view === "run" ? <RunPage session={session} online={online} /> : null}
         {view === "schedule" ? <SchedulePage session={session} online={online} /> : null}
+        {view === "mix" ? <MixPlanPage session={session} online={online} /> : null}
         {view === "setup" ? <SetupPage session={session} online={online} /> : null}
         {view === "inventory" ? <InventoryPage session={session} online={online} /> : null}
         {view === "staff" && canManageStaff ? <StaffPage session={session} online={online} /> : null}
-        {!["run", "schedule", "setup", "inventory", "staff"].includes(view) ? <FeaturePage feature={view as FeatureKey} online={online} /> : null}
+        {!["run", "schedule", "mix", "setup", "inventory", "staff"].includes(view) ? <FeaturePage feature={view as FeatureKey} online={online} /> : null}
       </main>
     </div>
   );

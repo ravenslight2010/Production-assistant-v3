@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createAuthApi } from "./auth-api.mjs";
 import { createInventoryApi } from "./inventory-api.mjs";
+import { createMixApi } from "./mix-api.mjs";
 import { createRunApiForDatabase } from "./run-api.mjs";
 import { createScheduleApi } from "./schedule-api.mjs";
 
@@ -106,6 +107,12 @@ function safeRouteName(url) {
   if (url.pathname === "/api/v3/schedules/catalog") return "schedules.catalog";
   if (url.pathname === "/api/v3/schedules/commands") return "schedules.command";
   if (url.pathname === "/api/v3/schedules/import-preview") return "schedules.import_preview";
+  if (url.pathname === "/api/v3/mix-plan") return "mix.plan";
+  if (url.pathname === "/api/v3/mix-plan/commands") return "mix.plan_command";
+  if (url.pathname === "/api/v3/mix-recipes") return "mix.recipes";
+  if (url.pathname === "/api/v3/mix-recipes/commands") return "mix.recipe_command";
+  if (url.pathname === "/api/v3/mix-surplus") return "mix.surplus";
+  if (url.pathname === "/api/v3/mix-surplus/commands") return "mix.surplus_command";
   if (url.pathname === "/api/v3/imports") return "imports.collection";
   if (url.pathname === "/api/v3/imports/records") return "imports.records";
   if (url.pathname === "/api/v3/imports/edits") return "imports.edits";
@@ -167,6 +174,12 @@ export function createV3Api({
     logger,
   });
   const scheduleApi = createScheduleApi({
+    pool,
+    authenticate: (request) => authAdapter.authenticate(request),
+    verifyCsrf: (request, auth) => authAdapter.verifyCsrf(request, auth),
+    logger,
+  });
+  const mixApi = createMixApi({
     pool,
     authenticate: (request) => authAdapter.authenticate(request),
     verifyCsrf: (request, auth) => authAdapter.verifyCsrf(request, auth),
@@ -237,6 +250,7 @@ export function createV3Api({
       if (await authApi(request, response)) return;
       if (await inventoryApi(request, response)) return;
       if (await scheduleApi(request, response)) return;
+      if (await mixApi(request, response)) return;
       await runApi(request, response);
     } catch (error) {
       logger({
