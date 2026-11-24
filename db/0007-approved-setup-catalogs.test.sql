@@ -157,7 +157,7 @@ BEGIN
   );
   v_result := v3.stage_setup_catalog_import(
     v_facility, v_actor, 'v1-sauce-source-1', repeat('9', 64), 'run-templates',
-    '[{"code":"V1-SAUCE-ACME-CLASSIC","name":"Acme Classic Sauce","data":{"brand":"Acme","flavor":"Classic","values":{"frontlineRecipeName":"House Red","sauceOzPerPizza":3.5}}}]'::jsonb,
+    '[{"code":"V1-SAUCE-ACME-CLASSIC","name":"Acme Classic Sauce","data":{"brand":"Acme","flavor":"Classic","values":{"frontlineRecipeName":"House Red","sauceOzPerPizza":3.5}},"source":{"workbook":"sauce.xlsx","cell":"Sheet1!A1"},"sourceDetails":null}]'::jsonb,
     v_source_summary
   );
   v_source_import := (v_result->>'importId')::uuid;
@@ -166,7 +166,7 @@ BEGIN
   END IF;
   v_result := v3.stage_setup_catalog_import(
     v_facility, v_actor, 'v1-sauce-source-1', repeat('9', 64), 'run-templates',
-    '[{"code":"V1-SAUCE-ACME-CLASSIC","name":"Acme Classic Sauce","data":{"brand":"Acme","flavor":"Classic","values":{"frontlineRecipeName":"House Red","sauceOzPerPizza":3.5}}}]'::jsonb,
+    '[{"code":"V1-SAUCE-ACME-CLASSIC","name":"Acme Classic Sauce","data":{"brand":"Acme","flavor":"Classic","values":{"frontlineRecipeName":"House Red","sauceOzPerPizza":3.5}},"source":{"workbook":"sauce.xlsx","cell":"Sheet1!A1"},"sourceDetails":null}]'::jsonb,
     v_source_summary
   );
   IF v_result->>'replayed' <> 'true' OR v_result->'sourceSummary' <> v_source_summary THEN
@@ -192,7 +192,7 @@ BEGIN
   v_source_summary := jsonb_set(v_source_summary, '{sourceSha256}', to_jsonb(repeat('b', 64)));
   v_result := v3.stage_setup_catalog_import(
     v_facility, v_actor, 'v1-sauce-source-2', repeat('8', 64), 'run-templates',
-    '[{"code":"v1-sauce-acme-classic","name":"Acme Classic Sauce","data":{"brand":"Acme","flavor":"Classic","values":{"frontlineRecipeName":"House Red","sauceOzPerPizza":4}}}]'::jsonb,
+    '[{"code":"v1-sauce-acme-classic","name":"Acme Classic Sauce","data":{"brand":"Acme","flavor":"Classic","values":{"frontlineRecipeName":"House Red","sauceOzPerPizza":4}},"source":{"workbook":"sauce.xlsx","cell":"Sheet1!A1"},"sourceDetails":null}]'::jsonb,
     v_source_summary
   );
   v_source_update := (v_result->>'importId')::uuid;

@@ -806,7 +806,7 @@ function isSourceWorkbookPreview(value: unknown): value is SourceWorkbookPreview
 }
 
 function isSetupCatalogHistoryItem(value: unknown): value is SetupCatalogHistoryItem {
-  return object(value) && typeof value.id === "string" && UUID.test(value.id)
+  return object(value) && typeof value.id === "string" && UUID.test(value.id) && value.revision === 1
     && typeof value.family === "string" && ["staged", "applied", "undone"].includes(String(value.status))
     && Number.isSafeInteger(value.rowCount) && Number(value.rowCount) >= 1
     && typeof value.createdBy === "string" && typeof value.createdAt === "string"
@@ -820,6 +820,10 @@ function isSetupCatalogDetail(value: unknown): value is SetupCatalogDetail {
   const candidate = value as SetupCatalogHistoryItem & Partial<SetupCatalogDetail>;
   return Array.isArray(candidate.records) && candidate.records.length === value.rowCount
     && candidate.records.every(isSetupCatalogRecord)
+    && Array.isArray(candidate.sourceRecords) && candidate.sourceRecords.every((item) =>
+      object(item) && typeof item.code === "string" && object(item.source)
+      && typeof item.source.workbook === "string" && typeof item.source.cell === "string"
+      && (item.sourceDetails === null || object(item.sourceDetails)))
     && (candidate.editorBefore === null || isSetupCatalogRecord(candidate.editorBefore))
     && (candidate.before === null || (Array.isArray(candidate.before) && candidate.before.every(object)))
     && (candidate.after === null || (Array.isArray(candidate.after) && candidate.after.every(object)));
@@ -942,7 +946,7 @@ export async function stageSetupCatalogImport(
     params: { header: mutationHeaders() },
     body: request,
   }));
-  if (result.outcome !== "staged" || !UUID.test(result.importId)
+  if (result.outcome !== "staged" || !UUID.test(result.importId) || result.revision !== 1
     || !SETUP_CATALOG_FAMILIES.includes(result.family) || result.family !== request.family
     || !Number.isSafeInteger(result.rowCount) || result.rowCount < 1
     || !Array.isArray(result.records) || result.records.length !== result.rowCount

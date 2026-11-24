@@ -129,6 +129,8 @@ function safeRouteName(url) {
   if (url.pathname === "/api/v3/setup-catalog/records") return "setup_catalog_records.collection";
   if (url.pathname === "/api/v3/setup-catalog/edits") return "setup_catalog_edits.collection";
   if (url.pathname === "/api/v3/setup-catalog/imports") return "setup_catalog_imports.collection";
+  if (url.pathname === "/api/v3/setup-catalog/combined-reviews") return "combined_setup_reviews.collection";
+  if (/^\/api\/v3\/setup-catalog\/combined-reviews\/[^/]+$/.test(url.pathname)) return "combined_setup_reviews.detail";
   if (/^\/api\/v3\/setup-catalog\/imports\/[^/]+$/.test(url.pathname)) return "setup_catalog_imports.detail";
   if (/^\/api\/v3\/setup-catalog\/imports\/[^/]+\/(apply|undo)$/.test(url.pathname)) return "setup_catalog_imports.action";
   if (url.pathname === "/api/v3/imports/workbooks") return "imports.workbooks";

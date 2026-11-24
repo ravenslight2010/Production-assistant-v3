@@ -23,6 +23,10 @@ import {
   workbookCapacityImportLimits,
 } from "../core/workbook-capacity-import.mjs";
 import { DIE_DEFAULT_FIELDS, REQUIRED_DIE_DEFAULT_FIELDS, isDieLineSettings } from "../core/die-defaults.mjs";
+import {
+  combinedSetupReviewLimits,
+  projectCombinedSetupReview,
+} from "../core/combined-setup-review.mjs";
 
 const IMPORTS_PATH = "/api/v3/imports";
 const SETUP_MASTER_RECORDS_PATH = `${IMPORTS_PATH}/records`;
@@ -32,6 +36,7 @@ const SETUP_CATALOG_PATH = `${SETUP_CATALOG_ROOT}/imports`;
 const SETUP_CATALOG_RECORDS_PATH = `${SETUP_CATALOG_ROOT}/records`;
 const SETUP_CATALOG_EDITS_PATH = `${SETUP_CATALOG_ROOT}/edits`;
 const SOURCE_WORKBOOK_PREVIEW_PATH = `${SETUP_CATALOG_PATH}/workbooks/preview`;
+const COMBINED_SETUP_REVIEWS_PATH = `${SETUP_CATALOG_ROOT}/combined-reviews`;
 const INVENTORY_PATH = "/api/v3/inventory";
 const DIE_DEFAULTS_PATH = `${INVENTORY_PATH}/die-defaults`;
 const WAREHOUSE_GUIDANCE_PATH = `${INVENTORY_PATH}/warehouse-guidance`;
@@ -329,6 +334,40 @@ function validateSourceSummary(value, importedRows) {
     throw new InventoryApiError(400, "The source review counts are incomplete or do not match the staged rows.");
   }
   return value;
+}
+
+function validateSourceRecords(value, records, sourceSummary) {
+  if (!sourceSummary) {
+    if (value !== undefined) throw new InventoryApiError(400, "Source citations require a source review summary.");
+    return records;
+  }
+  if (!Array.isArray(value) || value.length !== records.length) {
+    throw new InventoryApiError(400, "Provide one canonical source citation for every staged source record.");
+  }
+  const byCode = new Map();
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)
+      || Object.keys(item).sort().join("\u0000") !== "code\u0000source\u0000sourceDetails"
+      || typeof item.code !== "string" || byCode.has(item.code.toLocaleLowerCase("en-US"))
+      || !item.source || typeof item.source !== "object" || Array.isArray(item.source)
+      || Object.keys(item.source).sort().join("\u0000") !== "cell\u0000workbook"
+      || typeof item.source.workbook !== "string" || item.source.workbook.trim().length < 1
+      || item.source.workbook.length > 180
+      || typeof item.source.cell !== "string" || item.source.cell.trim().length < 1
+      || item.source.cell.length > 240
+      || (item.sourceDetails !== null && (!item.sourceDetails || typeof item.sourceDetails !== "object"
+        || Array.isArray(item.sourceDetails) || JSON.stringify(item.sourceDetails).length > 20_000))) {
+      throw new InventoryApiError(400, "The reviewed source citations are incomplete or invalid.");
+    }
+    byCode.set(item.code.toLocaleLowerCase("en-US"), item);
+  }
+  return records.map((record) => {
+    const citation = byCode.get(record.code.toLocaleLowerCase("en-US"));
+    if (!citation || citation.code !== record.code) {
+      throw new InventoryApiError(400, "Source citations must match the reviewed record codes exactly.");
+    }
+    return { ...record, source: citation.source, sourceDetails: citation.sourceDetails };
+  });
 }
 
 function validateWorkbookProductLinks(value) {
@@ -784,7 +823,7 @@ export function createInventoryApi({ pool, authenticate, verifyCsrf, logger = ()
         operation = "stage_setup_catalog_import";
         const body = await readJsonBody(request);
         const requiredKeys = ["requestId", "family", "csv"];
-        const acceptedKeys = new Set([...requiredKeys, "sourceSummary"]);
+        const acceptedKeys = new Set([...requiredKeys, "sourceSummary", "sourceRecords"]);
         if (requiredKeys.some((key) => !Object.hasOwn(body, key))
           || Object.keys(body).some((key) => !acceptedKeys.has(key))) {
           throw new InventoryApiError(400, "The request contains missing or unsupported fields.");
@@ -801,15 +840,64 @@ export function createInventoryApi({ pool, authenticate, verifyCsrf, logger = ()
         if (sourceSummary && sourceSummary.sourceFamily !== "premix-sheets" && body.family !== "run-templates") {
           throw new InventoryApiError(400, "This source family must use the V3 run-template target.");
         }
+        const storedRecords = validateSourceRecords(body.sourceRecords, records, sourceSummary);
         const requestHash = sourceSummary
-          ? hashRequest({ family: body.family, records, sourceSummary })
+          ? hashRequest({ family: body.family, records, sourceSummary, sourceRecords: body.sourceRecords })
           : hashRequest({ family: body.family, records });
         const result = await pool.query(
           "SELECT v3.stage_setup_catalog_import($1::uuid, $2::uuid, $3::text, $4::text, $5::text, $6::jsonb, $7::jsonb) AS result",
-          [...scope, actor, requestId, requestHash, body.family, JSON.stringify(records), sourceSummary ? JSON.stringify(sourceSummary) : null],
+          [...scope, actor, requestId, requestHash, body.family, JSON.stringify(storedRecords), sourceSummary ? JSON.stringify(sourceSummary) : null],
         );
         const staged = resultValue(result);
         sendJson(response, staged.replayed ? 200 : 201, { ...staged, records });
+        return true;
+      }
+
+      if (isSetupCatalog && url.pathname === COMBINED_SETUP_REVIEWS_PATH && request.method === "GET") {
+        operation = "list_combined_setup_reviews";
+        const result = await pool.query(
+          "SELECT v3.list_combined_setup_reviews($1::uuid, $2::integer) AS result",
+          [...scope, parseLimit(url)],
+        );
+        sendJson(response, 200, { reviews: resultValue(result) });
+        return true;
+      }
+
+      if (isSetupCatalog && url.pathname === COMBINED_SETUP_REVIEWS_PATH && request.method === "POST") {
+        operation = "create_combined_setup_review";
+        const body = await readJsonBody(request);
+        requireKeys(body, ["requestId", "importIds"]);
+        const requestId = validateRequestId(body.requestId);
+        if (!Array.isArray(body.importIds)
+          || body.importIds.length < 1 || body.importIds.length > combinedSetupReviewLimits.maxImports) {
+          throw new InventoryApiError(400, "Choose between 1 and 100 canonical source imports.");
+        }
+        const importIds = [...new Set(body.importIds.map((value) => validateUuid(value, "Import ID")))].sort();
+        if (importIds.length !== body.importIds.length) {
+          throw new InventoryApiError(400, "A source import may appear only once in a combined review.");
+        }
+        const requestHash = hashRequest({ importIds });
+        const result = await pool.query(
+          "SELECT v3.create_combined_setup_review($1::uuid, $2::uuid, $3::text, $4::text, $5::jsonb) AS result",
+          [...scope, actor, requestId, requestHash, JSON.stringify(importIds)],
+        );
+        const payload = resultValue(result);
+        const review = projectCombinedSetupReview(payload);
+        sendJson(response, payload.replayed ? 200 : 201, review);
+        return true;
+      }
+
+      const combinedReviewDetail = url.pathname.match(/^\/api\/v3\/setup-catalog\/combined-reviews\/([^/]+)$/);
+      if (isSetupCatalog && combinedReviewDetail && request.method === "GET") {
+        operation = "get_combined_setup_review";
+        const reviewId = validateUuid(combinedReviewDetail[1], "Combined review ID");
+        const result = await pool.query(
+          "SELECT v3.get_combined_setup_review($1::uuid, $2::uuid) AS result",
+          [...scope, reviewId],
+        );
+        const payload = resultValue(result);
+        if (!payload) throw new InventoryApiError(404, "That combined setup review is not available.");
+        sendJson(response, 200, projectCombinedSetupReview(payload));
         return true;
       }
 

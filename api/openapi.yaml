@@ -1674,6 +1674,103 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
+  /api/v3/setup-catalog/combined-reviews:
+    get:
+      operationId: listCombinedSetupReviews
+      summary: List reopenable combined source-import reviews
+      description: Manager-only. Combined reviews coordinate canonical imports and never write setup targets.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Recent combined reviews
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reviews]
+                properties:
+                  reviews:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CombinedSetupReviewSummary"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createCombinedSetupReview
+      summary: Create a pinned combined review over canonical source imports
+      description: >
+        Manager-only. References active staged or applied source imports by immutable
+        ID, content revision, source hash, and parser version. The deterministic
+        projection compares proposed values with current setup records. Apply and
+        Undo remain separate operations on each individual import.
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CombinedSetupReviewRequest"
+      responses:
+        "201":
+          description: Combined review created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CombinedSetupReview"
+        "200":
+          description: Identical combined review request confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CombinedSetupReview"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v3/setup-catalog/combined-reviews/{reviewId}:
+    get:
+      operationId: getCombinedSetupReview
+      summary: Reopen a pinned combined review and its current projection
+      description: Manager-only. Recomputes the projection from canonical imports and current setup records.
+      parameters:
+        - name: reviewId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Combined review projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CombinedSetupReview"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
   /api/v3/setup-catalog/imports:
     get:
       operationId: listSetupCatalogImports
@@ -1703,9 +1800,9 @@ paths:
       summary: Validate and stage one approved setup-family CSV
       description: >
         Manager-only. Families have strict headers and field allowlists.
-        Optional sourceSummary records a prior deterministic source-workbook
-        review. The server computes request identity; retry the same requestId,
-        CSV, and sourceSummary after an uncertain response. Apply and undo are
+        sourceSummary and sourceRecords record a prior deterministic source-workbook
+        review and its per-record citations. The server computes request identity;
+        retry the identical requestId and body after an uncertain response. Apply and undo are
         separate manager actions.
       security:
         - v3Session: []
@@ -4816,6 +4913,40 @@ components:
           description: Strict family-specific CSV with a maximum of 2,000 data rows.
         sourceSummary:
           $ref: "#/components/schemas/SourceImportSummary"
+        sourceRecords:
+          type: array
+          minItems: 1
+          maxItems: 2000
+          description: Required with sourceSummary; one exact reviewed citation per CSV record.
+          items:
+            $ref: "#/components/schemas/SourceRecordCitation"
+    SourceCitation:
+      type: object
+      additionalProperties: false
+      required: [workbook, cell]
+      properties:
+        workbook:
+          type: string
+          minLength: 1
+          maxLength: 180
+        cell:
+          type: string
+          minLength: 1
+          maxLength: 240
+          description: Parser sheet/cell citation retained with the canonical import.
+    SourceRecordCitation:
+      type: object
+      additionalProperties: false
+      required: [code, source, sourceDetails]
+      properties:
+        code:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+        source:
+          $ref: "#/components/schemas/SourceCitation"
+        sourceDetails:
+          type: [object, "null"]
+          additionalProperties: true
     SourceWorkbookPreviewRequest:
       type: object
       additionalProperties: false
@@ -4898,7 +5029,7 @@ components:
           $ref: "#/components/schemas/SetupCatalogRecord"
         sourceDetails:
           type: object
-          description: Transient parsed evidence for manager correction; not stored after staging.
+          description: Parsed evidence for manager correction; included rows retain it as canonical source evidence after staging.
           additionalProperties: true
     SourceImportSummary:
       type: object
@@ -4953,7 +5084,7 @@ components:
           additionalProperties: true
     SetupCatalogStageResponse:
       type: object
-      required: [outcome, importId, family, rowCount, replayed, records]
+      required: [outcome, importId, revision, family, rowCount, replayed, records]
       properties:
         outcome:
           type: string
@@ -4961,6 +5092,10 @@ components:
         importId:
           type: string
           format: uuid
+        revision:
+          type: integer
+          const: 1
+          description: Immutable canonical content revision; status transitions do not change it.
         family:
           type: string
           enum:
@@ -4990,11 +5125,14 @@ components:
             - type: "null"
     SetupCatalogHistoryItem:
       type: object
-      required: [id, family, status, rowCount, createdBy, createdAt, appliedAt, undoneAt]
+      required: [id, revision, family, status, rowCount, createdBy, createdAt, appliedAt, undoneAt]
       properties:
         id:
           type: string
           format: uuid
+        revision:
+          type: integer
+          const: 1
         family:
           type: string
         status:
@@ -5030,13 +5168,19 @@ components:
       allOf:
         - $ref: "#/components/schemas/SetupCatalogHistoryItem"
         - type: object
-          required: [records, editorBefore, before, after]
+          required: [records, sourceRecords, editorBefore, before, after]
           properties:
             records:
               type: array
               maxItems: 2000
               items:
                 $ref: "#/components/schemas/SetupCatalogRecord"
+            sourceRecords:
+              type: array
+              maxItems: 2000
+              items:
+                $ref: "#/components/schemas/SourceRecordCitation"
+              description: Empty for CSV-only and legacy /1 history; canonical citations for staged /2 source records.
             editorBefore:
               oneOf:
                 - $ref: "#/components/schemas/SetupCatalogRecord"
@@ -5054,6 +5198,265 @@ components:
                 type: object
                 additionalProperties: true
               description: Canonical post-Apply snapshots; null while staged.
+    CombinedSetupReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, importIds]
+      properties:
+        requestId:
+          type: string
+          minLength: 1
+          maxLength: 200
+        importIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+    CombinedSetupReviewSummary:
+      type: object
+      required: [id, createdBy, createdAt, importCount, recordCount]
+      properties:
+        id:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        importCount:
+          type: integer
+          minimum: 1
+          maximum: 100
+        recordCount:
+          type: integer
+          minimum: 1
+          maximum: 2000
+    CombinedSetupReviewImport:
+      type: object
+      required: [importId, revision, family, status, rowCount, sourceSummary]
+      properties:
+        importId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          const: 1
+        family:
+          type: string
+          enum: [mixes, run-templates]
+        status:
+          type: string
+          enum: [staged, applied]
+        rowCount:
+          type: integer
+          minimum: 1
+          maximum: 2000
+        sourceSummary:
+          $ref: "#/components/schemas/SourceImportSummary"
+    CombinedSetupProposal:
+      type: object
+      required: [code, source, sourceDetails, value, importId, revision, importStatus, targetFamily, sourceFamily, sourceSha256, parserVersion]
+      properties:
+            code:
+              type: string
+            source:
+              oneOf:
+                - $ref: "#/components/schemas/SourceCitation"
+                - type: "null"
+            sourceDetails:
+              type: [object, "null"]
+              additionalProperties: true
+            value:
+              description: Canonical proposed JSON value.
+            importId:
+              type: string
+              format: uuid
+            revision:
+              type: integer
+              const: 1
+            importStatus:
+              type: string
+              enum: [staged, applied]
+            targetFamily:
+              type: string
+              enum: [mixes, run-templates]
+            sourceFamily:
+              type: string
+              enum: [spec-sheets, premix-sheets, cheese-mix-specs, shipping-guides, sauce-guides, dough-guides]
+            sourceSha256:
+              type: string
+              pattern: "^[0-9a-f]{64}$"
+            parserVersion:
+              type: string
+              enum: [v1-source-import/1, v1-source-import/2]
+    CombinedSetupEntry:
+      type: object
+      required: [targetFamily, code, field, currentRecordPresent, currentValue, proposedValues, disposition, requiresDecision, proposals]
+      properties:
+        targetFamily:
+          type: string
+          enum: [mixes, run-templates]
+        code:
+          type: string
+        field:
+          type: string
+        currentRecordPresent:
+          type: boolean
+        currentValue:
+          description: Current canonical JSON value, or null when the record/field is absent.
+        proposedValues:
+          type: array
+          description: Distinct proposed values; missing source fields never imply deletion.
+        disposition:
+          type: string
+          enum: [fill, match, mismatch, conflict]
+        requiresDecision:
+          type: boolean
+        proposals:
+          type: array
+          items:
+            $ref: "#/components/schemas/CombinedSetupProposal"
+    CombinedSetupDependency:
+      type: object
+      required: [targetFamily, code, field, reference, importId, revision, importStatus, sourceFamily, sourceSha256, parserVersion, source, sourceDetails, reason, suggestions, suggestionOnly]
+      properties:
+        targetFamily:
+          type: string
+          const: run-templates
+        code:
+          type: string
+        field:
+          type: string
+        reference:
+          type: string
+        importId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          const: 1
+        importStatus:
+          type: string
+          enum: [staged, applied]
+        sourceFamily:
+          type: string
+          enum: [spec-sheets, premix-sheets, cheese-mix-specs, shipping-guides, sauce-guides, dough-guides]
+        sourceSha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        parserVersion:
+          type: string
+          enum: [v1-source-import/1, v1-source-import/2]
+        source:
+          oneOf:
+            - $ref: "#/components/schemas/SourceCitation"
+            - type: "null"
+        sourceDetails:
+          type: [object, "null"]
+          additionalProperties: true
+        reason:
+          type: string
+          const: no-unique-exact-or-normalized-match
+        suggestions:
+          type: array
+          items:
+            type: object
+            required: [code, name]
+            properties:
+              code:
+                type: string
+              name:
+                type: string
+        suggestionOnly:
+          type: boolean
+          const: true
+    CombinedSetupUnresolvedIdentity:
+      type: object
+      required: [type, targetFamily, normalizedName, reference, candidates, suggestions]
+      properties:
+        type:
+          type: string
+          enum: [ambiguous-name, ambiguous-dependency]
+        targetFamily:
+          type: string
+          enum: [mixes, run-templates]
+        normalizedName:
+          type: string
+        reference:
+          type: [string, "null"]
+        candidates:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        suggestions:
+          type: array
+          maxItems: 0
+    CombinedSetupReviewCounts:
+      type: object
+      required: [imports, records, fills, matches, mismatches, conflicts, missingDependencies, unresolvedIdentities]
+      properties:
+        imports:
+          type: integer
+        records:
+          type: integer
+        fills:
+          type: integer
+        matches:
+          type: integer
+        mismatches:
+          type: integer
+        conflicts:
+          type: integer
+        missingDependencies:
+          type: integer
+        unresolvedIdentities:
+          type: integer
+    CombinedSetupReview:
+      type: object
+      required: [id, createdBy, createdAt, replayed, dependencyOrder, imports, entries, missingDependencies, unresolvedIdentities, summary]
+      properties:
+        id:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        replayed:
+          type: boolean
+        dependencyOrder:
+          type: array
+          items:
+            type: string
+            enum: [spec-sheets, dough-guides, sauce-guides, premix-sheets, cheese-mix-specs, shipping-guides]
+        imports:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/CombinedSetupReviewImport"
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/CombinedSetupEntry"
+        missingDependencies:
+          type: array
+          items:
+            $ref: "#/components/schemas/CombinedSetupDependency"
+        unresolvedIdentities:
+          type: array
+          items:
+            $ref: "#/components/schemas/CombinedSetupUnresolvedIdentity"
+        summary:
+          $ref: "#/components/schemas/CombinedSetupReviewCounts"
     SetupCatalogActionResult:
       type: object
       required: [outcome, importId, family, replayed]

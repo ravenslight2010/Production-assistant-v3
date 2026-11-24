@@ -722,6 +722,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0019-operational-mix-plan.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0020-account-lifecycle.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0021-source-workbook-parser-v2.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0022-combined-setup-review.sql" >/dev/null
 "${PSQL[@]}" -c "
   GRANT EXECUTE ON FUNCTION v3.list_staff_accounts(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_staff_roles(uuid) TO v3_api_test;
@@ -756,6 +757,9 @@ fi
   GRANT EXECUTE ON FUNCTION v3.stage_setup_master_edit(uuid, uuid, text, text, text, jsonb, text) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.apply_setup_catalog_import(uuid, uuid, uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.get_setup_catalog_import(uuid, uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.create_combined_setup_review(uuid, uuid, text, text, jsonb) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.get_combined_setup_review(uuid, uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.list_combined_setup_reviews(uuid, integer) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.warehouse_guidance(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.mark_cycle_counted(uuid, uuid, text, text, text) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.save_cycle_count_schedule(uuid, uuid, text, text, text, integer, boolean, bigint) TO v3_api_test;
@@ -787,6 +791,8 @@ assert_no_direct_table_access "v3.account_command_receipts"
 assert_no_direct_table_access "v3.run_inventory_consumptions"
 assert_no_direct_table_access "v3.inventory_movements"
 assert_no_direct_table_access "v3.setup_catalog_imports"
+assert_no_direct_table_access "v3.combined_setup_reviews"
+assert_no_direct_table_access "v3.combined_setup_review_imports"
 assert_no_direct_table_access "v3.setup_ingredient_records"
 assert_no_direct_table_access "v3.setup_mix_records"
 assert_no_direct_table_access "v3.setup_mix_component_links"
@@ -832,6 +838,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0019-operational-mix-plan.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0020-account-lifecycle.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0021-source-workbook-parser-v2.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0022-combined-setup-review.test.sql"
 ACCOUNT_FUNCTION_PRIVILEGES="$("${PSQL[@]}" -c "
   SET ROLE v3_api_test;
   SELECT has_function_privilege(current_user,

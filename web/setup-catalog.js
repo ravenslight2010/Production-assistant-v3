@@ -59,12 +59,19 @@ function recordsToCsv(family, records) {
   return [headers, ...rows].map((row) => row.map(csvField).join(",")).join("\r\n");
 }
 
+function validSourceRecords(value) {
+  return Array.isArray(value) && value.length >= 1 && value.length <= 2000 && value.every((item) =>
+    object(item) && text(item.code, 80) && object(item.source)
+    && text(item.source.workbook, 180) && text(item.source.cell, 240)
+    && (item.sourceDetails === null || object(item.sourceDetails)));
+}
+
 function readPending() {
   try {
     const value = JSON.parse(localStorage.getItem(PENDING_KEY) || "null");
     if (object(value) && uuid(value.actorId) && text(value.requestId, 200)
       && text(value.family, 40) && typeof value.csv === "string"
-      && (value.sourceSummary == null || validSourceSummary(value.sourceSummary))) return value;
+      && (value.sourceSummary == null || (validSourceSummary(value.sourceSummary) && validSourceRecords(value.sourceRecords)))) return value;
   } catch {}
   localStorage.removeItem(PENDING_KEY);
   return null;
@@ -381,6 +388,7 @@ async function previewSourceWorkbook(event) {
     });
     if (!validateSourcePreview(body)) throw new Error("The source preview did not match the expected review format.");
     sourceReview = {
+      fileName: file.name,
       sourceFamily: body.family,
       targetFamily: body.targetFamily,
       parserVersion: body.parserVersion,
@@ -455,12 +463,19 @@ async function stageSourceReview() {
       unresolvedRows: sourceReview.unresolved.filter((row) => !row.skipped && !row.resolved).length,
     };
     if (!validSourceSummary(sourceSummary)) throw new Error("The source review counts are invalid.");
+    const workbook = sourceReview.fileName;
+    const sourceRecords = included.map((row) => ({
+      code: row.record.code,
+      source: { workbook, cell: row.source },
+      sourceDetails: row.sourceDetails ?? null,
+    }));
     pending = {
       actorId: staff.userId,
       requestId: crypto.randomUUID(),
       family: sourceReview.targetFamily,
       csv,
       sourceSummary,
+      sourceRecords,
     };
     localStorage.setItem(PENDING_KEY, JSON.stringify(pending));
     await submitPending(parseSetupCatalogCsv(pending.family, pending.csv));
@@ -564,7 +579,7 @@ function renderReview(item, label) {
 }
 
 function validateSummary(item) {
-  return object(item) && uuid(item.id) && text(item.family, 40)
+  return object(item) && uuid(item.id) && item.revision === 1 && text(item.family, 40)
     && ["staged", "applied", "undone"].includes(item.status)
     && Number.isSafeInteger(item.rowCount) && item.rowCount >= 1 && item.rowCount <= 2000
     && text(item.createdAt, 60)
@@ -685,10 +700,10 @@ async function submitPending(records = null) {
       method: "POST",
       body: JSON.stringify({
         requestId: pending.requestId, family: pending.family, csv: pending.csv,
-        ...(pending.sourceSummary ? { sourceSummary: pending.sourceSummary } : {}),
+        ...(pending.sourceSummary ? { sourceSummary: pending.sourceSummary, sourceRecords: pending.sourceRecords } : {}),
       }),
     });
-    if (!uuid(response.importId) || !Array.isArray(response.records)
+    if (!uuid(response.importId) || response.revision !== 1 || !Array.isArray(response.records)
       || response.records.length !== validated.length) {
       throw new Error("The server could not confirm this setup import.");
     }

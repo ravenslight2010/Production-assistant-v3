@@ -16,6 +16,15 @@ const FAMILIES = new Set([
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
 const FINGERPRINT = /^[0-9a-f]{64}$/u;
 
+function isSourceRecords(value: unknown): value is NonNullable<SetupCatalogStageRequest["sourceRecords"]> {
+  return Array.isArray(value) && value.length >= 1 && value.length <= 2000 && value.every((item) =>
+    item && typeof item === "object" && !Array.isArray(item)
+    && typeof item.code === "string" && item.source && typeof item.source === "object"
+    && typeof item.source.workbook === "string" && typeof item.source.cell === "string"
+    && (item.sourceDetails === null || (item.sourceDetails && typeof item.sourceDetails === "object"
+      && !Array.isArray(item.sourceDetails))));
+}
+
 export type PendingSetupCatalogRequest = SetupCatalogStageRequest | SetupCatalogEditRequest | SetupMasterEditRequest | DieDefaultSaveRequest;
 
 function pendingKey(userId: string): string {
@@ -70,17 +79,31 @@ export function readPendingSetupCatalogImport(userId: string): PendingSetupCatal
     }
     const family = value.family as SetupCatalogEditRequest["family"];
     if (Object.hasOwn(value, "csv")) {
-      if (Object.keys(value).some((key) => !["requestId", "family", "csv", "sourceSummary"].includes(key))
+      const sourceSummary = value.sourceSummary;
+      const sourceRecords = value.sourceRecords;
+      if (Object.keys(value).some((key) => !["requestId", "family", "csv", "sourceSummary", "sourceRecords"].includes(key))
         || typeof value.csv !== "string" || value.csv.length < 1 || value.csv.length > 1024 * 1024
-        || (value.sourceSummary !== undefined && !isSourceImportSummary(value.sourceSummary))) {
+        || (sourceSummary === undefined && sourceRecords !== undefined)) {
         sessionStorage.removeItem(key);
         return null;
+      }
+      if (sourceSummary !== undefined) {
+        if (!isSourceImportSummary(sourceSummary) || !isSourceRecords(sourceRecords)) {
+          sessionStorage.removeItem(key);
+          return null;
+        }
+        return {
+          requestId: value.requestId,
+          family,
+          csv: value.csv,
+          sourceSummary,
+          sourceRecords,
+        };
       }
       return {
         requestId: value.requestId,
         family,
         csv: value.csv,
-        ...(value.sourceSummary ? { sourceSummary: value.sourceSummary } : {}),
       };
     }
     if (Object.keys(value).sort().join("\u0000") !== "expectedFingerprint\u0000family\u0000record\u0000requestId"

@@ -707,6 +707,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/setup-catalog/combined-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List reopenable combined source-import reviews
+         * @description Manager-only. Combined reviews coordinate canonical imports and never write setup targets.
+         */
+        get: operations["listCombinedSetupReviews"];
+        put?: never;
+        /**
+         * Create a pinned combined review over canonical source imports
+         * @description Manager-only. References active staged or applied source imports by immutable ID, content revision, source hash, and parser version. The deterministic projection compares proposed values with current setup records. Apply and Undo remain separate operations on each individual import.
+         */
+        post: operations["createCombinedSetupReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/setup-catalog/combined-reviews/{reviewId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reopen a pinned combined review and its current projection
+         * @description Manager-only. Recomputes the projection from canonical imports and current setup records.
+         */
+        get: operations["getCombinedSetupReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/setup-catalog/imports": {
         parameters: {
             query?: never;
@@ -722,7 +766,7 @@ export interface paths {
         put?: never;
         /**
          * Validate and stage one approved setup-family CSV
-         * @description Manager-only. Families have strict headers and field allowlists. Optional sourceSummary records a prior deterministic source-workbook review. The server computes request identity; retry the same requestId, CSV, and sourceSummary after an uncertain response. Apply and undo are separate manager actions.
+         * @description Manager-only. Families have strict headers and field allowlists. sourceSummary and sourceRecords record a prior deterministic source-workbook review and its per-record citations. The server computes request identity; retry the identical requestId and body after an uncertain response. Apply and undo are separate manager actions.
          */
         post: operations["stageSetupCatalogImport"];
         delete?: never;
@@ -2336,6 +2380,20 @@ export interface components {
             /** @description Strict family-specific CSV with a maximum of 2,000 data rows. */
             csv: string;
             sourceSummary?: components["schemas"]["SourceImportSummary"];
+            /** @description Required with sourceSummary; one exact reviewed citation per CSV record. */
+            sourceRecords?: components["schemas"]["SourceRecordCitation"][];
+        };
+        SourceCitation: {
+            workbook: string;
+            /** @description Parser sheet/cell citation retained with the canonical import. */
+            cell: string;
+        };
+        SourceRecordCitation: {
+            code: string;
+            source: components["schemas"]["SourceCitation"];
+            sourceDetails: {
+                [key: string]: unknown;
+            } | null;
         };
         SourceWorkbookPreviewRequest: {
             /** @enum {string} */
@@ -2368,7 +2426,7 @@ export interface components {
             /** @enum {string} */
             targetFamily: "mixes" | "run-templates";
             record: components["schemas"]["SetupCatalogRecord"];
-            /** @description Transient parsed evidence for manager correction; not stored after staging. */
+            /** @description Parsed evidence for manager correction; included rows retain it as canonical source evidence after staging. */
             sourceDetails?: {
                 [key: string]: unknown;
             };
@@ -2404,6 +2462,11 @@ export interface components {
             outcome: "staged" | "applied" | "undone";
             /** Format: uuid */
             importId: string;
+            /**
+             * @description Immutable canonical content revision; status transitions do not change it.
+             * @constant
+             */
+            revision: 1;
             /** @enum {string} */
             family: "ingredients" | "mixes" | "die-types" | "die-line-defaults" | "production-rules" | "freezer-pull-items" | "run-templates" | "manager-lists" | "aliases";
             rowCount: number;
@@ -2414,6 +2477,8 @@ export interface components {
         SetupCatalogHistoryItem: {
             /** Format: uuid */
             id: string;
+            /** @constant */
+            revision: 1;
             family: string;
             /** @enum {string} */
             status: "staged" | "applied" | "undone";
@@ -2432,6 +2497,8 @@ export interface components {
         };
         SetupCatalogDetail: components["schemas"]["SetupCatalogHistoryItem"] & {
             records: components["schemas"]["SetupCatalogRecord"][];
+            /** @description Empty for CSV-only and legacy /1 history; canonical citations for staged /2 source records. */
+            sourceRecords: components["schemas"]["SourceRecordCitation"][];
             /** @description Exact canonical base for a typed edit; null for creation and bulk imports. */
             editorBefore: components["schemas"]["SetupCatalogRecord"] | null;
             /** @description Canonical pre-Apply snapshots; null while staged. */
@@ -2442,6 +2509,136 @@ export interface components {
             after: {
                 [key: string]: unknown;
             }[] | null;
+        };
+        CombinedSetupReviewRequest: {
+            requestId: string;
+            importIds: string[];
+        };
+        CombinedSetupReviewSummary: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            createdBy: string;
+            /** Format: date-time */
+            createdAt: string;
+            importCount: number;
+            recordCount: number;
+        };
+        CombinedSetupReviewImport: {
+            /** Format: uuid */
+            importId: string;
+            /** @constant */
+            revision: 1;
+            /** @enum {string} */
+            family: "mixes" | "run-templates";
+            /** @enum {string} */
+            status: "staged" | "applied";
+            rowCount: number;
+            sourceSummary: components["schemas"]["SourceImportSummary"];
+        };
+        CombinedSetupProposal: {
+            code: string;
+            source: components["schemas"]["SourceCitation"] | null;
+            sourceDetails: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Canonical proposed JSON value. */
+            value: unknown;
+            /** Format: uuid */
+            importId: string;
+            /** @constant */
+            revision: 1;
+            /** @enum {string} */
+            importStatus: "staged" | "applied";
+            /** @enum {string} */
+            targetFamily: "mixes" | "run-templates";
+            /** @enum {string} */
+            sourceFamily: "spec-sheets" | "premix-sheets" | "cheese-mix-specs" | "shipping-guides" | "sauce-guides" | "dough-guides";
+            sourceSha256: string;
+            /** @enum {string} */
+            parserVersion: "v1-source-import/1" | "v1-source-import/2";
+        };
+        CombinedSetupEntry: {
+            /** @enum {string} */
+            targetFamily: "mixes" | "run-templates";
+            code: string;
+            field: string;
+            currentRecordPresent: boolean;
+            /** @description Current canonical JSON value, or null when the record/field is absent. */
+            currentValue: unknown;
+            /** @description Distinct proposed values; missing source fields never imply deletion. */
+            proposedValues: unknown[];
+            /** @enum {string} */
+            disposition: "fill" | "match" | "mismatch" | "conflict";
+            requiresDecision: boolean;
+            proposals: components["schemas"]["CombinedSetupProposal"][];
+        };
+        CombinedSetupDependency: {
+            /** @constant */
+            targetFamily: "run-templates";
+            code: string;
+            field: string;
+            reference: string;
+            /** Format: uuid */
+            importId: string;
+            /** @constant */
+            revision: 1;
+            /** @enum {string} */
+            importStatus: "staged" | "applied";
+            /** @enum {string} */
+            sourceFamily: "spec-sheets" | "premix-sheets" | "cheese-mix-specs" | "shipping-guides" | "sauce-guides" | "dough-guides";
+            sourceSha256: string;
+            /** @enum {string} */
+            parserVersion: "v1-source-import/1" | "v1-source-import/2";
+            source: components["schemas"]["SourceCitation"] | null;
+            sourceDetails: {
+                [key: string]: unknown;
+            } | null;
+            /** @constant */
+            reason: "no-unique-exact-or-normalized-match";
+            suggestions: {
+                code: string;
+                name: string;
+            }[];
+            /** @constant */
+            suggestionOnly: true;
+        };
+        CombinedSetupUnresolvedIdentity: {
+            /** @enum {string} */
+            type: "ambiguous-name" | "ambiguous-dependency";
+            /** @enum {string} */
+            targetFamily: "mixes" | "run-templates";
+            normalizedName: string;
+            reference: string | null;
+            candidates: {
+                [key: string]: unknown;
+            }[];
+            suggestions: unknown[];
+        };
+        CombinedSetupReviewCounts: {
+            imports: number;
+            records: number;
+            fills: number;
+            matches: number;
+            mismatches: number;
+            conflicts: number;
+            missingDependencies: number;
+            unresolvedIdentities: number;
+        };
+        CombinedSetupReview: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            createdBy: string;
+            /** Format: date-time */
+            createdAt: string;
+            replayed: boolean;
+            dependencyOrder: ("spec-sheets" | "dough-guides" | "sauce-guides" | "premix-sheets" | "cheese-mix-specs" | "shipping-guides")[];
+            imports: components["schemas"]["CombinedSetupReviewImport"][];
+            entries: components["schemas"]["CombinedSetupEntry"][];
+            missingDependencies: components["schemas"]["CombinedSetupDependency"][];
+            unresolvedIdentities: components["schemas"]["CombinedSetupUnresolvedIdentity"][];
+            summary: components["schemas"]["CombinedSetupReviewCounts"];
         };
         SetupCatalogActionResult: {
             /** @enum {string} */
@@ -4874,6 +5071,100 @@ export interface operations {
             413: components["responses"]["Error"];
             415: components["responses"]["Error"];
             429: components["responses"]["Error"];
+        };
+    };
+    listCombinedSetupReviews: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent combined reviews */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        reviews: components["schemas"]["CombinedSetupReviewSummary"][];
+                    };
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    createCombinedSetupReview: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CombinedSetupReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Identical combined review request confirmed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CombinedSetupReview"];
+                };
+            };
+            /** @description Combined review created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CombinedSetupReview"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    getCombinedSetupReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reviewId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Combined review projection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CombinedSetupReview"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     listSetupCatalogImports: {

@@ -8,6 +8,7 @@ DECLARE
   v_legacy_summary jsonb;
   v_summary jsonb;
   v_records jsonb;
+  v_staged_records jsonb;
   v_result jsonb;
   v_failed boolean;
 BEGIN
@@ -47,16 +48,20 @@ BEGIN
   IF NOT v_failed THEN RAISE EXCEPTION 'New staging accepted parser /1 evidence'; END IF;
 
   v_summary := jsonb_set(v_legacy_summary, '{parserVersion}', to_jsonb('v1-source-import/2'::text));
+  v_staged_records := jsonb_set(v_records, '{0,source}', jsonb_build_object(
+    'workbook', 'legacy-sauce.xlsx', 'cell', 'Sheet1!A1'
+  ));
+  v_staged_records := jsonb_set(v_staged_records, '{0,sourceDetails}', '{"batch":1}'::jsonb);
   v_result := v3.stage_setup_catalog_import(
     v_facility, v_actor, 'source-parser-v2', repeat('3', 64),
-    'run-templates', v_records, v_summary
+    'run-templates', v_staged_records, v_summary
   );
   IF v_result->>'replayed' <> 'false' OR v_result->'sourceSummary' <> v_summary THEN
     RAISE EXCEPTION 'Parser /2 source evidence was not staged exactly';
   END IF;
   v_result := v3.stage_setup_catalog_import(
     v_facility, v_actor, 'source-parser-v2', repeat('3', 64),
-    'run-templates', v_records, v_summary
+    'run-templates', v_staged_records, v_summary
   );
   IF v_result->>'replayed' <> 'true' OR v_result->'sourceSummary' <> v_summary THEN
     RAISE EXCEPTION 'Parser /2 exact staging retry was not idempotent';

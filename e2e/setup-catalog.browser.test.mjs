@@ -62,6 +62,8 @@ function json(route, body, status = 200) {
 
 function detail(importItem) {
   return {
+    revision: 1,
+    sourceRecords: [],
     ...importItem,
     createdBy: STAFF_ID,
     createdAt: "2026-11-21T12:00:00.000Z",
@@ -272,13 +274,13 @@ async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = 
     if (path === "/api/v3/setup-catalog/imports" && method === "POST") {
       const body = request.postDataJSON();
       assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
-      assert.deepEqual(Object.keys(body).sort(), body.sourceSummary ? ["csv", "family", "requestId", "sourceSummary"] : ["csv", "family", "requestId"]);
+      assert.deepEqual(Object.keys(body).sort(), body.sourceSummary ? ["csv", "family", "requestId", "sourceRecords", "sourceSummary"] : ["csv", "family", "requestId"]);
       const records = parseSetupCatalogCsv(body.family, body.csv);
       const prior = requests.get(body.requestId);
       if (prior) {
         assert.deepEqual(body, prior, "exact retry must preserve request ID, family, and CSV bytes");
         const item = imports.get(IMPORT_ID);
-        return json(route, { outcome: "staged", importId: IMPORT_ID, family: item.family, rowCount: item.rowCount, replayed: true, records, sourceSummary: item.sourceSummary ?? null });
+        return json(route, { outcome: "staged", importId: IMPORT_ID, revision: 1, family: item.family, rowCount: item.rowCount, replayed: true, records, sourceSummary: item.sourceSummary ?? null });
       }
       const item = {
         id: IMPORT_ID,
@@ -287,6 +289,7 @@ async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = 
         rowCount: records.length,
         records,
         sourceSummary: body.sourceSummary ?? null,
+        sourceRecords: body.sourceRecords ?? [],
       };
       requests.set(body.requestId, body);
       imports.set(IMPORT_ID, item);
@@ -294,7 +297,7 @@ async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = 
         loseNextStageResponse = false;
         return json(route, { error: "Synthetic response loss after staging commit." }, 500);
       }
-      return json(route, { outcome: "staged", importId: IMPORT_ID, family: item.family, rowCount: item.rowCount, replayed: false, records, sourceSummary: item.sourceSummary }, 201);
+      return json(route, { outcome: "staged", importId: IMPORT_ID, revision: 1, family: item.family, rowCount: item.rowCount, replayed: false, records, sourceSummary: item.sourceSummary }, 201);
     }
     if (path === "/api/v3/setup-catalog/edits" && method === "POST") {
       const body = request.postDataJSON();
@@ -305,7 +308,7 @@ async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = 
       if (prior) {
         assert.deepEqual(body, prior, "exact typed retry must preserve request ID and record");
         const item = imports.get(IMPORT_ID);
-        return json(route, { outcome: "staged", importId: IMPORT_ID, family: item.family, rowCount: 1, replayed: true, records: item.records, sourceSummary: null });
+        return json(route, { outcome: "staged", importId: IMPORT_ID, revision: 1, family: item.family, rowCount: 1, replayed: true, records: item.records, sourceSummary: null });
       }
       const item = {
         id: IMPORT_ID, family: body.family, status: "staged", rowCount: 1, records: [record],
@@ -314,7 +317,7 @@ async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = 
       };
       requests.set(body.requestId, body);
       imports.set(IMPORT_ID, item);
-      return json(route, { outcome: "staged", importId: IMPORT_ID, family: item.family, rowCount: 1, replayed: false, records: item.records, sourceSummary: null }, 201);
+      return json(route, { outcome: "staged", importId: IMPORT_ID, revision: 1, family: item.family, rowCount: 1, replayed: false, records: item.records, sourceSummary: null }, 201);
     }
     const detailMatch = path.match(/^\/api\/v3\/setup-catalog\/imports\/([0-9a-f-]+)$/);
     if (detailMatch && method === "GET") {
@@ -490,6 +493,11 @@ test("source workbook review gates edits, preserves source summaries on exact re
     sourceRows: 4, importedRows: 1, skippedRows: 2, unresolvedRows: 1,
   });
   assert.equal(parseSetupCatalogCsv(originalRequest.family, originalRequest.csv)[0].code, "SOURCE-EDITED");
+  assert.deepEqual(originalRequest.sourceRecords, [{
+    code: "SOURCE-EDITED",
+    source: { workbook: "source.xlsx", cell: "source.xlsx / Sheet1 / row 2" },
+    sourceDetails: { cells: { A2: "SOURCE-A", B2: "Source A" } },
+  }]);
   await page.reload();
   await page.getByRole("button", { name: "Retry the same staging request", exact: true }).click();
   await page.getByText(/The previous staging request was confirmed\. The canonical setup review has been reloaded\./).waitFor();

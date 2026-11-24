@@ -612,6 +612,7 @@ test("source workbook preview is manager-only and its reviewed summary is bound 
         importId: "10000000-0000-4000-8000-000000000009",
         family: "run-templates",
         rowCount: JSON.parse(values[5]).length,
+        revision: 1,
         sourceSummary: JSON.parse(values[6]),
         replayed,
       } }] };
@@ -638,11 +639,19 @@ test("source workbook preview is manager-only and its reviewed summary is bound 
     family: "run-templates",
     csv,
     sourceSummary: summary,
+    sourceRecords: [{
+      code: "SAUCE-ACME",
+      source: { workbook: "sauce.xlsx", cell: "Sheet1!A1" },
+      sourceDetails: { procedure: "literal" },
+    }],
   };
   const staged = await send(api.baseUrl, "/api/v3/setup-catalog/imports", { method: "POST", body: request });
   assert.equal(staged.status, 201);
   assert.deepEqual((await staged.json()).sourceSummary, summary);
   assert.deepEqual(JSON.parse(api.calls[0].values[6]), summary);
+  assert.deepEqual(JSON.parse(api.calls[0].values[5])[0].source, request.sourceRecords[0].source);
+  assert.deepEqual(JSON.parse(api.calls[0].values[5])[0].sourceDetails, request.sourceRecords[0].sourceDetails);
+  assert.equal(Object.hasOwn(JSON.parse(api.calls[0].values[5])[0], "sourceRecords"), false);
   assert.match(api.calls[0].values[3], /^[0-9a-f]{64}$/u);
 
   const replay = await send(api.baseUrl, "/api/v3/setup-catalog/imports", { method: "POST", body: request });
@@ -659,6 +668,13 @@ test("source workbook preview is manager-only and its reviewed summary is bound 
   assert.equal(mismatched.status, 400);
   assert.notEqual(api.calls[0].values[3], api.calls[2].values[3]);
 
+  const missingCitation = await send(api.baseUrl, "/api/v3/setup-catalog/imports", {
+    method: "POST",
+    body: { ...request, requestId: "source-sauce-missing-citation", sourceRecords: undefined },
+  });
+  assert.equal(missingCitation.status, 400);
+  assert.equal(api.calls.length, 3, "missing citations must not reach canonical staging");
+
   const legacy = await send(api.baseUrl, "/api/v3/setup-catalog/imports", {
     method: "POST",
     body: {
@@ -669,6 +685,80 @@ test("source workbook preview is manager-only and its reviewed summary is bound 
   });
   assert.equal(legacy.status, 400);
   assert.equal(api.calls.length, 3, "legacy parser summaries must not reach new staging");
+});
+
+test("combined review API projects canonical pinned imports without a setup-writing command", async (t) => {
+  const specId = "a0000000-0000-4000-8000-000000000001";
+  const mixId = "b0000000-0000-4000-8000-000000000002";
+  const reviewId = "c0000000-0000-4000-8000-000000000003";
+  const payload = {
+    id: reviewId,
+    createdBy: "99000000-0000-4000-8000-000000000001",
+    createdAt: "2026-11-24T00:00:00.000Z",
+    replayed: false,
+    imports: [
+      {
+        importId: specId, revision: 1, family: "run-templates", status: "staged",
+        sourceSummary: {
+          sourceFamily: "spec-sheets", sourceSha256: "a".repeat(64), parserVersion: "v1-source-import/2",
+          sourceRows: 1, importedRows: 1, skippedRows: 0, unresolvedRows: 0,
+        },
+        records: [{
+          code: "RUN-A", name: "Run A",
+          data: { brand: "Example", flavor: "House", values: { frontlineRecipeName: "House Red", sauceOzPerPizza: 3 } },
+          source: { workbook: "spec.xlsx", cell: "Spec!A1" }, sourceDetails: null,
+        }],
+      },
+      {
+        importId: mixId, revision: 1, family: "mixes", status: "applied",
+        sourceSummary: {
+          sourceFamily: "premix-sheets", sourceSha256: "b".repeat(64), parserVersion: "v1-source-import/2",
+          sourceRows: 1, importedRows: 1, skippedRows: 0, unresolvedRows: 0,
+        },
+        records: [{
+          code: "HOUSE-RED", name: "House Red",
+          data: { brand: "Example", flavor: "House", batchSizeLbs: 40, daysEarly: 1, notes: "", isPrep: true, enabled: true, components: [] },
+          source: { workbook: "sauce.xlsx", cell: "Sauce!A2" }, sourceDetails: { literal: true },
+        }],
+      },
+    ],
+    currentRecords: [],
+  };
+  const api = await withApi(t, {
+    query: async (sql, values) => {
+      if (sql.includes("create_combined_setup_review")) {
+        assert.deepEqual(JSON.parse(values[4]), [specId, mixId]);
+        return { rows: [{ result: payload }] };
+      }
+      if (sql.includes("get_combined_setup_review")) return { rows: [{ result: { ...payload, replayed: undefined } }] };
+      if (sql.includes("list_combined_setup_reviews")) {
+        return { rows: [{ result: [{ id: reviewId, createdBy: payload.createdBy, createdAt: payload.createdAt, importCount: 2, recordCount: 2 }] }] };
+      }
+      throw new Error("Unexpected combined-review query");
+    },
+  });
+  const body = { requestId: "combined-api", importIds: [mixId, specId] };
+  const created = await send(api.baseUrl, "/api/v3/setup-catalog/combined-reviews", { method: "POST", body });
+  assert.equal(created.status, 201);
+  const review = await created.json();
+  assert.equal(review.id, reviewId);
+  assert.deepEqual(review.imports.map((item) => item.importId), [specId, mixId]);
+  assert.equal(review.missingDependencies.length, 0);
+  assert.equal(review.entries.find((entry) => entry.field === "values.sauceOzPerPizza").disposition, "fill");
+  assert.equal(review.entries.find((entry) => entry.field === "values.sauceOzPerPizza").proposals[0].source.cell, "Spec!A1");
+  assert.equal(api.calls.every((call) => !/apply_setup_catalog_import|stage_setup_catalog_edit/u.test(call.sql)), true);
+
+  const reopened = await send(api.baseUrl, `/api/v3/setup-catalog/combined-reviews/${reviewId}`);
+  assert.equal(reopened.status, 200);
+  assert.equal((await reopened.json()).replayed, false);
+  const listed = await send(api.baseUrl, "/api/v3/setup-catalog/combined-reviews?limit=10");
+  assert.equal(listed.status, 200);
+  assert.equal((await listed.json()).reviews[0].recordCount, 2);
+
+  const duplicate = await send(api.baseUrl, "/api/v3/setup-catalog/combined-reviews", {
+    method: "POST", body: { requestId: "combined-duplicate", importIds: [specId, specId] },
+  });
+  assert.equal(duplicate.status, 400);
 });
 
 test("workbook source rows are linked exactly and staged through the reviewed import lifecycle", async (t) => {

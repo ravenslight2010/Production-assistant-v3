@@ -29,6 +29,7 @@ type Unresolved = SourceWorkbookPreview["unresolvedRows"][number] & {
   resolution: "corrected" | "review-only" | "skipped" | null;
 };
 type Review = Omit<SourceWorkbookPreview, "records" | "unresolvedRows"> & {
+  fileName: string;
   candidates: Candidate[];
   unresolved: Unresolved[];
 };
@@ -172,6 +173,7 @@ export function SourceWorkbookImport({ online, disabled, pending, onStage }: {
       if (controller.signal.aborted) return;
       setReview({
         ...result,
+        fileName: file.name,
         candidates: result.records.map((candidate) => ({
           ...candidate,
           include: true,
@@ -229,7 +231,15 @@ export function SourceWorkbookImport({ online, disabled, pending, onStage }: {
         unresolvedRows: review.unresolved.filter((row) => row.resolution === "review-only").length,
       };
       sourceRequested.current = true;
-      const staged = await onStage({ requestId: crypto.randomUUID(), family: review.targetFamily, csv, sourceSummary });
+      const workbook = review.fileName;
+      const sourceRecords = included.map((candidate) => ({
+        code: candidate.record.code,
+        source: { workbook, cell: candidate.source },
+        sourceDetails: candidate.sourceDetails ?? null,
+      }));
+      const staged = await onStage({
+        requestId: crypto.randomUUID(), family: review.targetFamily, csv, sourceSummary, sourceRecords,
+      });
       if (staged) {
         sourceRequested.current = false;
         sawSourcePending.current = false;
