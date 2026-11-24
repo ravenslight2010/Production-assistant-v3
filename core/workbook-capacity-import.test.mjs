@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import * as XLSX from "xlsx";
+import {
+  listPrivateSourceCorpusFiles,
+  privateSourceCorpusTestOptions,
+  requirePrivateSourceCorpus,
+} from "./private-source-corpus.mjs";
 import {
   linkWorkbookCapacityRows,
   parseDoughCapacityWorkbook,
@@ -115,32 +121,33 @@ test("manager links resolve only unmatched rows and retain the active product's 
   )[0].productCode, null);
 });
 
-test("parses every local dough procedure and the approved shipping guide", {
-  skip: process.env.V3_SKIP_PRIVATE_SOURCE_CORPUS === "true"
-    ? "Private customer workbooks are not provisioned in this CI checkout."
-    : false,
-}, async () => {
-  const doughDirectory = new URL("../attached_assets/source-library/dough/", import.meta.url);
-  const shippingDirectory = new URL("../attached_assets/source-library/shipping/", import.meta.url);
-  const doughFiles = (await readdir(doughDirectory)).filter((name) => /\.xlsx$/iu.test(name));
-  const shippingFiles = (await readdir(shippingDirectory)).filter((name) => /\.xlsx$/iu.test(name));
-  assert.equal(doughFiles.length, 13);
-  assert.equal(shippingFiles.length, 1);
+test("parses every provisioned dough procedure and shipping guide", privateSourceCorpusTestOptions(), async () => {
+  const corpusRoot = requirePrivateSourceCorpus();
+  const files = listPrivateSourceCorpusFiles(corpusRoot);
+  const doughFiles = files.filter((file) => file.family === "dough");
+  const shippingFiles = files.filter((file) => file.family === "shipping");
+  assert.ok(doughFiles.length > 0, "The provisioned corpus must contain dough procedures");
+  assert.ok(shippingFiles.length > 0, "The provisioned corpus must contain shipping guides");
 
   const doughResults = [];
-  for (const fileName of doughFiles) {
-    const parsed = parseDoughCapacityWorkbook(await readFile(new URL(fileName, doughDirectory)), fileName);
-    assert.ok(parsed.rows.length > 0, `${fileName} should contain dough rows`);
+  for (const file of doughFiles) {
+    assert.equal(file.format, ".xlsx", `${file.relativePath} requires deterministic format support before qualification`);
+    const parsed = parseDoughCapacityWorkbook(await readFile(file.absolutePath), path.basename(file.relativePath));
+    assert.ok(parsed.rows.length > 0, `${file.relativePath} should contain dough rows`);
     doughResults.push(...parsed.rows);
   }
   const approvedRow = doughResults.find((row) => row.name === "12'' Aldo");
   assert.equal(approvedRow?.doughballYield, 645.19);
   assert.equal(approvedRow?.source.yieldCell, "Sheet1!E32");
 
-  const fileName = shippingFiles[0];
-  const shipping = parseShippingCapacityWorkbook(await readFile(new URL(fileName, shippingDirectory)), fileName);
-  assert.ok(shipping.rows.length > 0);
-  assert.ok(shipping.rows.some((row) => row.name === "Aldo's" && row.pizzasPerCase === 12));
+  const shippingResults = [];
+  for (const file of shippingFiles) {
+    assert.equal(file.format, ".xlsx", `${file.relativePath} requires deterministic format support before qualification`);
+    const parsed = parseShippingCapacityWorkbook(await readFile(file.absolutePath), path.basename(file.relativePath));
+    assert.ok(parsed.rows.length > 0, `${file.relativePath} should contain shipping rows`);
+    shippingResults.push(...parsed.rows);
+  }
+  assert.ok(shippingResults.some((row) => row.name === "Aldo's" && row.pizzasPerCase === 12));
 });
 
 test("rejects invalid workbooks and unsupported file families explicitly", () => {

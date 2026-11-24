@@ -1,7 +1,7 @@
 # V3 source and research index
 
 Status: current implementation authority for the initial V3 build.
-Last updated: 2026-11-21.
+Last updated: 2026-11-24.
 
 ## Purpose
 
@@ -56,7 +56,7 @@ Eligible library content is readable, reviewable documentation or sanitized stru
 - Generated build output, dependency stores, or unreadable binary evidence presented as documentation.
 - Runtime prompts or provider configuration intended to activate AI.
 
-Private workbook names and hashes already present in inherited test pins are not a license to import those workbooks. Workbook-backed tests remain separately provisioned and explicitly skippable when the private corpus is absent.
+Private workbook names and hashes already present in inherited test pins are not a license to import those workbooks. Workbook-backed tests use a separately provisioned corpus selected by `V3_PRIVATE_SOURCE_CORPUS`; the default location is the ignored `attached_assets/source-library/` directory. Public runs skip private evidence when it is absent. `V3_REQUIRE_PRIVATE_SOURCE_CORPUS=true` makes the evidence mandatory and must be used for fidelity qualification. Generated private manifests must remain outside both the corpus and the repository. A skip is never workbook-fidelity evidence.
 
 ## Authority order
 

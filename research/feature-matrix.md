@@ -61,7 +61,7 @@ Status labels describe this checkout: `ported` means the underlying V2 behavior 
 | Schedule catalog | Day planning and schedule editing | Server catalog and date-scoped schedule state | `combine` | `ported` |
 | Schedule commands | Move/edit scheduled work | Revision-fenced schedule commands and exact retry | `rebuild` | `ported` |
 | Schedule estimates | V1 run estimates and schedule warnings | Shared baseline estimates with unknown durations explicit | `combine` | `ported` |
-| Schedule workbook import | V1 schedule workbook review | Deterministic flat/day-block preview and apply boundary | `port` | `ported` |
+| Schedule workbook import | V1 schedule workbook review | Deterministic flat/day-block preview and apply boundary | `port` | Preview/Apply `ported`; canonical per-date history/Undo `in progress` |
 | Recipe/setup warnings | Scheduled recipe checks | Reviewed catalog linkage | `combine` | `pending` |
 | Operational Mix Plan | Mix presets, mixes, and planning | Listed as later-phase work, not complete parity | `defer` | `pending` |
 
@@ -70,7 +70,9 @@ Status labels describe this checkout: `ported` means the underlying V2 behavior 
 | Feature | V1 behavior | V2 behavior | V3 disposition | Current status |
 |---|---|---|---|---|
 | Product/setup master data | Profiles, recipes, production setups | Reviewed setup catalogs and imported products | `combine`: reviewed setup/master data only | `ported` API and React setup CSV/history; full catalog editors `pending` |
-| Source-workbook preview | Broad V1 workbook imports | Deterministic parse and read-only preview | `rebuild`: no AI fallback | `ported` API and React review for six source families; private-workbook fidelity `pending` |
+| Source-workbook preview | Broad V1 workbook imports | Deterministic parse and read-only preview | `rebuild`: no AI fallback | `ported` API and React review for six source families; whole-corpus format/fidelity qualification `in progress` |
+| Mixed queue and combined setup review | V1 multi-file imports and latest-import setup completion | Server-owned staged imports and canonical setup state | `combine`: individual imports remain the only setup writers | `in progress` under the approved import-completion design |
+| Whole-corpus qualification | V1 source-library corpus harness | Separately provisioned private workbook tests | `combine`: manifest-driven private evidence plus public synthetic regressions | `in progress`; fixed dough/shipping counts removed; private fidelity `not proven` |
 | Review and explicit Apply | Human review in V1 workflows | Staged imports with explicit manager Apply and governed Undo | `combine` | `ported` |
 | Import history/retry | V1 import history and reconciliation | Persisted history, request hashes, safe idempotent retry, canonical reopen | `combine` | `ported` |
 | CSV templates | V1 import/export templates | Strict synthetic templates, shared CSV parsers, and React template download | `combine` | `ported` |

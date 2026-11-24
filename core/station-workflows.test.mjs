@@ -2,6 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import path from "node:path";
+import {
+  privateSourceCorpusTestOptions,
+  requirePrivateSourceCorpus,
+} from "./private-source-corpus.mjs";
 import {
   calculateStationMetrics,
   deriveDoughCasesPerBatch,
@@ -14,38 +19,35 @@ const floorExampleRun = { setupSnapshot: { label: "Workbook example", targetCase
 
 const floorExampleSources = [
   {
-    path: "../attached_assets/source-library/cheese/Cheese_Mix_Recipe_Specs_-_Tabbed_by_Customer_-_07.10.26_1784339826076.xlsx",
+    path: "cheese/Cheese_Mix_Recipe_Specs_-_Tabbed_by_Customer_-_07.10.26_1784339826076.xlsx",
     sha256: "21432dc3c0260f578d66989830458f51c19d2524ebf0453efcf7b761e78d9878",
   },
   {
-    path: "../attached_assets/source-library/specs/Aldo's_Pizza_Specs_-_09_1784339783417.xlsx",
+    path: "specs/Aldo's_Pizza_Specs_-_09_1784339783417.xlsx",
     sha256: "54c6e9660c5da91e80f41180d5b181d53758d55e688ad5684e5217d130fc100c",
   },
   {
-    path: "../attached_assets/source-library/dough/Aldo's_Dough_Mixing_Procedure_-_09_1784339683714.xlsx",
+    path: "dough/Aldo's_Dough_Mixing_Procedure_-_09_1784339683714.xlsx",
     sha256: "f6d80526acda8ea185c067fc8a2ea229cfc43d3346c61423f7ba3301930d7900",
   },
   {
-    path: "../attached_assets/source-library/sauce/Aldo_Pizza_Sauce_02_1784339518984.xlsx",
+    path: "sauce/Aldo_Pizza_Sauce_02_1784339518984.xlsx",
     sha256: "e42ab181171c5abdbbbe17b28fdca2d2053ae22356c1cf65f0f19feb4c1d1f74",
   },
   {
-    path: "../attached_assets/source-library/shipping/Shipping_and_Palletizing_Guide_07.02.2026_1784339849858.xlsx",
+    path: "shipping/Shipping_and_Palletizing_Guide_07.02.2026_1784339849858.xlsx",
     sha256: "bf76dcf04c37218e41a1a16d118922647b0e488e5264365696c65705799e8de6",
   },
   {
-    path: "../attached_assets/source-library/schedule/Production_Schedule_7-8-26_1784339875921.xlsx",
+    path: "schedule/Production_Schedule_7-8-26_1784339875921.xlsx",
     sha256: "f7066f55fc9f335daa691a5ab4d915c3a26ccc08f8e57b5038d4bf0db119c46d",
   },
 ];
 
-test("pins the exact workbook versions used by the floor examples", {
-  skip: process.env.V3_SKIP_PRIVATE_SOURCE_CORPUS === "true"
-    ? "Private customer workbooks are not provisioned in this CI checkout."
-    : false,
-}, () => {
+test("pins the exact workbook versions used by the floor examples", privateSourceCorpusTestOptions(), () => {
+  const corpusRoot = requirePrivateSourceCorpus();
   for (const source of floorExampleSources) {
-    const workbook = readFileSync(new URL(source.path, import.meta.url));
+    const workbook = readFileSync(path.join(corpusRoot, source.path));
     const sha256 = createHash("sha256").update(workbook).digest("hex");
     assert.equal(sha256, source.sha256, `${source.path} changed; re-review its cited cells`);
   }
