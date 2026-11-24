@@ -69,6 +69,39 @@ test("dated V1 day blocks preserve per-day rows, notes, and skip reasons", () =>
   assert.match(parsed.errors[0].message, /Brand is missing/u);
 });
 
+test("formula-derived day headers report formula review instead of a missing date", () => {
+  const serial = Date.UTC(2026, 10, 19) / 86_400_000 + 25_569;
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ["Monday - Day", serial, "Brand", "Flavor", "Units"],
+    ["", "", "Oak Street", "Cheese", 20],
+    ["Tuesday - Day", serial + 1, "Brand", "Flavor", "Units"],
+    ["", "", "Oak Street", "Pepperoni", 12],
+  ]);
+  sheet.B3 = { t: "n", f: "B1+1", v: serial + 1, w: "11/20" };
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Week");
+  const parsed = parseScheduleWorkbook(
+    XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }),
+    { today: "2026-11-18" },
+  );
+  assert.equal(parsed.rows.length, 1);
+  assert.equal(parsed.errors.length, 1);
+  assert.match(parsed.errors[0].message, /Formula cells/u);
+  assert.doesNotMatch(parsed.errors[0].message, /no valid day date/u);
+});
+
+test("accepts a bounded 101-sheet schedule and rejects sheets beyond the new cap", () => {
+  const sheets = [["Plan", [
+    ["Brand", "Flavor", "Cases Planned"],
+    ["Oak Street", "Cheese", 24],
+  ]]];
+  while (sheets.length < 101) sheets.push([`Empty ${sheets.length}`, []]);
+  const parsed = parseScheduleWorkbook(workbookBytes(sheets), { today: "2026-11-18" });
+  assert.equal(parsed.rows.length, 1);
+  while (sheets.length < 129) sheets.push([`Empty ${sheets.length}`, []]);
+  assert.throws(() => parseScheduleWorkbook(workbookBytes(sheets)), /1–128 worksheets/u);
+});
+
 test("formula-backed values stay review-only and malformed flat sheets report an issue", () => {
   const formulaSheet = XLSX.utils.aoa_to_sheet([
     ["Brand", "Flavor", "Cases Planned", "Notes"],

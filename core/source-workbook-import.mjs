@@ -3,7 +3,7 @@ import { inflateRawSync } from "node:zlib";
 import { readWorkbookSheets, workbookCapacityImportLimits } from "./workbook-capacity-import.mjs";
 
 const MAX_IMPORT_ROWS = 2000;
-const VERSION = "v1-source-import/1";
+const VERSION = "v1-source-import/2";
 const FAMILY_LABELS = Object.freeze({
   "spec-sheets": "Spec sheet",
   "premix-sheets": "Premix sheet",
@@ -206,6 +206,66 @@ function sourceRef(sheet, row) {
   return `${sheet}!row ${row + 1}`;
 }
 
+function cellRef(sheet, row, column) {
+  let value = column + 1;
+  let letters = "";
+  while (value > 0) {
+    letters = String.fromCharCode(65 + ((value - 1) % 26)) + letters;
+    value = Math.floor((value - 1) / 26);
+  }
+  return `${sheet}!${letters}${row + 1}`;
+}
+
+function formulaCells(sheet) {
+  return new Set(sheet.formulas.map((entry) => `${entry.row}:${entry.column}`));
+}
+
+function firstLine(value) {
+  return text(String(value ?? "").split(/[\r\n]+/u, 1)[0]);
+}
+
+function numericWithParenthetical(value, annotationPattern = null) {
+  const match = text(value).match(/^((?:0|[1-9]\d*|(?:\d{1,3}(?:,\d{3})+))(?:\.\d+)?)\s*\(([^()]+)\)$/u);
+  if (!match || (annotationPattern && !annotationPattern.test(match[2]))) return null;
+  return numeric(match[1]);
+}
+
+function cleanDoughReference(value) {
+  const raw = firstLine(value);
+  const parentheticals = [...raw.matchAll(/\(([^)]*)\)/gu)];
+  const base = text(raw.replace(/\([^)]*\)/gu, " "));
+  if (parentheticals.length && /^(?:par[\s-]*baked?\s+)?(?:pizza\s+)?(?:crusts?|doughs?|shells?)$/iu.test(base)) {
+    for (const match of parentheticals) {
+      const inner = text(match[1]);
+      if (!/[a-z]/iu.test(inner)) continue;
+      const segments = inner.split(/\s*[-–—]\s*/u).map(text)
+        .filter((segment) => segment && !/\bdies?\b/iu.test(segment) && /[a-z]/iu.test(segment));
+      const cleaned = text(segments.join(" - "))
+        .replace(/^\d+(?:\.\d+)?\s*(?:"|”|''|-?\s*in(?:ch(?:es)?)?\b\.?)\s*/iu, "");
+      if (/[a-z]/iu.test(cleaned)) return cleaned;
+    }
+  }
+  const withoutQualifiers = text(raw.replace(/\s*\([^()]*(?:\brecipes?\b|made[\s-]*in[\s-]*house|in[\s-]*house|legacy)[^()]*\)/giu, " "));
+  const withoutDie = text(withoutQualifiers.replace(/\s*[-–—]\s*[^-–—]*\bdies?\b[^-–—]*$/iu, ""));
+  return /[a-z]/iu.test(withoutDie) ? withoutDie : raw;
+}
+
+function cleanSauceReference(value) {
+  const raw = firstLine(value);
+  if (!raw.includes("(")) return raw;
+  const stripped = text(raw.replace(/\s*\([^()]*(?:\brecipes?\b|made[\s-]*in[\s-]*house|in[\s-]*house|legacy|bought|purchased)[^()]*\)/giu, " "));
+  if (!stripped || stripped === raw) return raw;
+  const distinctive = stripped.split(/\s+/u).some((word) => /[a-z]/iu.test(word)
+    && !/^(?:sauce|sauces|pizza|the|a|an)$/iu.test(word));
+  return distinctive ? stripped : raw;
+}
+
+function explicitDieFromCrust(value, doughRecipeName) {
+  if (!/\b(?:recipes?|doughs?)\b/iu.test(doughRecipeName)) return null;
+  const match = firstLine(value).match(/(\d+(?:\.\d+)?)\s*(?:"|”|''|\s*-?\s*in(?:ch(?:es)?)?\b\.?)\s*[-–—]?\s*dies?\b/iu);
+  return match ? `${match[1]}"` : null;
+}
+
 function formulaRows(sheet) {
   return new Set(sheet.formulas.map((entry) => entry.row));
 }
@@ -280,12 +340,176 @@ function dataRow(row) {
   return row.some((cell) => text(cell));
 }
 
+function specProductRows(result, sheet) {
+  const formulas = formulaCells(sheet);
+  const isCrust = (row, column) => {
+    const value = firstLine(sheet.rows[row]?.[column]);
+    return /\b(?:crusts?|doughs?|shells?)\b/iu.test(value)
+      && (value.includes("(") || /\d+(?:\.\d+)?\s*(?:"|”|''|x)/iu.test(value));
+  };
+  const headers = [];
+  for (let row = 0; row < sheet.rows.length; row += 1) {
+    for (let column = 0; column + 1 < (sheet.rows[row]?.length ?? 0); column += 1) {
+      const brand = firstLine(sheet.rows[row]?.[column]);
+      const flavor = firstLine(sheet.rows[row]?.[column + 1]);
+      if (!brand || !flavor || numeric(brand) !== null || numeric(flavor) !== null
+        || /^(?:notes?|oz|target weight|weight spec range)$/iu.test(brand)
+        || /^(?:oz|target weight|weight spec range)$/iu.test(flavor)
+        || /(?:allergen|revision|\brev\.?\s*\d)/iu.test(`${brand} ${flavor}`)) continue;
+      let crustRow = -1;
+      for (let lookahead = row + 1; lookahead <= row + 3 && lookahead < sheet.rows.length; lookahead += 1) {
+        if (isCrust(lookahead, column)) {
+          crustRow = lookahead;
+          break;
+        }
+      }
+      if (crustRow >= 0) headers.push({ row, column, crustRow });
+    }
+  }
+  if (!headers.length) return false;
+
+  for (const [headerIndex, header] of headers.entries()) {
+    const { row: headerRow, column, crustRow } = header;
+    const source = cellRef(sheet.name, headerRow, column);
+    result.sourceRows += 1;
+    if (formulas.has(`${headerRow}:${column}`) || formulas.has(`${headerRow}:${column + 1}`)) {
+      unresolved(result, source, "Formula-derived brand or flavor headers require manager review.");
+      continue;
+    }
+    const brand = text(sheet.rows[headerRow]?.[column])
+      .replace(/\s+pizzas?$/iu, "").trim();
+    const flavor = text(sheet.rows[headerRow]?.[column + 1]);
+    if (!brand || !flavor) {
+      unresolved(result, source, "Fixed product blocks must state both brand and flavor explicitly.");
+      continue;
+    }
+    const nextHeader = headers.slice(headerIndex + 1)
+      .find((candidate) => candidate.column === column && candidate.row > headerRow);
+    const blockEnd = nextHeader?.row ?? sheet.rows.length;
+    const values = {};
+    const reviewOnly = [];
+    let applicatorSlot = 0;
+    let pepperoniSlot = 0;
+    let sauceSeen = false;
+    const review = (row, cellColumn, kind, value = sheet.rows[row]?.[cellColumn]) => {
+      reviewOnly.push({ source: cellRef(sheet.name, row, cellColumn), kind, value: text(value) });
+    };
+    const reviewExtras = (row) => {
+      for (let cellColumn = column + 2; cellColumn < (sheet.rows[row]?.length ?? 0); cellColumn += 1) {
+        if (!text(sheet.rows[row]?.[cellColumn])) break;
+        review(row, cellColumn, formulas.has(`${row}:${cellColumn}`) ? "formula" : "alternate-or-unmapped");
+      }
+    };
+    const primaryNumber = (row, kind) => {
+      if (formulas.has(`${row}:${column + 1}`)) {
+        review(row, column + 1, "formula");
+        return null;
+      }
+      const value = numeric(sheet.rows[row]?.[column + 1]);
+      if (value === null && text(sheet.rows[row]?.[column + 1])) review(row, column + 1, kind);
+      return value;
+    };
+
+    for (let row = crustRow; row < blockEnd; row += 1) {
+      const label = firstLine(sheet.rows[row]?.[column]);
+      if (!label) continue;
+      if (/^weight spec range$/iu.test(label)) {
+        review(row, column + 1, "weight-spec-range");
+        reviewExtras(row);
+        break;
+      }
+      if (/^target weight$/iu.test(label)) {
+        review(row, column + 1, "target-weight");
+        reviewExtras(row);
+        continue;
+      }
+      if (isCrust(row, column)) {
+        const doughRecipeName = cleanDoughReference(label);
+        if (doughRecipeName) values.doughRecipeName = doughRecipeName;
+        const dieType = explicitDieFromCrust(label, doughRecipeName);
+        if (dieType) values.dieType = dieType;
+        const weight = primaryNumber(row, "crust-weight");
+        if (weight !== null) {
+          if (/\b(?:recipes?|doughs?)\b/iu.test(doughRecipeName)) values.targetDoughballWeight = weight;
+          else review(row, column + 1, "purchased-crust-weight");
+        }
+        reviewExtras(row);
+        continue;
+      }
+      if (/^app(?:licator|lcator)\s*-/iu.test(label)) {
+        applicatorSlot += 1;
+        const type = text(label.replace(/^app(?:licator|lcator)\s*-\s*/iu, ""));
+        if (applicatorSlot <= 4) {
+          values[`app${applicatorSlot}Type`] = type;
+          const ounces = primaryNumber(row, "applicator-weight");
+          if (ounces !== null) values[`app${applicatorSlot}OzPerPizza`] = ounces;
+        } else {
+          review(row, column, "more-than-four-applicators", label);
+          review(row, column + 1, "more-than-four-applicators");
+        }
+        reviewExtras(row);
+        continue;
+      }
+      if (/^pepperoni\b/iu.test(label)) {
+        pepperoniSlot += 1;
+        const type = text(firstLine(label).replace(/\s*\([^()]*\).*$/u, ""));
+        if (pepperoniSlot <= 2) {
+          values[`pep${pepperoniSlot}Type`] = type;
+          if (formulas.has(`${row}:${column + 1}`)) {
+            review(row, column + 1, "formula");
+          } else {
+            const amount = text(sheet.rows[row]?.[column + 1]);
+            const match = amount.match(/^(\d+)\s*=\s*((?:0|[1-9]\d*)(?:\.\d+)?)(?:\s+(.+))?$/u);
+            const ounces = numeric(amount);
+            if (match) {
+              values[`pep${pepperoniSlot}Sticks`] = Number(match[1]);
+              values[`pep${pepperoniSlot}OzPerPizza`] = Number(match[2]);
+              if (match[3]) review(row, column + 1, "pepperoni-annotation", match[3]);
+            } else if (ounces !== null) {
+              values[`pep${pepperoniSlot}OzPerPizza`] = ounces;
+              review(row, column + 1, "pepperoni-stick-count-unavailable");
+            } else if (amount) review(row, column + 1, "pepperoni-amount");
+          }
+        } else {
+          review(row, column, "more-than-two-pepperoni-slots", label);
+          review(row, column + 1, "more-than-two-pepperoni-slots");
+        }
+        reviewExtras(row);
+        continue;
+      }
+      if (/^(?:oz|soy(?:\s*&\s*\w+)?\s+allergen)$/iu.test(label)) continue;
+      if (!sauceSeen) {
+        sauceSeen = true;
+        values.frontlineRecipeName = cleanSauceReference(label);
+        const ounces = primaryNumber(row, "sauce-weight");
+        if (ounces !== null) values.sauceOzPerPizza = ounces;
+      } else {
+        review(row, column, "additional-unmapped-product-row", label);
+        review(row, column + 1, "additional-unmapped-product-row");
+      }
+      reviewExtras(row);
+    }
+    if (!Object.keys(values).length) {
+      unresolved(result, source, "No literal fixed-block values map safely to a V3 profile.");
+      continue;
+    }
+    outputRecord(result, "spec-sheets", sheet.name, headerRow, `${brand} ${flavor}`,
+      `${brand} · ${flavor}`, brand, flavor, values, source,
+      { layout: "fixed-product-block", reviewOnly });
+    if (reviewOnly.length) {
+      unresolved(result, source, "Alternate values, formulas, target ranges, or unmapped product cells remain review-only.");
+    }
+  }
+  return true;
+}
+
 function specRows(result, sheet) {
   const header = matchingHeader(sheet, (headers) => headers.includes("brand") && headers.includes("flavor"));
   if (!header) {
+    if (specProductRows(result, sheet)) return;
     if (nonemptyRows(sheet).length) {
       result.sourceRows += 1;
-      unresolved(result, `${sheet.name}!sheet`, "No supported Brand/Flavor profile table was found; this sheet remains review-only.");
+      unresolved(result, `${sheet.name}!sheet`, "No supported Brand/Flavor profile table or fixed product block was found; this sheet remains review-only.");
     }
     return;
   }
@@ -529,7 +753,8 @@ function cheeseRows(result, sheet) {
         if (!componentName && !amountText) break;
         if (!componentName) break;
         result.sourceRows += 1;
-        const amount = numeric(amountText);
+        const amount = numeric(amountText)
+          ?? numericWithParenthetical(amountText, /^(?:0|[1-9]\d*)(?:\.\d+)?\s*oz$/iu);
         if (formula.has(cursor)) {
           issues.push(`${sourceRef(sheet.name, cursor)}: formula or cached quantity needs review`);
         } else if (amount === null) {
@@ -758,7 +983,202 @@ function extractTrailingParentheses(value) {
   return null;
 }
 
+function sauceProcedureRows(result, sheet) {
+  const formulas = formulaCells(sheet);
+  let recipeName = "";
+  let titleCell = null;
+  for (let row = 0; row < Math.min(sheet.rows.length, 12); row += 1) {
+    for (let column = 0; column < (sheet.rows[row]?.length ?? 0); column += 1) {
+      const value = firstLine(sheet.rows[row]?.[column]);
+      if (!/\bsauce\b/iu.test(value) || /^(?:materials|sauce barrel)$/iu.test(value)
+        || /^(?:all ingredients|always tare|notes?:)/iu.test(value)) continue;
+      recipeName = text(value.replace(/\s+(?:drum\s+)?procedure$/iu, ""));
+      titleCell = { row, column };
+      break;
+    }
+    if (recipeName) break;
+  }
+  if (!recipeName) return false;
+  const allText = sheet.rows.flat().map(text).join(" ");
+  const procedureLike = /\bmaterials\b/iu.test(allText) || /\bprocess\b/iu.test(allText)
+    || sheet.rows.some((row) => row.some((cell) => ["lbs", "drumbatch"].includes(key(cell))));
+  if (!procedureLike) return false;
+
+  const reviewOnly = [];
+  const procedure = [];
+  const consumed = new Set();
+  const consume = (row, column) => consumed.add(`${row}:${column}`);
+  const review = (row, column, kind, value = sheet.rows[row]?.[column]) => {
+    reviewOnly.push({ source: cellRef(sheet.name, row, column), kind, value: text(value) });
+  };
+  let table = null;
+  for (let row = 0; row < sheet.rows.length && !table; row += 1) {
+    for (let column = 1; column < (sheet.rows[row]?.length ?? 0); column += 1) {
+      if (key(sheet.rows[row]?.[column]) !== "lbs") continue;
+      const labelColumn = column - 1;
+      const firstIngredient = text(sheet.rows[row + 1]?.[labelColumn]);
+      if (!firstIngredient || numeric(firstIngredient) !== null) continue;
+      table = { layout: "literal-lbs", headerRow: row, labelColumn, amountColumn: column, startRow: row + 1 };
+      break;
+    }
+  }
+  if (!table) {
+    for (let row = 0; row < sheet.rows.length && !table; row += 1) {
+      for (let column = 0; column + 2 < (sheet.rows[row]?.length ?? 0); column += 1) {
+        if (key(sheet.rows[row]?.[column]) !== "drumbatch") continue;
+        const full = key(sheet.rows[row]?.[column + 1]);
+        const half = key(sheet.rows[row]?.[column + 2]);
+        if (!full.startsWith("full") || !half.startsWith("half")) {
+          unresolved(result, cellRef(sheet.name, row, column),
+            "DRUM BATCH tables must explicitly identify adjacent full and half columns; this sheet remains review-only.");
+          table = { invalid: true };
+          break;
+        }
+        table = { layout: "drum-full-batch", headerRow: row, labelColumn: column, amountColumn: column + 1, startRow: row + 1 };
+      }
+    }
+  }
+
+  if (table?.invalid) {
+    table = null;
+  }
+  if (!table) {
+    const candidates = [];
+    for (let labelColumn = 0; labelColumn + 2 < Math.max(0, ...sheet.rows.map((row) => row.length)); labelColumn += 1) {
+      for (let amountColumn = labelColumn + 1; amountColumn <= labelColumn + 2; amountColumn += 1) {
+        const unitColumn = amountColumn + 1;
+        let start = -1;
+        const finish = (end) => {
+          if (start >= 0 && end - start >= 2) candidates.push({ labelColumn, amountColumn, unitColumn, startRow: start, endRow: end });
+          start = -1;
+        };
+        for (let row = 0; row <= sheet.rows.length; row += 1) {
+          const unit = key(sheet.rows[row]?.[unitColumn]);
+          const ingredient = text(sheet.rows[row]?.[labelColumn]);
+          const amount = text(sheet.rows[row]?.[amountColumn]);
+          const spacerIsBlank = amountColumn === labelColumn + 1 || !text(sheet.rows[row]?.[labelColumn + 1]);
+          const candidate = row < sheet.rows.length && ingredient && numeric(ingredient) === null && spacerIsBlank
+            && /^(?:lbs?|qt|each|gallons?|oz|ounces?)(?:\b|\d)/iu.test(unit)
+            && (numeric(amount) !== null || formulas.has(`${row}:${amountColumn}`));
+          if (candidate) {
+            if (start < 0) start = row;
+          } else finish(row);
+        }
+      }
+    }
+    if (candidates.length) {
+      candidates.sort((left, right) => (right.endRow - right.startRow) - (left.endRow - left.startRow));
+      const candidate = candidates[0];
+      table = { ...candidate, layout: "per-row-lbs", headerRow: candidate.startRow - 1 };
+    }
+  }
+
+  const collectProcedure = () => {
+    for (const { row, index } of nonemptyRows(sheet)) {
+      const cells = row.flatMap((value, column) => {
+        if (!text(value) || consumed.has(`${index}:${column}`)) return [];
+        if (titleCell?.row === index && titleCell.column === column) return [];
+        return [{ column, value: text(value) }];
+      });
+      if (!cells.length) continue;
+      const line = cells.map((cell) => cell.value).join(" ");
+      if (/^(?:\d{1,2}[\/]\d{1,2}[\/]\d{2,4}\s*)?(?:rev(?:ision)?\.?\s*\d+)$/iu.test(line)
+        || /^\d{1,2}[\/]\d{1,2}[\/]\d{2,4}\s+(?:rev(?:ision)?\.?\s*\d+)$/iu.test(line)) continue;
+      procedure.push({ source: cellRef(sheet.name, index, cells[0].column), text: line.slice(0, 1000) });
+    }
+  };
+
+  if (!table) {
+    result.sourceRows += 1;
+    unresolved(result, `${sheet.name}!sheet`, "No literal sauce recipe table was recognized; the procedure remains review-only.");
+    collectProcedure();
+    for (const entry of procedure) unresolved(result, entry.source, `Review-only sauce procedure text: ${entry.text}`);
+    return true;
+  }
+
+  const mixedOrExperimental = /(?:\bnot tested\b|\btested and\b|\bexperimental\b)/iu.test(allText)
+    || (table.layout === "per-row-lbs" && Array.from({ length: table.endRow - table.startRow }, (_, offset) => {
+      const unit = key(sheet.rows[table.startRow + offset]?.[table.unitColumn]);
+      return !/^lbs?(?:\b|\d)/iu.test(unit);
+    }).some(Boolean));
+  if (mixedOrExperimental) {
+    result.sourceRows += 1;
+    for (let row = table.startRow; row < (table.endRow ?? sheet.rows.length); row += 1) {
+      consume(row, table.labelColumn);
+      consume(row, table.amountColumn);
+      if (table.unitColumn !== undefined) consume(row, table.unitColumn);
+    }
+    collectProcedure();
+    unresolved(result, cellRef(sheet.name, table.startRow, table.labelColumn),
+      "Mixed-unit or experimental/test-not-tested sauce tables remain review-only; no recipe was staged.");
+    for (const entry of procedure) unresolved(result, entry.source, `Review-only sauce procedure text: ${entry.text}`);
+    return true;
+  }
+
+  result.sourceRows += 1;
+  const components = [];
+  let totalRow = -1;
+  const endRow = table.endRow ?? sheet.rows.length;
+  for (let row = table.startRow; row < endRow; row += 1) {
+    const ingredient = firstLine(sheet.rows[row]?.[table.labelColumn]);
+    if (/^total(?:\s+weight)?$/iu.test(ingredient)) {
+      totalRow = row;
+      consume(row, table.labelColumn);
+      consume(row, table.amountColumn);
+      break;
+    }
+    if (!ingredient) {
+      if (table.layout === "per-row-lbs") continue;
+      if (dataRow(sheet.rows[row] ?? [])) continue;
+      if (components.length) break;
+      continue;
+    }
+    consume(row, table.labelColumn);
+    consume(row, table.amountColumn);
+    if (table.unitColumn !== undefined) consume(row, table.unitColumn);
+    const amountText = text(sheet.rows[row]?.[table.amountColumn]);
+    let amount = null;
+    if (formulas.has(`${row}:${table.amountColumn}`)) {
+      review(row, table.amountColumn, "formula");
+    } else {
+      amount = numeric(amountText) ?? (table.layout === "per-row-lbs" ? null : numericWithParenthetical(amountText));
+      if (amount === null) review(row, table.amountColumn, "nonliteral-or-missing-lbs");
+    }
+    if (amount !== null) components.push({ ingredient, lbs: amount });
+    for (let column = table.amountColumn + 1; column < (sheet.rows[row]?.length ?? 0); column += 1) {
+      if (column === table.unitColumn || !text(sheet.rows[row]?.[column])) continue;
+      review(row, column, formulas.has(`${row}:${column}`) ? "alternate-formula-batch" : "alternate-or-annotation");
+    }
+  }
+  if (table.headerRow >= 0) {
+    for (let column = 0; column < (sheet.rows[table.headerRow]?.length ?? 0); column += 1) consume(table.headerRow, column);
+  }
+  if (totalRow >= 0 && !formulas.has(`${totalRow}:${table.amountColumn}`)) {
+    const total = numeric(sheet.rows[totalRow]?.[table.amountColumn])
+      ?? numericWithParenthetical(sheet.rows[totalRow]?.[table.amountColumn]);
+    if (total !== null) table.total = total;
+    else if (text(sheet.rows[totalRow]?.[table.amountColumn])) review(totalRow, table.amountColumn, "nonliteral-total");
+  } else if (totalRow >= 0) review(totalRow, table.amountColumn, "formula-total");
+  collectProcedure();
+  if (!components.length) {
+    unresolved(result, cellRef(sheet.name, table.startRow, table.labelColumn),
+      "The sauce table has no readable literal base-batch ingredients; no recipe was staged.");
+    for (const entry of procedure) unresolved(result, entry.source, `Review-only sauce procedure text: ${entry.text}`);
+    return true;
+  }
+  const values = { frontlineRecipeName: recipeName, frontlineRecipe: components };
+  if (table.total !== undefined) values.sauceBarrelLbs = table.total;
+  const source = cellRef(sheet.name, Math.max(0, table.headerRow), table.labelColumn);
+  outputRecord(result, "sauce-guides", sheet.name, Math.max(0, table.headerRow), recipeName,
+    `${FAMILY_LABELS["sauce-guides"]}: ${recipeName}`, "", "", values, source,
+    { layout: table.layout, reviewOnly, procedure });
+  unresolved(result, source,
+    "Materials, instructions, formula totals, alternate batches, and annotations remain review-only where present.");
+  return true;
+}
+
 function sauceRows(result, sheet) {
+  if (sauceProcedureRows(result, sheet)) return;
   const formula = formulaRows(sheet);
   const lines = nonemptyRows(sheet);
   let recognized = 0;

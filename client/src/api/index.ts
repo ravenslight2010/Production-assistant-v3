@@ -783,7 +783,7 @@ export function isSourceImportSummary(value: unknown): value is SourceImportSumm
   return object(value)
     && SOURCE_WORKBOOK_FAMILIES.includes(value.sourceFamily as SourceWorkbookFamily)
     && typeof value.sourceSha256 === "string" && /^[0-9a-f]{64}$/u.test(value.sourceSha256)
-    && value.parserVersion === "v1-source-import/1"
+    && ["v1-source-import/1", "v1-source-import/2"].includes(String(value.parserVersion))
     && ["sourceRows", "importedRows", "skippedRows", "unresolvedRows"].every((key) =>
       Number.isSafeInteger(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= 2000);
 }
@@ -791,7 +791,7 @@ export function isSourceImportSummary(value: unknown): value is SourceImportSumm
 function isSourceWorkbookPreview(value: unknown): value is SourceWorkbookPreview {
   if (!object(value) || !SOURCE_WORKBOOK_FAMILIES.includes(value.family as SourceWorkbookFamily)) return false;
   const targetFamily = value.family === "premix-sheets" ? "mixes" : "run-templates";
-  return value.targetFamily === targetFamily && value.parserVersion === "v1-source-import/1"
+  return value.targetFamily === targetFamily && value.parserVersion === "v1-source-import/2"
     && typeof value.fileSha256 === "string" && /^[0-9a-f]{64}$/u.test(value.fileSha256)
     && Number.isSafeInteger(value.sourceRows) && Number(value.sourceRows) >= 0 && Number(value.sourceRows) <= 2000
     && Number.isSafeInteger(value.proposedRows) && Number(value.proposedRows) >= 0 && Number(value.proposedRows) <= 2000

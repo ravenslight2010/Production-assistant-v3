@@ -2350,7 +2350,7 @@ export interface components {
             /** @enum {string} */
             targetFamily: "mixes" | "run-templates";
             /** @constant */
-            parserVersion: "v1-source-import/1";
+            parserVersion: "v1-source-import/2";
             fileSha256: string;
             /** @description Parser-counted physical rows; a row can fan out to flavors or several rows can group into one record. */
             sourceRows: number;
@@ -2377,8 +2377,11 @@ export interface components {
             /** @enum {string} */
             sourceFamily: "spec-sheets" | "premix-sheets" | "cheese-mix-specs" | "shipping-guides" | "sauce-guides" | "dough-guides";
             sourceSha256: string;
-            /** @constant */
-            parserVersion: "v1-source-import/1";
+            /**
+             * @description New staging requires /2; /1 remains valid for canonical import history.
+             * @enum {string}
+             */
+            parserVersion: "v1-source-import/1" | "v1-source-import/2";
             /** @description Parser-counted physical rows; a row can fan out to flavors or several rows can group into one record. */
             sourceRows: number;
             /** @description Reviewed V3 records staged; Apply separately reports created and updated targets. */

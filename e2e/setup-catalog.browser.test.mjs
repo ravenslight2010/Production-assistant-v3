@@ -248,7 +248,7 @@ async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = 
       assert.equal(Buffer.from(body.workbookBase64, "base64").toString(), "synthetic workbook bytes");
       if (body.family === "cheese-mix-specs") {
         return json(route, {
-          family: body.family, targetFamily: "run-templates", parserVersion: "v1-source-import/1",
+          family: body.family, targetFamily: "run-templates", parserVersion: "v1-source-import/2",
           fileSha256: "c".repeat(64), sourceRows: 1, proposedRows: 1, skippedRows: 0, unresolvedRows: [],
           records: [{ source: "cheese.xlsx / Sheet1 / row 2", targetFamily: "run-templates", record: {
             code: "CHEESE-SOURCE", name: "Cheese Source", data: { brand: "Brand", flavor: "Original", values: {} },
@@ -256,7 +256,7 @@ async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = 
         });
       }
       return json(route, {
-        family: body.family, targetFamily: "run-templates", parserVersion: "v1-source-import/1",
+        family: body.family, targetFamily: "run-templates", parserVersion: "v1-source-import/2",
         fileSha256: "a".repeat(64), sourceRows: 4, proposedRows: 2, skippedRows: 1,
         unresolvedRows: [{ source: "source.xlsx / Sheet1 / row 5", reason: "Unsupported source row requires manager review." }],
         records: [
@@ -486,7 +486,7 @@ test("source workbook review gates edits, preserves source summaries on exact re
   assert.equal(api.imports.size, 1);
   const originalRequest = [...api.requests.values()][0];
   assert.deepEqual(originalRequest.sourceSummary, {
-    sourceFamily: "spec-sheets", sourceSha256: "a".repeat(64), parserVersion: "v1-source-import/1",
+    sourceFamily: "spec-sheets", sourceSha256: "a".repeat(64), parserVersion: "v1-source-import/2",
     sourceRows: 4, importedRows: 1, skippedRows: 2, unresolvedRows: 1,
   });
   assert.equal(parseSetupCatalogCsv(originalRequest.family, originalRequest.csv)[0].code, "SOURCE-EDITED");
@@ -525,7 +525,7 @@ test("cheese source review requires an explicit applicator slot before staging",
   await page.getByText(/Reviewed source records staged\. Review the stored records/).waitFor();
   assert.equal(api.imports.size, 1);
   assert.deepEqual([...api.requests.values()][0].sourceSummary, {
-    sourceFamily: "cheese-mix-specs", sourceSha256: "c".repeat(64), parserVersion: "v1-source-import/1",
+    sourceFamily: "cheese-mix-specs", sourceSha256: "c".repeat(64), parserVersion: "v1-source-import/2",
     sourceRows: 1, importedRows: 1, skippedRows: 0, unresolvedRows: 0,
   });
   await context.close();

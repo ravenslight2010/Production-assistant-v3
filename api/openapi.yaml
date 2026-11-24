@@ -4845,7 +4845,7 @@ components:
           enum: [mixes, run-templates]
         parserVersion:
           type: string
-          const: v1-source-import/1
+          const: v1-source-import/2
         fileSha256:
           type: string
           pattern: "^[0-9a-f]{64}$"
@@ -4913,7 +4913,8 @@ components:
           pattern: "^[0-9a-f]{64}$"
         parserVersion:
           type: string
-          const: v1-source-import/1
+          enum: [v1-source-import/1, v1-source-import/2]
+          description: New staging requires /2; /1 remains valid for canonical import history.
         sourceRows:
           type: integer
           minimum: 0

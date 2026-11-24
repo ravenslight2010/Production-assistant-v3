@@ -721,6 +721,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0018-temporary-substitutions.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0019-operational-mix-plan.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0020-account-lifecycle.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0021-source-workbook-parser-v2.sql" >/dev/null
 "${PSQL[@]}" -c "
   GRANT EXECUTE ON FUNCTION v3.list_staff_accounts(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_staff_roles(uuid) TO v3_api_test;
@@ -830,6 +831,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0018-temporary-substitutions.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0019-operational-mix-plan.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0020-account-lifecycle.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0021-source-workbook-parser-v2.test.sql"
 ACCOUNT_FUNCTION_PRIVILEGES="$("${PSQL[@]}" -c "
   SET ROLE v3_api_test;
   SELECT has_function_privilege(current_user,

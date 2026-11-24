@@ -31,7 +31,7 @@ function validSourceSummary(value) {
     && ["spec-sheets", "premix-sheets", "cheese-mix-specs", "shipping-guides", "sauce-guides", "dough-guides"]
       .includes(value.sourceFamily)
     && typeof value.sourceSha256 === "string" && /^[0-9a-f]{64}$/u.test(value.sourceSha256)
-    && value.parserVersion === "v1-source-import/1"
+    && ["v1-source-import/1", "v1-source-import/2"].includes(value.parserVersion)
     && ["sourceRows", "importedRows", "skippedRows", "unresolvedRows"]
       .every((key) => Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 2000);
 }
@@ -143,7 +143,7 @@ function validateSourcePreview(value) {
     && ["spec-sheets", "premix-sheets", "cheese-mix-specs", "shipping-guides", "sauce-guides", "dough-guides"]
       .includes(value.family)
     && value.targetFamily === (value.family === "premix-sheets" ? "mixes" : "run-templates")
-    && value.parserVersion === "v1-source-import/1"
+    && value.parserVersion === "v1-source-import/2"
     && typeof value.fileSha256 === "string" && /^[0-9a-f]{64}$/u.test(value.fileSha256)
     && Number.isSafeInteger(value.sourceRows) && value.sourceRows >= 0 && value.sourceRows <= 2000
     && Number.isSafeInteger(value.proposedRows) && value.proposedRows >= 0 && value.proposedRows <= 2000

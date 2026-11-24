@@ -3,7 +3,7 @@ import { centralDate, isValidProductionDate } from "./schedule-planning.mjs";
 
 export const scheduleWorkbookLimits = Object.freeze({
   maxBytes: 5 * 1024 * 1024,
-  maxSheets: 100,
+  maxSheets: 128,
   maxRows: 20_000,
   maxColumns: 300,
   maxCells: 500_000,
@@ -111,10 +111,17 @@ function parseBlocks(workbook, today) {
       };
       let date = null;
       let dateColumn = -1;
+      let formulaDate = false;
       for (let column = 0; column < header.length; column += 1) {
         const cell = cellAt(sheet, index, column);
-        if (typeof cell?.f === "string") continue;
         const candidate = dateFromCell(header[column]);
+        if (typeof cell?.f === "string") {
+          if (candidate) {
+            formulaDate = true;
+            dateColumn = column;
+          }
+          continue;
+        }
         if (candidate) {
           date = candidate;
           dateColumn = column;
@@ -141,7 +148,6 @@ function parseBlocks(workbook, today) {
         rowCounter += 1;
         const sourceRow = rowIndex + 1;
         const formulaColumns = [columns.brand, columns.flavor, columns.units, columns.customer, columns.po, columns.ship];
-        const formulaDate = dateColumn >= 0 && typeof cellAt(sheet, index, dateColumn)?.f === "string";
         if (formulaPresent(sheet, rowIndex, formulaColumns) || formulaDate) {
           errors.push({ rowNumber: rowCounter, sheet: sheetName, date, message: "Formula cells need a manager review; cached formula values are not imported." });
           continue;
@@ -269,7 +275,7 @@ export function parseScheduleWorkbook(bytes, { fileName = "", today = centralDat
     throw new Error("The workbook could not be read. Check that it is a supported XLSX file.");
   }
   if (workbook.SheetNames.length < 1 || workbook.SheetNames.length > scheduleWorkbookLimits.maxSheets) {
-    throw new Error("The workbook must contain 1–100 worksheets.");
+    throw new Error(`The workbook must contain 1–${scheduleWorkbookLimits.maxSheets} worksheets.`);
   }
   let cells = 0;
   for (const sheetName of workbook.SheetNames) {

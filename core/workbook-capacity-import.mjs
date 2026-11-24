@@ -6,7 +6,7 @@ const MAX_WORKBOOK_BYTES = 5 * 1024 * 1024;
 const MAX_ZIP_ENTRIES = 256;
 const MAX_ENTRY_BYTES = 2 * 1024 * 1024;
 const MAX_TOTAL_EXPANDED_BYTES = 10 * 1024 * 1024;
-const MAX_SHEETS = 32;
+const MAX_SHEETS = 64;
 const MAX_ROWS = 2000;
 const MAX_COLUMNS = 256;
 const MAX_CELLS = 100_000;
@@ -124,7 +124,7 @@ function readWorkbook(buffer, fileName) {
   }
   if (!Array.isArray(workbook.SheetNames) || workbook.SheetNames.length < 1
     || workbook.SheetNames.length > MAX_SHEETS) {
-    fail("The workbook must contain between one and 32 sheets.");
+    fail("The workbook must contain between one and 64 sheets.");
   }
   return { workbook, fileName };
 }
@@ -134,22 +134,10 @@ export function readWorkbookSheets(buffer, fileName) {
   const { workbook } = readWorkbook(buffer, parsedFileName);
   const sheets = workbook.SheetNames.map((name) => {
     const sheet = workbook.Sheets[name];
-    const formulas = [];
-    if (sheet && typeof sheet["!ref"] === "string") {
-      let range;
-      try {
-        range = XLSX.utils.decode_range(sheet["!ref"]);
-      } catch {
-        fail("The workbook contains an invalid sheet range.");
-      }
-      for (let row = range.s.r; row <= range.e.r; row += 1) {
-        for (let column = range.s.c; column <= range.e.c; column += 1) {
-          const cell = sheet[XLSX.utils.encode_cell({ r: row, c: column })];
-          if (typeof cell?.f === "string" && cell.f) formulas.push({ row, column });
-        }
-      }
-    }
-    return { name, rows: sheetRows(sheet, name), formulas };
+    const cells = sheetCellEntries(sheet, name);
+    const formulas = cells.filter(({ cell }) => typeof cell.f === "string" && cell.f)
+      .map(({ row, column }) => ({ row, column }));
+    return { name, rows: sheetRows(cells), formulas };
   });
   return {
     fileName: parsedFileName,
@@ -158,29 +146,41 @@ export function readWorkbookSheets(buffer, fileName) {
   };
 }
 
-function sheetRows(sheet, sheetName) {
+function sheetCellEntries(sheet, sheetName) {
   if (!sheet || typeof sheet["!ref"] !== "string") return [];
-  let range;
   try {
-    range = XLSX.utils.decode_range(sheet["!ref"]);
+    XLSX.utils.decode_range(sheet["!ref"]);
   } catch {
     fail("The workbook contains an invalid sheet range.");
   }
-  const rowCount = range.e.r + 1;
-  const columnCount = range.e.c + 1;
+  const entries = [];
+  for (const [address, cell] of Object.entries(sheet)) {
+    if (address.startsWith("!")) continue;
+    let position;
+    try {
+      position = XLSX.utils.decode_cell(address);
+    } catch {
+      fail(`The workbook sheet ${sheetName} contains an invalid cell address.`);
+    }
+    entries.push({ cell, row: position.r, column: position.c });
+    if (entries.length > MAX_CELLS) fail("The workbook sheet is too large to review safely.");
+  }
+  return entries;
+}
+
+function sheetRows(cells) {
+  if (cells.length === 0) return [];
+  const rowCount = Math.max(...cells.map(({ row }) => row)) + 1;
+  const columnCount = Math.max(...cells.map(({ column }) => column)) + 1;
   if (rowCount * columnCount > MAX_CELLS || rowCount > MAX_ROWS + 100 || columnCount > MAX_COLUMNS) {
     fail("The workbook sheet is too large to review safely.");
   }
   const rows = Array.from({ length: rowCount }, () => Array(columnCount).fill(""));
-  for (let row = range.s.r; row <= range.e.r; row += 1) {
-    for (let column = range.s.c; column <= range.e.c; column += 1) {
-      const cell = sheet[XLSX.utils.encode_cell({ r: row, c: column })];
-      if (!cell) continue;
-      const formatted = typeof cell.w === "string" ? cell.w : "";
-      if (formatted) rows[row][column] = formatted;
-      else if (!cell.f && (cell.t === "s" || cell.t === "str")) rows[row][column] = String(cell.v ?? "");
-      else if (!cell.f && cell.t === "n" && Number.isFinite(cell.v)) rows[row][column] = String(cell.v);
-    }
+  for (const { cell, row, column } of cells) {
+    const formatted = typeof cell.w === "string" ? cell.w : "";
+    if (formatted) rows[row][column] = formatted;
+    else if (!cell.f && (cell.t === "s" || cell.t === "str")) rows[row][column] = String(cell.v ?? "");
+    else if (!cell.f && cell.t === "n" && Number.isFinite(cell.v)) rows[row][column] = String(cell.v);
   }
   return rows;
 }
@@ -293,7 +293,7 @@ function doughRowsFromWorkbook(workbook, fileName) {
   const output = [];
   const occurrences = new Map();
   for (const sheetName of workbook.SheetNames) {
-    const rows = sheetRows(workbook.Sheets[sheetName], sheetName);
+    const rows = sheetRows(sheetCellEntries(workbook.Sheets[sheetName], sheetName));
     const header = matchingDoughHeader(rows);
     if (!header) continue;
     let blankRows = 0;
@@ -364,7 +364,7 @@ function parsePizzasPerCase(value) {
 function shippingRowsFromWorkbook(workbook, fileName) {
   const output = [];
   for (const sheetName of workbook.SheetNames) {
-    const rows = sheetRows(workbook.Sheets[sheetName], sheetName);
+    const rows = sheetRows(sheetCellEntries(workbook.Sheets[sheetName], sheetName));
     let headerIndex = -1;
     let nameColumn = -1;
     let pizzasColumn = -1;

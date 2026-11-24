@@ -591,7 +591,7 @@ test("source workbook preview is manager-only and its reviewed summary is bound 
   const summary = {
     sourceFamily: "sauce-guides",
     sourceSha256: "a".repeat(64),
-    parserVersion: "v1-source-import/1",
+    parserVersion: "v1-source-import/2",
     sourceRows: 1,
     importedRows: 1,
     skippedRows: 0,
@@ -628,6 +628,7 @@ test("source workbook preview is manager-only and its reviewed summary is bound 
   assert.equal(preview.status, 200);
   const previewBody = await preview.json();
   assert.equal(previewBody.family, "sauce-guides");
+  assert.equal(previewBody.parserVersion, "v1-source-import/2");
   assert.equal(previewBody.records.length, 1);
   assert.equal(previewBody.records[0].record.data.values.sauceOzPerPizza, 3.5);
   assert.equal(api.calls.length, 0);
@@ -657,6 +658,17 @@ test("source workbook preview is manager-only and its reviewed summary is bound 
   });
   assert.equal(mismatched.status, 400);
   assert.notEqual(api.calls[0].values[3], api.calls[2].values[3]);
+
+  const legacy = await send(api.baseUrl, "/api/v3/setup-catalog/imports", {
+    method: "POST",
+    body: {
+      ...request,
+      requestId: "source-sauce-legacy",
+      sourceSummary: { ...summary, parserVersion: "v1-source-import/1" },
+    },
+  });
+  assert.equal(legacy.status, 400);
+  assert.equal(api.calls.length, 3, "legacy parser summaries must not reach new staging");
 });
 
 test("workbook source rows are linked exactly and staged through the reviewed import lifecycle", async (t) => {

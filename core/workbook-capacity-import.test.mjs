@@ -12,6 +12,7 @@ import {
   linkWorkbookCapacityRows,
   parseDoughCapacityWorkbook,
   parseShippingCapacityWorkbook,
+  readWorkbookSheets,
   WorkbookCapacityImportError,
 } from "./workbook-capacity-import.mjs";
 
@@ -119,6 +120,33 @@ test("manager links resolve only unmatched rows and retain the active product's 
     products,
     [],
   )[0].productCode, null);
+});
+
+test("uses real cell bounds instead of empty formatted XFD ranges", () => {
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet([["Acme", 20], [], ["Total", 20]]);
+  sheet["!ref"] = "A1:XFD44";
+  XLSX.utils.book_append_sheet(workbook, sheet, "Sparse");
+  const parsed = readWorkbookSheets(
+    XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }),
+    "sparse.xlsx",
+  );
+  assert.equal(parsed.sheets.length, 1);
+  assert.equal(parsed.sheets[0].rows.length, 3);
+  assert.deepEqual(parsed.sheets[0].rows[0].slice(0, 2), ["Acme", "20"]);
+});
+
+test("accepts the bounded 54-sheet premix shape and rejects sheets beyond the new cap", () => {
+  const sheets = Array.from({ length: 54 }, (_, index) => [`Mix ${index + 1}`, [["Per Pizza", "Per Batch"], [1, 2]]]);
+  const parsed = readWorkbookSheets(makeWorkbook(sheets), "54-sheets.xlsx");
+  assert.equal(parsed.sheets.length, 54);
+  sheets.push(["Mix 55", [[1]]]);
+  assert.doesNotThrow(() => readWorkbookSheets(makeWorkbook(sheets), "55-sheets.xlsx"));
+  while (sheets.length < 65) sheets.push([`Mix ${sheets.length + 1}`, [[1]]]);
+  assert.throws(
+    () => readWorkbookSheets(makeWorkbook(sheets), "65-sheets.xlsx"),
+    /between one and 64 sheets/u,
+  );
 });
 
 test("parses every provisioned dough procedure and shipping guide", privateSourceCorpusTestOptions(), async () => {

@@ -84,6 +84,74 @@ test("maps deterministic spec columns and leaves unsupported recipe columns unre
   assert.match(parsed.unresolvedRows[0].reason, /no approved V3 field mapping/u);
 });
 
+test("parses side-by-side fixed spec blocks and preserves alternate cells for review", () => {
+  const parsed = parseSourceWorkbook("spec-sheets", makeWorkbook([["Profiles", [
+    ["Acme", "9\" Cheese", "", "", "Acme", "12\" Pepperoni"],
+    ["Parbake crust (House Recipe - 12\" Dies)", 7.5, "", "", "Parbake crust (House Recipe - 12\" Dies)", 7.5],
+    ["House Sauce (made in house)", 4, "", "", "House Sauce (made in house)", 4],
+    ["Applicator - Cheese Blend\n2 Mozzarella", 3, 3.25, "", "Applicator - Cheese Blend\n2 Mozzarella", 2.5],
+    ["TARGET WEIGHT", 18, "", "", "Pepperoni Stick (Cured vendor)", "19 = 1.90 *Use approved sticks*"],
+    ["WEIGHT SPEC RANGE", "17.75 - 18.25", "", "", "Applicator - Cheese Blend", 2],
+    [], [], [], [],
+    ["Acme", "PEPPERONI &\nJALAPENO"],
+    ["Vendor Crust 7\"x12\" Oval", 7.25],
+    ["House Sauce", 4],
+    ["TARGET WEIGHT", 16],
+  ]]]), "fixed.xlsx");
+
+  assert.equal(parsed.records.length, 3);
+  assert.deepEqual(parsed.records[0].record.data.values, {
+    doughRecipeName: "House Recipe",
+    dieType: "12\"",
+    targetDoughballWeight: 7.5,
+    frontlineRecipeName: "House Sauce",
+    sauceOzPerPizza: 4,
+    app1Type: "Cheese Blend",
+    app1OzPerPizza: 3,
+  });
+  assert.deepEqual(parsed.records[1].record.data.values, {
+    doughRecipeName: "House Recipe",
+    dieType: "12\"",
+    targetDoughballWeight: 7.5,
+    frontlineRecipeName: "House Sauce",
+    sauceOzPerPizza: 4,
+    app1Type: "Cheese Blend",
+    app1OzPerPizza: 2.5,
+    pep1Type: "Pepperoni Stick",
+    pep1Sticks: 19,
+    pep1OzPerPizza: 1.9,
+    app2Type: "Cheese Blend",
+    app2OzPerPizza: 2,
+  });
+  assert.deepEqual(parsed.records.map((entry) => entry.record.data.flavor), [
+    "9\" Cheese", "12\" Pepperoni", "PEPPERONI & JALAPENO",
+  ]);
+  assert.equal(parsed.records[2].record.data.values.doughRecipeName, "Vendor Crust 7\"x12\" Oval");
+  assert.equal(parsed.records[2].record.data.values.dieType, undefined);
+  assert.equal(parsed.records[2].record.data.values.targetDoughballWeight, undefined);
+  assert.equal(parsed.records[0].sourceDetails.reviewOnly[0].source, "Profiles!C4");
+  assert.equal(parsed.records[0].sourceDetails.reviewOnly[0].value, "3.25");
+  assert.ok(parsed.records[1].sourceDetails.reviewOnly.some((entry) => entry.kind === "pepperoni-annotation"));
+  assert.ok(parsed.unresolvedRows.every((entry) => /review-only/iu.test(entry.reason)));
+});
+
+test("parses annotated cheese pounds without converting or accepting unrelated annotations", () => {
+  const annotated = parseSourceWorkbook("cheese-mix-specs", makeWorkbook([["Acme", [
+    ["All Varieties: Spice Mix"], ["Spice Mix"], ["For 1st Cheese Applicator"], ["", "LBS"],
+    ["Nutmeg", "0.06 (1.0oz)"], ["Total", 0.06],
+  ]]]), "cheese.xlsx");
+  assert.deepEqual(annotated.records[0].record.data.values.app1CheeseRecipe, [
+    { ingredient: "Nutmeg", lbs: 0.06 },
+  ]);
+
+  const unrelated = parseSourceWorkbook("cheese-mix-specs", makeWorkbook([["Acme", [
+    ["All Varieties: Cheddar Mix"], ["Cheddar Mix"], ["For 1st Cheese Applicator"], ["", "LBS"],
+    ["Yellow Cheddar", "14 (1/3 block)"], ["Total", 14],
+  ]]]), "cheese.xlsx");
+  assert.deepEqual(unrelated.records[0].record.data.values, {});
+  assert.match(unrelated.unresolvedRows[0].reason, /not numeric/u);
+});
+
 test("parses side-by-side premix blocks, preserves blanks, and stays idempotent by identity", () => {
   const sheets = [["Mixes", [
     ["Mix Alpha", "", "", "", "Mix Beta"],
@@ -160,6 +228,82 @@ test("maps explicit shipping values but preserves unknown and non-target columns
   assert.equal(parsed.unresolvedRows.length, 1);
   assert.match(parsed.unresolvedRows[0].reason, /dimensions/u);
   assert.match(JSON.stringify(parsed.records[0].sourceDetails), /Grip sheets: X/u);
+});
+
+test("stages literal sauce LBS, full-drum, and per-row-pound recipe tables", () => {
+  const parsed = parseSourceWorkbook("sauce-guides", makeWorkbook([
+    ["Standard", [
+      ["", "House Sauce Procedure"], ["", "MATERIALS"], ["", "", "LBS."],
+      ["", "Water", 10], ["", "Sauce Base", "50 (1 bag)"], ["", "TOTAL WEIGHT", 60],
+      [], ["", "1. Mix until combined."],
+    ]],
+    ["Drum", [
+      ["", "Drum Sauce Procedure"], ["", "MATERIALS"], ["", "DRUM BATCH", "Full Batch", "Half Batch"],
+      ["", "Water", 20, 10], ["", "Drum Mix", 5, 2.5], ["", "TOTAL WEIGHT", 25, 12.5],
+      [], ["", "1. Mix until combined."],
+    ]],
+    ["Per row", [
+      ["", "Row Sauce Procedure"], ["", "Ingredients:"],
+      ["", "Water", 10, "lbs"], ["", "Oil", 2, "lbs"],
+      [], ["", "Process"], ["", "Mix until combined."],
+    ]],
+  ]), "sauces.xlsx");
+
+  assert.equal(parsed.records.length, 3);
+  const standard = parsed.records.find((entry) => entry.record.data.values.frontlineRecipeName === "House Sauce");
+  assert.deepEqual(standard.record.data.values, {
+    frontlineRecipeName: "House Sauce",
+    frontlineRecipe: [{ ingredient: "Water", lbs: 10 }, { ingredient: "Sauce Base", lbs: 50 }],
+    sauceBarrelLbs: 60,
+  });
+  assert.ok(standard.sourceDetails.procedure.some((entry) => /Mix until combined/u.test(entry.text)));
+  const drum = parsed.records.find((entry) => entry.record.data.values.frontlineRecipeName === "Drum Sauce");
+  assert.deepEqual(drum.record.data.values.frontlineRecipe, [
+    { ingredient: "Water", lbs: 20 }, { ingredient: "Drum Mix", lbs: 5 },
+  ]);
+  assert.equal(drum.record.data.values.sauceBarrelLbs, 25);
+  assert.ok(drum.sourceDetails.reviewOnly.some((entry) => entry.value === "10"));
+  const perRow = parsed.records.find((entry) => entry.record.data.values.frontlineRecipeName === "Row Sauce");
+  assert.deepEqual(perRow.record.data.values.frontlineRecipe, [
+    { ingredient: "Water", lbs: 10 }, { ingredient: "Oil", lbs: 2 },
+  ]);
+});
+
+test("keeps literal sauce base batches when alternate batches and totals contain formulas", () => {
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ["", "Formula Sauce Procedure"], ["", "MATERIALS"], ["", "Single Batch", "LBS.", "2 Bags"],
+    ["", "Water", 10, 20], ["", "Sauce Base", 5, 10], ["", "TOTAL WEIGHT", 15, 30],
+  ]);
+  sheet.D4 = { t: "n", f: "C4*2", v: 20, w: "20" };
+  sheet.D5 = { t: "n", f: "C5*2", v: 10, w: "10" };
+  sheet.C6 = { t: "n", f: "SUM(C4:C5)", v: 15, w: "15" };
+  sheet.D6 = { t: "n", f: "SUM(D4:D5)", v: 30, w: "30" };
+  XLSX.utils.book_append_sheet(workbook, sheet, "Sauce");
+  const parsed = parseSourceWorkbook("sauce-guides", XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }), "formula.xlsx");
+
+  assert.equal(parsed.records.length, 1);
+  assert.deepEqual(parsed.records[0].record.data.values, {
+    frontlineRecipeName: "Formula Sauce",
+    frontlineRecipe: [{ ingredient: "Water", lbs: 10 }, { ingredient: "Sauce Base", lbs: 5 }],
+  });
+  assert.ok(parsed.records[0].sourceDetails.reviewOnly.some((entry) => entry.kind === "formula-total"));
+  assert.ok(parsed.records[0].sourceDetails.reviewOnly.some((entry) => entry.kind === "alternate-formula-batch"));
+});
+
+test("keeps mixed-unit and experimental sauce tables review-only", () => {
+  const mixed = parseSourceWorkbook("sauce-guides", makeWorkbook([["Mixed", [
+    ["Mixed Sauce"], ["Ingredients:"], ["Water", "", 28, "qt"], ["Oil", "", 10, "lbs"], ["Process"], ["Mix carefully"],
+  ]]]), "mixed.xlsx");
+  assert.equal(mixed.records.length, 0);
+  assert.ok(mixed.unresolvedRows.some((entry) => /Mixed-unit/iu.test(entry.reason)));
+  assert.ok(mixed.unresolvedRows.some((entry) => /Mix carefully/iu.test(entry.reason)));
+
+  const experimental = parseSourceWorkbook("sauce-guides", makeWorkbook([["Experimental", [
+    ["Test Sauce"], ["Tested and", "Not Tested"], ["Water", 10, "lb"], ["Oil", 2, "lb"], ["Process"], ["Mix carefully"],
+  ]]]), "experimental.xlsx");
+  assert.equal(experimental.records.length, 0);
+  assert.ok(experimental.unresolvedRows.some((entry) => /experimental/iu.test(entry.reason)));
 });
 
 test("parses sauce-guide continuations and exact DOCX paragraphs without applying unsupported text", () => {

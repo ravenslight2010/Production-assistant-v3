@@ -152,7 +152,7 @@ BEGIN
 
   v_source_summary := jsonb_build_object(
     'sourceFamily', 'sauce-guides', 'sourceSha256', repeat('a', 64),
-    'parserVersion', 'v1-source-import/1', 'sourceRows', 1,
+    'parserVersion', 'v1-source-import/2', 'sourceRows', 1,
     'importedRows', 1, 'skippedRows', 2, 'unresolvedRows', 1
   );
   v_result := v3.stage_setup_catalog_import(
