@@ -149,32 +149,34 @@ test("accepts the bounded 54-sheet premix shape and rejects sheets beyond the ne
   );
 });
 
-test("parses every provisioned dough procedure and shipping guide", privateSourceCorpusTestOptions(), async () => {
+test("matches exact private expectations for every dough procedure and shipping guide", privateSourceCorpusTestOptions(), async () => {
   const corpusRoot = requirePrivateSourceCorpus();
-  const files = listPrivateSourceCorpusFiles(corpusRoot);
-  const doughFiles = files.filter((file) => file.family === "dough");
-  const shippingFiles = files.filter((file) => file.family === "shipping");
-  assert.ok(doughFiles.length > 0, "The provisioned corpus must contain dough procedures");
-  assert.ok(shippingFiles.length > 0, "The provisioned corpus must contain shipping guides");
+  const expectationsPath = path.resolve(process.env.V3_PRIVATE_SOURCE_EXPECTATIONS
+    || path.join(path.dirname(path.dirname(corpusRoot)), "parser-expectations.json"));
+  const expectations = JSON.parse(await readFile(expectationsPath, "utf8"));
+  assert.equal(expectations.schemaVersion, "v3-source-parser-expectations/2");
+  const files = listPrivateSourceCorpusFiles(corpusRoot)
+    .filter((file) => file.family === "dough" || file.family === "shipping");
+  assert.deepEqual(Object.keys(expectations.capacity).sort(),
+    files.map((file) => file.relativePath).sort(),
+    "Every current dough and shipping workbook needs exact parser expectations");
 
   const doughResults = [];
-  for (const file of doughFiles) {
+  const shippingResults = [];
+  for (const file of files) {
     assert.equal(file.format, ".xlsx", `${file.relativePath} requires deterministic format support before qualification`);
-    const parsed = parseDoughCapacityWorkbook(await readFile(file.absolutePath), path.basename(file.relativePath));
-    assert.ok(parsed.rows.length > 0, `${file.relativePath} should contain dough rows`);
-    doughResults.push(...parsed.rows);
+    const expected = expectations.capacity[file.relativePath];
+    const parsed = file.family === "dough"
+      ? parseDoughCapacityWorkbook(await readFile(file.absolutePath), path.basename(file.relativePath))
+      : parseShippingCapacityWorkbook(await readFile(file.absolutePath), path.basename(file.relativePath));
+    assert.equal(expected.parser, file.family === "dough" ? "dough-procedure" : "shipping-guide");
+    assert.equal(parsed.fileSha256, expected.sha256, `${file.relativePath} source hash`);
+    assert.deepEqual(parsed, expected.result, `${file.relativePath} exact parsed rows and citations`);
+    (file.family === "dough" ? doughResults : shippingResults).push(...parsed.rows);
   }
   const approvedRow = doughResults.find((row) => row.name === "12'' Aldo");
   assert.equal(approvedRow?.doughballYield, 645.19);
   assert.equal(approvedRow?.source.yieldCell, "Sheet1!E32");
-
-  const shippingResults = [];
-  for (const file of shippingFiles) {
-    assert.equal(file.format, ".xlsx", `${file.relativePath} requires deterministic format support before qualification`);
-    const parsed = parseShippingCapacityWorkbook(await readFile(file.absolutePath), path.basename(file.relativePath));
-    assert.ok(parsed.rows.length > 0, `${file.relativePath} should contain shipping rows`);
-    shippingResults.push(...parsed.rows);
-  }
   assert.ok(shippingResults.some((row) => row.name === "Aldo's" && row.pizzasPerCase === 12));
 });
 

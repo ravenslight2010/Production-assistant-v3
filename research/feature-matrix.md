@@ -1,7 +1,7 @@
 # V1/V2 non-AI feature matrix
 
 Status: approved target scope with implementation waves; not a claim that every row is complete.
-Last updated: 2026-11-24.
+Last updated: 2026-11-25.
 
 ## Disposition and status vocabulary
 
@@ -61,7 +61,7 @@ Status labels describe this checkout: `ported` means the underlying V2 behavior 
 | Schedule catalog | Day planning and schedule editing | Server catalog and date-scoped schedule state | `combine` | `ported` |
 | Schedule commands | Move/edit scheduled work | Revision-fenced schedule commands and exact retry | `rebuild` | `ported` |
 | Schedule estimates | V1 run estimates and schedule warnings | Shared baseline estimates with unknown durations explicit | `combine` | `ported` |
-| Schedule workbook import | V1 schedule workbook review | Deterministic flat/day-block preview and apply boundary | `port` | Preview/Apply `ported`; canonical per-date history/Undo `in progress` |
+| Schedule workbook import | V1 schedule workbook review | Deterministic flat/day-block preview and apply boundary | `port` | `ported` preview, canonical staging/reopen/exact retry, independent per-date Apply, and guarded created-run Undo |
 | Recipe/setup warnings | Scheduled recipe checks | Reviewed catalog linkage | `combine` | `pending` |
 | Operational Mix Plan | Mix presets, mixes, and planning | Listed as later-phase work, not complete parity | `defer` | `pending` |
 
@@ -70,9 +70,9 @@ Status labels describe this checkout: `ported` means the underlying V2 behavior 
 | Feature | V1 behavior | V2 behavior | V3 disposition | Current status |
 |---|---|---|---|---|
 | Product/setup master data | Profiles, recipes, production setups | Reviewed setup catalogs and imported products | `combine`: reviewed setup/master data only | `ported` API and React setup CSV/history; full catalog editors `pending` |
-| Source-workbook preview | Broad V1 workbook imports | Deterministic parse and read-only preview | `rebuild`: no AI fallback | `ported` API and React review for six source families; whole-corpus format/fidelity qualification `in progress` |
-| Mixed queue and combined setup review | V1 multi-file imports and latest-import setup completion | Server-owned staged imports and canonical setup state | `combine`: individual imports remain the only setup writers | `in progress` under the approved import-completion design |
-| Whole-corpus qualification | V1 source-library corpus harness | Separately provisioned private workbook tests | `combine`: manifest-driven private evidence plus public synthetic regressions | `in progress`; private manifest accounts for the complete current corpus; current dough/shipping and five non-schedule evidence pins qualified locally; remaining family parser coverage `not proven` |
+| Source-workbook preview | Broad V1 workbook imports | Deterministic parse and read-only preview | `rebuild`: no AI fallback | `ported` API and React review for six source families; complete current-corpus format/fidelity qualification passed locally |
+| Mixed queue and combined setup review | V1 multi-file imports and latest-import setup completion | Server-owned staged imports and canonical setup state | `combine`: individual imports remain the only setup writers | `ported` mixed queue, canonical combined projection/history, and coordinated review |
+| Whole-corpus qualification | V1 source-library corpus harness | Separately provisioned private workbook tests | `combine`: manifest-driven private evidence plus public synthetic regressions | `ported`; required-private qualification passed locally for all 59 current files against exact manifest/hash, parser, relationship, and deterministic combined-projection expectations; private evidence remains outside Git |
 | Review and explicit Apply | Human review in V1 workflows | Staged imports with explicit manager Apply and governed Undo | `combine` | `ported` |
 | Import history/retry | V1 import history and reconciliation | Persisted history, request hashes, safe idempotent retry, canonical reopen | `combine` | `ported` |
 | CSV templates | V1 import/export templates | Strict synthetic templates, shared CSV parsers, and React template download | `combine` | `ported` |
@@ -150,3 +150,15 @@ Qualification limits:
 - Private-workbook fidelity: **NOT PROVEN**; the two corpus tests remain explicit skips.
 - Supervised API plus external worker as one deployed runtime, physical Android/iOS devices, accessibility audit, Reserved VM pilot, backup/restore rehearsal, and production readiness: **NOT RUN / NOT ESTABLISHED** as applicable.
 - This snapshot does not claim complete V1/V2 feature parity. No deployment, production access, or V1 data access occurred.
+
+## Importer completion verification snapshot — 2026-11-25
+
+Setup-3 and the deterministic importer implementation are closed for the current approved corpus:
+
+- Required-private suite: **270 PASS, 0 FAIL, 0 SKIPPED**. Exact external evidence covers the complete 59-file manifest and hashes, 41 canonical source-workbook outcomes, 16 dough/shipping capacity outcomes, both schedule outcomes with fixed dates, six cross-workbook relationships, and the deterministic 41-import combined projection. Private files and detailed goldens remain outside Git.
+- Public synthetic suite: **264 PASS, 0 FAIL, 6 SKIPPED**. Every skip is an explicitly private-evidence lane, not a public fidelity claim.
+- Chromium suite: **31 PASS, 0 FAIL**, including mixed-file staging, combined review, canonical schedule staging/reopen/exact retry, independent per-date Apply, guarded Undo/reapply, offline lockout, and responsive layouts.
+- Disposable PostgreSQL migrations and SQL tests through `0023`, HTTP/PostgreSQL integration, and the authenticated Chromium/PostgreSQL operational journey: **PASS**.
+- Production build, strict TypeScript, server/static syntax, generated OpenAPI schema parity, dependency audit, no-AI guard, and research-safety guard: **PASS**.
+- WebKit/Safari: **BLOCKED** because the pinned browser executable is not available in this environment. No Safari pass is claimed.
+- No deployment, production database operation, production access, or V1 data access occurred. Deferred QC/reporting and other feature-matrix rows remain separate approved work, not silently removed scope.

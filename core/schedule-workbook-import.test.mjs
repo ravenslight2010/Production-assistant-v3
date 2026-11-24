@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import * as XLSX from "xlsx";
+import {
+  listPrivateSourceCorpusFiles,
+  privateSourceCorpusTestOptions,
+  requirePrivateSourceCorpus,
+} from "./private-source-corpus.mjs";
 import { parseScheduleWorkbook } from "./schedule-workbook-import.mjs";
 
 function workbookBytes(sheets) {
@@ -130,4 +138,29 @@ test("unsupported fractional targets and oversized names or notes remain review-
   assert.equal(parsed.rows.length, 0);
   assert.equal(parsed.errors.length, 3);
   assert.ok(parsed.errors.every((issue) => /whole number|exceeds the supported length/u.test(issue.message)));
+});
+
+test("matches exact private expectations for every schedule workbook", privateSourceCorpusTestOptions(), async () => {
+  const corpusRoot = requirePrivateSourceCorpus();
+  const expectationsPath = path.resolve(process.env.V3_PRIVATE_SOURCE_EXPECTATIONS
+    || path.join(path.dirname(path.dirname(corpusRoot)), "parser-expectations.json"));
+  const expectations = JSON.parse(await readFile(expectationsPath, "utf8"));
+  assert.equal(expectations.schemaVersion, "v3-source-parser-expectations/2");
+  const files = listPrivateSourceCorpusFiles(corpusRoot).filter((file) => file.family === "schedule");
+  assert.deepEqual(Object.keys(expectations.schedules).sort(),
+    files.map((file) => file.relativePath).sort(),
+    "Every current schedule workbook needs exact deterministic parser expectations");
+
+  for (const file of files) {
+    const bytes = await readFile(file.absolutePath);
+    const expected = expectations.schedules[file.relativePath];
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), expected.sha256,
+      `${file.relativePath} source hash`);
+    const parsed = parseScheduleWorkbook(bytes, {
+      fileName: path.basename(file.relativePath),
+      today: expected.today,
+    });
+    assert.deepEqual(parsed, expected.result,
+      `${file.relativePath} exact proposed rows, citations, errors, and skips`);
+  }
 });
