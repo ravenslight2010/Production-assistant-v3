@@ -94,9 +94,9 @@ function parseDate(value) {
 }
 
 function safeDbStatus(error) {
-  if (error?.code === "P0002" || error?.code === "23505" || error?.code === "40001") return 409;
+  if (error?.code === "P0002" || error?.code === "23505" || error?.code === "40001" || error?.code === "55000") return 409;
   if (error?.code === "42501") return 403;
-  if (error?.code === "22023" || error?.code === "22P02" || error?.code === "23514") return 400;
+  if (error?.code === "22023" || error?.code === "22P02" || error?.code === "22007" || error?.code === "23514") return 400;
   return 500;
 }
 
@@ -216,7 +216,12 @@ function parseWorkbookBody(body) {
   }
   try {
     const preview = parseScheduleWorkbook(bytes, { fileName: body.fileName });
-    const sourceName = (preview.fileName || createHash("sha256").update(bytes).digest("hex"))
+    preview.source = {
+      fileName: preview.fileName,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      parserVersion: "v1-schedule-import/1",
+    };
+    const sourceName = (preview.fileName || preview.source.sha256)
       .normalize("NFKC")
       .toLocaleLowerCase("en-US");
     preview.rows = preview.rows.map((row) => {
@@ -232,6 +237,64 @@ function parseWorkbookBody(body) {
   } catch (error) {
     throw new ScheduleApiError(400, error instanceof Error ? error.message : "The workbook could not be reviewed.");
   }
+}
+
+function parseImportStageBody(body) {
+  exactKeys(body, ["importId", "requestId", "source", "runs"]);
+  if (typeof body.importId !== "string" || !UUID.test(body.importId)
+    || typeof body.requestId !== "string" || !UUID.test(body.requestId)) {
+    throw new ScheduleApiError(400, "The schedule import IDs are invalid.");
+  }
+  if (!body.source || typeof body.source !== "object" || Array.isArray(body.source)) {
+    throw new ScheduleApiError(400, "The schedule import source pin is invalid.");
+  }
+  exactKeys(body.source, ["fileName", "sha256", "parserVersion"]);
+  if (typeof body.source.fileName !== "string" || body.source.fileName.trim().length < 1
+    || body.source.fileName.length > 160 || typeof body.source.sha256 !== "string"
+    || !/^[0-9a-f]{64}$/u.test(body.source.sha256) || body.source.parserVersion !== "v1-schedule-import/1") {
+    throw new ScheduleApiError(400, "The schedule import source pin is invalid.");
+  }
+  if (!Array.isArray(body.runs) || body.runs.length < 1 || body.runs.length > 2_000) {
+    throw new ScheduleApiError(400, "The schedule import must contain 1–2,000 reviewed rows.");
+  }
+  const runs = body.runs.map((row, index) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      throw new ScheduleApiError(400, "A reviewed schedule row is invalid.");
+    }
+    exactKeys(row, ["date", "id", "productCode", "productionSetupCode", "runTemplateCode", "targetCases", "notes", "source"]);
+    return {
+      date: parseDate(row.date),
+      ...normalizeScheduleRun({
+        id: row.id, productCode: row.productCode, productionSetupCode: row.productionSetupCode,
+        runTemplateCode: row.runTemplateCode, targetCases: row.targetCases, notes: row.notes,
+      }, index),
+      source: row.source,
+    };
+  });
+  const source = {
+    fileName: body.source.fileName,
+    sha256: body.source.sha256,
+    parserVersion: body.source.parserVersion,
+  };
+  const importId = body.importId.toLowerCase();
+  const requestId = body.requestId.toLowerCase();
+  const requestHash = createHash("sha256").update(JSON.stringify({ importId, source, runs })).digest("hex");
+  return { importId, requestId, source, runs, requestHash };
+}
+
+function parseImportActionBody(body) {
+  exactKeys(body, ["requestId", "date", "expectedRevision"]);
+  if (typeof body.requestId !== "string" || !UUID.test(body.requestId)) {
+    throw new ScheduleApiError(400, "The schedule import request ID is invalid.");
+  }
+  if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) {
+    throw new ScheduleApiError(400, "The schedule revision is invalid.");
+  }
+  const date = parseDate(body.date);
+  const requestHash = createHash("sha256").update(JSON.stringify({
+    date, expectedRevision: body.expectedRevision,
+  })).digest("hex");
+  return { date, requestId: body.requestId.toLowerCase(), requestHash, expectedRevision: body.expectedRevision };
 }
 
 export function createScheduleApi({ pool, authenticate, verifyCsrf, logger = () => {} }) {
@@ -281,7 +344,8 @@ export function createScheduleApi({ pool, authenticate, verifyCsrf, logger = () 
       const { facilityId, actorId } = requireManager(auth);
       const routeName = url.pathname === `${API_PREFIX}/import-preview`
         ? "import-preview"
-        : [`${API_PREFIX}/commands`, `${API_PREFIX}/substitutions/commands`].includes(url.pathname)
+        : [`${API_PREFIX}/commands`, `${API_PREFIX}/substitutions/commands`, `${API_PREFIX}/imports`].includes(url.pathname)
+            || /^\/api\/v3\/schedules\/imports\/[0-9a-f-]+\/(?:apply|undo)$/iu.test(url.pathname)
           ? "command"
           : url.pathname.endsWith("/catalog")
             ? "catalog"
@@ -289,6 +353,30 @@ export function createScheduleApi({ pool, authenticate, verifyCsrf, logger = () 
       const limit = rateLimit(actorId, routeName, routeName === "import-preview" ? 5 : 60, 60_000);
       if (limit > 0) {
         sendJson(response, 429, { error: "Too many schedule requests. Wait briefly and try again." }, { "Retry-After": String(limit) });
+        return true;
+      }
+      if (request.method === "GET" && url.pathname === `${API_PREFIX}/imports`) {
+        const keys = [...url.searchParams.keys()];
+        const rawLimit = url.searchParams.get("limit") ?? "50";
+        if (keys.some((key) => key !== "limit") || url.searchParams.getAll("limit").length > 1
+          || !/^[0-9]{1,3}$/u.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 100) {
+          throw new ScheduleApiError(400, "The schedule import history limit is invalid.");
+        }
+        const result = await query({
+          text: "SELECT v3.list_schedule_imports($1::uuid,$2::integer) AS result",
+          values: [facilityId, Number(rawLimit)],
+        });
+        sendJson(response, 200, result?.rows?.[0]?.result ?? {});
+        return true;
+      }
+      const importRead = /^\/api\/v3\/schedules\/imports\/([0-9a-f-]+)$/iu.exec(url.pathname);
+      if (request.method === "GET" && importRead) {
+        if (url.search || !UUID.test(importRead[1])) throw new ScheduleApiError(400, "The schedule import ID is invalid.");
+        const result = await query({
+          text: "SELECT v3.get_schedule_import($1::uuid,$2::uuid) AS result",
+          values: [facilityId, importRead[1].toLowerCase()],
+        });
+        sendJson(response, 200, result?.rows?.[0]?.result ?? {});
         return true;
       }
       if (request.method === "GET" && url.pathname === `${API_PREFIX}/substitutions`) {
@@ -352,6 +440,39 @@ export function createScheduleApi({ pool, authenticate, verifyCsrf, logger = () 
       }
       if (url.pathname === `${API_PREFIX}/import-preview`) {
         sendJson(response, 200, { preview: parseWorkbookBody(body) });
+        return true;
+      }
+      if (url.pathname === `${API_PREFIX}/imports`) {
+        const input = parseImportStageBody(body);
+        const result = await query({
+          text: "SELECT v3.stage_schedule_import($1::uuid,$2::uuid,$3::uuid,$4::text,$5::text,$6::jsonb,$7::jsonb) AS result",
+          values: [facilityId, actorId, input.importId, input.requestId, input.requestHash,
+            JSON.stringify(input.source), JSON.stringify(input.runs)],
+        });
+        const responseBody = result?.rows?.[0]?.result;
+        if (responseBody?.outcome !== "staged" || !responseBody.import) {
+          throw new ScheduleApiError(502, "The schedule import was not confirmed. Retry the same request.");
+        }
+        sendJson(response, 200, responseBody);
+        return true;
+      }
+      const importAction = /^\/api\/v3\/schedules\/imports\/([0-9a-f-]+)\/(apply|undo)$/iu.exec(url.pathname);
+      if (importAction) {
+        if (!UUID.test(importAction[1])) throw new ScheduleApiError(400, "The schedule import ID is invalid.");
+        const input = parseImportActionBody(body);
+        const functionName = importAction[2].toLowerCase() === "apply"
+          ? "apply_schedule_import" : "undo_schedule_import";
+        const result = await query({
+          text: `SELECT v3.${functionName}($1::uuid,$2::uuid,$3::uuid,$4::date,$5::text,$6::text,$7::bigint) AS result`,
+          values: [facilityId, actorId, importAction[1].toLowerCase(), input.date,
+            input.requestId, input.requestHash, input.expectedRevision],
+        });
+        const responseBody = result?.rows?.[0]?.result;
+        if (!responseBody || !["accepted", "conflict"].includes(responseBody.outcome) || !responseBody.schedule) {
+          throw new ScheduleApiError(502, "The schedule import response was incomplete. Retry the same request.");
+        }
+        responseBody.schedule = normalizeSchedule(responseBody.schedule);
+        sendJson(response, responseBody.outcome === "conflict" ? 409 : 200, responseBody);
         return true;
       }
       if (url.pathname !== `${API_PREFIX}/commands`) {

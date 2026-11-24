@@ -287,6 +287,7 @@
             </label>
             <button class="button button-secondary" id="schedule-refresh" type="button">Refresh plan</button>
             <button class="button button-secondary" id="schedule-retry" type="button" hidden>Retry the same save</button>
+            <button class="button button-secondary" id="schedule-import-retry" type="button" hidden>Retry the same import request</button>
             <span class="schedule-revision" id="schedule-revision"></span>
           </div>
           <div class="schedule-layout">
@@ -347,6 +348,7 @@
               <label class="field" for="schedule-import-date"><span>Date for flat workbooks</span><input id="schedule-import-date" type="date" /></label>
               <button class="button button-secondary" id="schedule-import-review" type="submit">Review workbook</button>
             </form>
+            <p class="field-hint">Stage canonical reviewed rows and source citations without changing a schedule. Apply or guarded Undo is independent per production date. Workbook bytes and import notes are not cached offline.</p>
             <div id="schedule-import-preview" class="schedule-import-preview" aria-live="polite" hidden></div>
           </section>
         </section>

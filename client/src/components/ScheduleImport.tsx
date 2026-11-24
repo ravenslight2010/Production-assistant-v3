@@ -2,10 +2,15 @@ import { useEffect, useState, type FormEvent } from "react";
 import { FileUp } from "lucide-react";
 import {
   ApiError,
+  getScheduleImport,
+  listScheduleImports,
   previewProductionScheduleWorkbook,
-  type PlannedScheduleRun,
+  type CanonicalScheduleImportRun,
   type ProductionSchedule,
   type ScheduleCatalog,
+  type ScheduleImportActionResponse,
+  type ScheduleImportDetail,
+  type ScheduleImportSummary,
   type ScheduleWorkbookPreview,
 } from "../api";
 import { scheduleProduct, validateScheduleRun } from "./schedule-utils";
@@ -49,18 +54,33 @@ export function ScheduleImport({
   schedule,
   catalog,
   online,
+  confirmedImport,
   disabled,
   onLoadDate,
-  onApply,
+  onStage,
+  onAction,
 }: {
   schedule: ProductionSchedule;
   catalog: ScheduleCatalog;
   online: boolean;
+  confirmedImport: ScheduleImportDetail | null;
   disabled: boolean;
   onLoadDate: (date: string) => void;
-  onApply: (date: string, runs: PlannedScheduleRun[]) => void;
+  onStage: (request: {
+    importId: string;
+    requestId: string;
+    source: ScheduleWorkbookPreview["source"];
+    runs: CanonicalScheduleImportRun[];
+  }) => Promise<ScheduleImportDetail | null>;
+  onAction: (
+    action: "apply" | "undo", importId: string,
+    request: { requestId: string; date: string; expectedRevision: number },
+  ) => Promise<ScheduleImportActionResponse | null>;
 }) {
   const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [canonical, setCanonical] = useState<ScheduleImportDetail | null>(null);
+  const [history, setHistory] = useState<ScheduleImportSummary[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [importDate, setImportDate] = useState(schedule.date);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,6 +89,51 @@ export function ScheduleImport({
   useEffect(() => {
     if (!preview) setImportDate(schedule.date);
   }, [preview, schedule.date]);
+
+  useEffect(() => {
+    if (confirmedImport) {
+      setPreview(null);
+      setCanonical(confirmedImport);
+    }
+  }, [confirmedImport]);
+
+  async function refreshHistory() {
+    if (!online) return;
+    setHistoryLoading(true);
+    try {
+      setHistory(await listScheduleImports(50));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Schedule import history could not be loaded.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!online) {
+      setPreview(null);
+      setCanonical(null);
+      setHistory([]);
+      return;
+    }
+    void refreshHistory();
+  }, [online]);
+
+  async function openCanonical(importId: string) {
+    if (!online || disabled || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const detail = await getScheduleImport(importId);
+      setPreview(null);
+      setCanonical(detail);
+      setStatus(`Reopened canonical import ${detail.source.fileName}. Workbook bytes are not retained.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The canonical import could not be reopened.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function review(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -83,7 +148,9 @@ export function ScheduleImport({
     }
     setBusy(true);
     setError(null);
-    setStatus("Reviewing workbook contents. Nothing will be applied yet.");
+    setCanonical(null);
+    setPreview(null);
+    setStatus("Reviewing workbook contents. Nothing will be staged or applied yet.");
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 15_000);
     try {
@@ -103,7 +170,7 @@ export function ScheduleImport({
       });
       setPreview({ ...result, rows });
       if (!result.multiDay && !importDate) setImportDate(schedule.date);
-      setStatus("Workbook reviewed. Nothing has been applied; choose mappings and apply each date separately.");
+      setStatus("Workbook reviewed. Nothing has been staged or applied; complete every mapping, then stage the canonical rows.");
     } catch (cause) {
       const message = cause instanceof Error && cause.name === "AbortError"
         ? "Workbook review timed out. No schedule changes were made; try again."
@@ -129,11 +196,16 @@ export function ScheduleImport({
     return preview?.rows.filter((row) => (preview.multiDay ? row.date : importDate) === date) ?? [];
   }
 
-  function apply(date: string, rows: ImportRow[]) {
+  async function stage() {
+    if (!preview || preview.rows.length === 0 || disabled || busy || !online) return;
+    setBusy(true);
+    setError(null);
     try {
-      const runs = rows.map((row) => {
+      const runs = preview.rows.map((row): CanonicalScheduleImportRun => {
+        const date = preview.multiDay ? row.date : importDate;
+        if (!date) throw new Error(`Review row ${row.rowNumber}: choose a production date.`);
         try {
-          return validateScheduleRun({
+          const run = validateScheduleRun({
             id: row.importRunId,
             productCode: row.productCode,
             productionSetupCode: row.productionSetupCode,
@@ -141,13 +213,61 @@ export function ScheduleImport({
             targetCases: row.targetCases ?? 0,
             notes: row.notes,
           }, catalog);
+          return {
+            ...run, date,
+            source: {
+              workbook: preview.source.fileName,
+              sheet: row.sheet,
+              row: row.sourceRow,
+              cells: row.sourceCells as unknown as CanonicalScheduleImportRun["source"]["cells"],
+            },
+          };
         } catch (cause) {
           throw new Error(`Review row ${row.rowNumber}: ${cause instanceof Error ? cause.message : "check the mappings."}`);
         }
       });
-      onApply(date, runs);
+      const detail = await onStage({
+        importId: crypto.randomUUID(), requestId: crypto.randomUUID(), source: preview.source, runs,
+      });
+      if (detail) {
+        setCanonical(detail);
+        setStatus("Canonical schedule import staged. No schedule changed; Apply each production date independently.");
+        await refreshHistory();
+      }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Review the imported rows.");
+      setError(cause instanceof Error ? cause.message : "Review every imported row before staging.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function act(action: "apply" | "undo", date: string) {
+    if (!canonical || disabled || busy || !online || schedule.date !== date) return;
+    if (action === "undo" && !window.confirm(`Remove only unchanged runs created by this import for ${date}? Updated pre-existing runs will not be reverted.`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await onAction(action, canonical.importId, {
+        requestId: crypto.randomUUID(), date, expectedRevision: schedule.revision,
+      });
+      if (!result) return;
+      setCanonical(result.import);
+      await refreshHistory();
+      if (result.outcome === "conflict") {
+        setError(result.reason === "created-runs-changed"
+          ? "Undo blocked: a created run was changed or removed. No runs were removed; review the latest schedule."
+          : result.reason === "no-created-runs"
+            ? "This Apply updated pre-existing runs only. There are no created runs to Undo."
+            : "The schedule revision changed. Review the latest plan before retrying.");
+        setStatus("No import action was applied.");
+      } else {
+        const remaining = result.import.dates.filter((item) => item.status !== "applied").map((item) => item.productionDate);
+        setStatus(action === "apply"
+          ? `Applied ${date}. ${remaining.length ? `Remaining non-applied dates: ${remaining.join(", ")}.` : "All dates have been applied."}`
+          : `Undo confirmed for ${date}. Only unchanged created runs were removed.`);
+      }
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -188,7 +308,7 @@ export function ScheduleImport({
         </button>
       </form>
 
-      {preview && !preview.multiDay ? (
+      {preview && !canonical && !preview.multiDay ? (
         <label className="mt-4 block text-xs font-medium" htmlFor="schedule-import-date">
           Production date for flat workbook
           <input
@@ -206,7 +326,7 @@ export function ScheduleImport({
       {status ? <p className="mt-4 text-sm text-muted-foreground" role="status">{status}</p> : null}
       {error ? <div className="error-banner" role="alert">{error}</div> : null}
 
-      {preview ? (
+      {preview && !canonical ? (
         <div className="mt-5 border-t border-border/70 pt-5">
           <p className="text-sm font-medium">
             {preview.rows.length} schedule row(s) found · {preview.errors.length} issue(s) · {preview.skipped.length} skipped row(s). Review each date separately.
@@ -320,20 +440,77 @@ export function ScheduleImport({
                     );
                   })}
                 </div>
-                {schedule.date === date ? (
-                  <button type="button" className="button-primary mt-5" disabled={!online || disabled || busy || rows.length === 0} onClick={() => apply(date, rows)}>
-                    Apply {rows.length} reviewed run(s) to {date}
-                  </button>
+              </section>
+            );
+          })}
+          <button type="button" className="button-primary mt-5 w-full sm:w-auto" disabled={!online || disabled || busy || preview.rows.length === 0} onClick={() => void stage()}>
+            Stage {preview.rows.length} reviewed row(s) without changing schedules
+          </button>
+        </div>
+      ) : null}
+
+      {canonical ? (
+        <div className="mt-5 border-t border-border/70 pt-5" data-testid="canonical-schedule-import">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h3 className="text-base font-semibold break-all">{canonical.source.fileName}</h3>
+              <p className="mt-1 break-all font-mono text-xs text-muted-foreground">SHA-256 {canonical.source.sha256} · {canonical.source.parserVersion}</p>
+            </div>
+            <button type="button" className="button-secondary" disabled={busy} onClick={() => { setCanonical(null); setPreview(null); setStatus(null); }}>Start another review</button>
+          </div>
+          <p className="mt-3 text-sm text-muted-foreground">Canonical reviewed rows are read-only. Each date has its own Apply receipt and Undo state.</p>
+          {canonical.dates.map((dateState) => {
+            const rows = canonical.runs.filter((run) => run.date === dateState.productionDate);
+            return (
+              <section key={dateState.productionDate} className="mt-5 border-t border-border/60 pt-4" aria-label={`Canonical import date ${dateState.productionDate}`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="font-semibold">{dateState.productionDate} · {rows.length} row(s)</h4>
+                  <span className={`status-pill ${dateState.status === "applied" ? "status-running" : "status-paused"}`}>{dateState.status}</span>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">{dateState.createdRunCount} created · {dateState.updatedRunCount} pre-existing updated</p>
+                <div className="mt-3 divide-y divide-border/60">
+                  {rows.map((run) => (
+                    <article key={run.id} className="py-3 text-sm" aria-label={`Canonical run ${run.id}`}>
+                      <strong>{run.productCode} · {run.targetCases} cases</strong>
+                      <span className="mt-1 block text-xs text-muted-foreground">{run.productionSetupCode} · {run.runTemplateCode}{run.notes ? ` · ${run.notes}` : ""}</span>
+                      <span className="mt-1 block break-all font-mono text-xs text-muted-foreground">{run.source.sheet} row {run.source.row} · {Object.values(run.source.cells).join(" · ")}</span>
+                    </article>
+                  ))}
+                </div>
+                {schedule.date !== dateState.productionDate ? (
+                  <button type="button" className="button-secondary mt-3 w-full sm:w-auto" disabled={!online || disabled || busy} onClick={() => onLoadDate(dateState.productionDate)}>Load {dateState.productionDate} before Apply or Undo</button>
                 ) : (
-                  <button type="button" className="button-secondary mt-5" disabled={!online || disabled || busy} onClick={() => onLoadDate(date)}>
-                    Load {date} before applying
-                  </button>
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    {dateState.status !== "applied" ? <button type="button" className="button-primary" disabled={!online || disabled || busy} onClick={() => void act("apply", dateState.productionDate)}>Apply canonical rows to {dateState.productionDate}</button> : null}
+                    {dateState.undoAvailable ? <button type="button" className="button-secondary" disabled={!online || disabled || busy} onClick={() => void act("undo", dateState.productionDate)}>Undo unchanged created runs for {dateState.productionDate}</button> : null}
+                    {dateState.status === "applied" && !dateState.undoAvailable ? <span className="text-xs text-muted-foreground">No created runs are eligible for Undo; pre-existing updates are not reverted.</span> : null}
+                  </div>
                 )}
               </section>
             );
           })}
         </div>
       ) : null}
+
+      <div className="mt-6 border-t border-border/70 pt-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-base font-semibold">Canonical import history</h3>
+          <button type="button" className="button-secondary" disabled={!online || historyLoading || busy} onClick={() => void refreshHistory()}>{historyLoading ? "Loading…" : "Refresh history"}</button>
+        </div>
+        {!online ? <p className="mt-3 text-sm text-muted-foreground">Import history and reviewed notes are not cached offline.</p> : null}
+        {online && history.length === 0 && !historyLoading ? <p className="mt-3 text-sm text-muted-foreground">No canonical schedule imports have been staged.</p> : null}
+        <div className="mt-3 space-y-3">
+          {history.map((item) => (
+            <article key={item.importId} className="rounded-lg border border-border/60 p-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0"><strong className="block break-all text-sm">{item.source.fileName}</strong><span className="mt-1 block break-all font-mono text-xs text-muted-foreground">{item.importId} · {item.rowCount} rows · {item.source.parserVersion}</span></div>
+                <button type="button" aria-label={`Open schedule import ${item.source.fileName} ${item.importId}`} className="button-secondary w-full sm:w-auto" disabled={!online || disabled || busy} onClick={() => void openCanonical(item.importId)}>Open canonical import</button>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">{item.dates.map((dateState) => <span key={dateState.productionDate} className="status-pill">{dateState.productionDate} · {dateState.status}</span>)}</div>
+            </article>
+          ))}
+        </div>
+      </div>
     </section>
   );
 }

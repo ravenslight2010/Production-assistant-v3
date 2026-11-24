@@ -37,6 +37,8 @@ async function withApi(t, { auth = AUTH, csrf = true, substitutionError = null }
   let schedule = emptySchedule("2026-11-18");
   const receipts = new Map();
   const substitutionReceipts = new Map();
+  const imports = new Map();
+  const importReceipts = new Map();
   const pool = {
     async query(config) {
       assert.equal(config.query_timeout, 5_000);
@@ -97,6 +99,70 @@ async function withApi(t, { auth = AUTH, csrf = true, substitutionError = null }
         if (date === schedule.date) schedule = { ...schedule, substitutionOverlay: overlay };
         const response = { outcome: "accepted", replayed: false, commandId: requestId, overlay };
         substitutionReceipts.set(requestId, { hash: requestHash, response });
+        return { rows: [{ result: response }] };
+      }
+      if (config.text.includes("stage_schedule_import")) {
+        const [, , importId, requestId, requestHash, sourceJson, runsJson] = config.values;
+        const previous = importReceipts.get(requestId);
+        if (previous) {
+          assert.equal(previous.hash, requestHash);
+          return { rows: [{ result: { outcome: "staged", replayed: true, import: imports.get(importId) } }] };
+        }
+        const runs = JSON.parse(runsJson);
+        const dates = [...new Set(runs.map((run) => run.date))].sort().map((productionDate) => ({
+          productionDate, status: "staged", createdRunCount: 0, updatedRunCount: 0,
+          appliedAt: null, undoneAt: null, undoAvailable: false,
+        }));
+        const detail = {
+          importId, createdAt: "2026-11-18T12:00:00.000Z", source: JSON.parse(sourceJson),
+          rowCount: runs.length, dates, runs,
+        };
+        imports.set(importId, detail);
+        importReceipts.set(requestId, { hash: requestHash, action: "stage" });
+        return { rows: [{ result: { outcome: "staged", replayed: false, import: detail } }] };
+      }
+      if (config.text.includes("list_schedule_imports")) {
+        return { rows: [{ result: { imports: [...imports.values()].map(({ runs, ...summary }) => summary) } }] };
+      }
+      if (config.text.includes("get_schedule_import")) {
+        return { rows: [{ result: { import: imports.get(config.values[1]) } }] };
+      }
+      if (config.text.includes("apply_schedule_import") || config.text.includes("undo_schedule_import")) {
+        const action = config.text.includes("apply_schedule_import") ? "apply" : "undo";
+        const [, , importId, date, requestId, requestHash, expectedRevision] = config.values;
+        const previous = importReceipts.get(requestId);
+        if (previous) {
+          assert.equal(previous.hash, requestHash);
+          assert.equal(previous.action, action);
+          return { rows: [{ result: { ...previous.response, replayed: true, schedule, import: imports.get(importId) } }] };
+        }
+        const detail = imports.get(importId);
+        if (Number(expectedRevision) !== schedule.revision) {
+          return { rows: [{ result: { outcome: "conflict", reason: "stale-schedule", replayed: false, productionDate: date, schedule, import: detail } }] };
+        }
+        const dateState = detail.dates.find((item) => item.productionDate === date);
+        const rows = detail.runs.filter((run) => run.date === date);
+        if (action === "apply") {
+          const beforeIds = new Set(schedule.runs.map((run) => run.id));
+          schedule = {
+            ...applyScheduleCommand(schedule, { type: "merge-import", runs: rows.map(({ date: _date, source: _source, ...run }) => run) }),
+            revision: schedule.revision + 1,
+          };
+          dateState.status = "applied";
+          dateState.createdRunCount = rows.filter((run) => !beforeIds.has(run.id)).length;
+          dateState.updatedRunCount = rows.length - dateState.createdRunCount;
+          dateState.undoAvailable = dateState.createdRunCount > 0;
+          detail.createdRuns = rows.map(({ date: _date, source: _source, ...run }) => run);
+        } else {
+          schedule = { ...schedule, revision: schedule.revision + 1, runs: schedule.runs.filter((run) => !detail.createdRuns.some((created) => created.id === run.id)) };
+          dateState.status = "undone";
+          dateState.undoAvailable = false;
+        }
+        const response = {
+          outcome: "accepted", replayed: false, productionDate: date, schedule, import: detail,
+          createdRunCount: dateState.createdRunCount, updatedRunCount: dateState.updatedRunCount,
+        };
+        importReceipts.set(requestId, { hash: requestHash, action, response });
         return { rows: [{ result: response }] };
       }
       if (config.text.includes("get_production_schedule")) {
@@ -244,6 +310,9 @@ test("schedule workbook preview is manager-only, CSRF-protected, and never appli
   assert.equal(result.preview.rows.length, 1);
   assert.match(result.preview.rows[0].importRunId, /^[0-9a-f-]{36}$/u);
   assert.equal(result.preview.rows[0].date, null);
+  assert.equal(result.preview.source.parserVersion, "v1-schedule-import/1");
+  assert.match(result.preview.source.sha256, /^[0-9a-f]{64}$/u);
+  assert.equal(result.preview.source.fileName, "plan.xlsx");
   assert.equal(fixture.calls.length, 0);
 
   const updatedWorkbook = XLSX.utils.book_new();
@@ -259,9 +328,56 @@ test("schedule workbook preview is manager-only, CSRF-protected, and never appli
   const updatedPreview = await updated.json();
   assert.equal(updatedPreview.preview.rows[0].targetCases, 13);
   assert.equal(updatedPreview.preview.rows[0].importRunId, result.preview.rows[0].importRunId);
+  assert.notEqual(updatedPreview.preview.source.sha256, result.preview.source.sha256);
   assert.equal(fixture.calls.length, 0);
 });
 
+
+test("canonical schedule imports stage, reopen, apply, and undo with exact retries", async (t) => {
+  const fixture = await withApi(t);
+  const importId = "00000000-0000-4000-8000-000000000041";
+  const requestId = "00000000-0000-4000-8000-000000000042";
+  const source = { fileName: "plan.xlsx", sha256: "a".repeat(64), parserVersion: "v1-schedule-import/1" };
+  const runs = [{
+    ...RUN, date: "2026-11-18",
+    source: { workbook: "plan.xlsx", sheet: "Plan", row: 2, cells: { brand: "A2", flavor: "B2", targetCases: "C2" } },
+  }];
+  const stageRequest = { importId, requestId, source, runs };
+  const denied = await send(fixture.baseUrl, "/api/v3/schedules/imports", { method: "POST", body: stageRequest, csrf: false });
+  assert.equal(denied.status, 403);
+  const staged = await send(fixture.baseUrl, "/api/v3/schedules/imports", { method: "POST", body: stageRequest });
+  assert.equal(staged.status, 200, await staged.clone().text());
+  const stagedBody = await staged.json();
+  assert.equal(stagedBody.import.source.sha256, source.sha256);
+  assert.equal(stagedBody.import.dates[0].status, "staged");
+  assert.equal(scheduleRevision(stagedBody), undefined);
+  const stageRetry = await send(fixture.baseUrl, "/api/v3/schedules/imports", { method: "POST", body: stageRequest });
+  assert.equal((await stageRetry.json()).replayed, true);
+  const history = await send(fixture.baseUrl, "/api/v3/schedules/imports?limit=50");
+  assert.equal((await history.json()).imports.length, 1);
+  const reopened = await send(fixture.baseUrl, `/api/v3/schedules/imports/${importId}`);
+  assert.equal((await reopened.json()).import.runs[0].source.cells.targetCases, "C2");
+
+  const applyRequest = { requestId: "00000000-0000-4000-8000-000000000043", date: "2026-11-18", expectedRevision: 0 };
+  const applied = await send(fixture.baseUrl, `/api/v3/schedules/imports/${importId}/apply`, { method: "POST", body: applyRequest });
+  assert.equal(applied.status, 200, await applied.clone().text());
+  const appliedBody = await applied.json();
+  assert.equal(appliedBody.schedule.revision, 1);
+  assert.equal(appliedBody.import.dates[0].status, "applied");
+  const applyRetry = await send(fixture.baseUrl, `/api/v3/schedules/imports/${importId}/apply`, { method: "POST", body: applyRequest });
+  assert.equal((await applyRetry.json()).replayed, true);
+
+  const undoRequest = { requestId: "00000000-0000-4000-8000-000000000044", date: "2026-11-18", expectedRevision: 1 };
+  const undone = await send(fixture.baseUrl, `/api/v3/schedules/imports/${importId}/undo`, { method: "POST", body: undoRequest });
+  assert.equal(undone.status, 200, await undone.clone().text());
+  assert.equal((await undone.json()).import.dates[0].status, "undone");
+  const undoRetry = await send(fixture.baseUrl, `/api/v3/schedules/imports/${importId}/undo`, { method: "POST", body: undoRequest });
+  assert.equal((await undoRetry.json()).replayed, true);
+});
+
+function scheduleRevision(value) {
+  return value.schedule?.revision;
+}
 
 test("substitution reads and commands are dated, replayable, revision-fenced, and clearable", async (t) => {
   const { baseUrl } = await withApi(t);

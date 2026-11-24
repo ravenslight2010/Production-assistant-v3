@@ -8,6 +8,7 @@ const API = "/api/v3/schedules";
 const RUNS_API = "/api/v3/runs";
 const CACHE_PREFIX = "fieldline:v3:schedule-cache:";
 const PENDING_PREFIX = "fieldline:v3:schedule-pending:";
+const IMPORT_PENDING_PREFIX = "fieldline:v3:schedule-import-pending:";
 const POLL_MS = 10_000;
 
 const byId = (id) => document.getElementById(id);
@@ -36,14 +37,19 @@ const dom = {
   importDate: byId("schedule-import-date"),
   importReview: byId("schedule-import-review"),
   importPreview: byId("schedule-import-preview"),
+  importRetry: byId("schedule-import-retry"),
 };
 
 let staff = null;
 let writeGate = false;
+let managerWritable = false;
 let catalog = null;
 let schedule = null;
 let liveRuns = [];
 let importPreview = null;
+let canonicalImport = null;
+let importHistory = [];
+let importHistoryLoaded = false;
 let isLoading = false;
 let requestInFlight = false;
 let pollTimer = null;
@@ -104,6 +110,42 @@ function clearPending(date = dom.date.value) {
   updateControls();
 }
 
+function importPendingKey() {
+  return `${IMPORT_PENDING_PREFIX}${staff?.userId ?? "unknown"}`;
+}
+
+function getImportPending() {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(importPendingKey()) || "null");
+    if (value?.kind === "stage" && value.request?.requestId && value.request?.importId && value.request?.runs?.length) return value;
+    if (["apply", "undo"].includes(value?.kind) && value.importId && value.request?.requestId
+      && value.request?.date && Number.isSafeInteger(value.request?.expectedRevision)) return value;
+  } catch {
+    sessionStorage.removeItem(importPendingKey());
+  }
+  return null;
+}
+
+function saveImportPending(value) {
+  sessionStorage.setItem(importPendingKey(), JSON.stringify(value));
+  updateControls();
+}
+
+function clearImportPending() {
+  sessionStorage.removeItem(importPendingKey());
+  updateControls();
+}
+
+function clearImportState() {
+  importPreview = null;
+  canonicalImport = null;
+  importHistory = [];
+  importHistoryLoaded = false;
+  dom.importFile.value = "";
+  dom.importPreview.replaceChildren();
+  dom.importPreview.hidden = true;
+}
+
 function cacheKey(date = dom.date.value) {
   return `${CACHE_PREFIX}${staff?.userId ?? "unknown"}:${date}`;
 }
@@ -150,18 +192,22 @@ function setWriteGate(value) {
 function updateControls() {
   const online = navigator.onLine !== false;
   const pending = getPending();
+  const importPending = getImportPending();
   for (const control of dom.panel.querySelectorAll("[data-schedule-write]")) {
     const row = control.closest(".schedule-run");
     const rowDirty = row?.dataset.dirty === "true";
     const isSave = control.dataset.action === "save-run";
     const isMove = control.dataset.action === "move-up" || control.dataset.action === "move-down";
     const boundary = control.dataset.boundary === "true";
-    control.disabled = !writeGate || requestInFlight || isLoading || pending !== null
+    control.disabled = !writeGate || requestInFlight || isLoading || pending !== null || importPending !== null
       || (isSave && row?.dataset.dirty !== "true")
       || (isMove && (rowDirty || boundary));
   }
   for (const control of dom.panel.querySelectorAll("[data-schedule-preview]")) {
-    control.disabled = !online || !staff || requestInFlight;
+    control.disabled = !online || !staff || requestInFlight || isLoading;
+  }
+  for (const control of dom.panel.querySelectorAll("[data-schedule-import-action]")) {
+    control.disabled = control.disabled || hasScheduleDraft();
   }
   dom.date.disabled = requestInFlight || isLoading;
   dom.refresh.disabled = !online || isLoading;
@@ -170,6 +216,9 @@ function updateControls() {
   dom.retry.hidden = pending === null;
   dom.retry.textContent = pending?.command?.type === "merge-import" ? "Retry the same import" : "Retry the same save";
   dom.retry.disabled = !online || !writeGate || requestInFlight;
+  dom.importRetry.hidden = importPending === null;
+  dom.importRetry.textContent = importPending ? `Retry the same import ${importPending.kind}` : "Retry the same import request";
+  dom.importRetry.disabled = !online || !writeGate || requestInFlight || isLoading || pending !== null;
 }
 
 function hasScheduleDraft() {
@@ -623,7 +672,7 @@ async function loadCanonical({ quiet = false } = {}) {
     if (failed) setAlert("The schedule is current. The separate live-run list could not be refreshed.");
     else setAlert("");
     setStatus(`Server schedule loaded · ${schedule.timeZone}. Live runs are shown separately.`);
-    setWriteGate(writeGate);
+    setWriteGate(managerWritable);
     renderSchedule();
   } catch (error) {
     if (requestGeneration !== generation || !staff) return;
@@ -893,7 +942,7 @@ function renderImportRow(imported, index, date) {
     if (!Number.isSafeInteger(imported.targetCases) || imported.targetCases < 1) {
       issues.push("Enter a positive whole-number target.");
     }
-    feedback.textContent = issues.length ? issues.join(" ") : "Ready to add to the selected production date.";
+    feedback.textContent = issues.length ? issues.join(" ") : "Ready to stage for the selected production date.";
   };
   const updateSetups = () => {
     const productData = getProduct(product.select.value);
@@ -945,8 +994,16 @@ function importRowsForDate(date) {
 
 function renderImportPreview() {
   dom.importPreview.replaceChildren();
+  if (canonicalImport) {
+    dom.importPreview.hidden = false;
+    renderCanonicalImport();
+    renderImportHistory();
+    updateControls();
+    return;
+  }
   if (!importPreview || !catalog) {
-    dom.importPreview.hidden = true;
+    dom.importPreview.hidden = importHistory.length === 0;
+    renderImportHistory();
     updateControls();
     return;
   }
@@ -975,7 +1032,7 @@ function renderImportPreview() {
   const dates = [...new Set(importPreview.rows.map((row) => importPreview.multiDay ? row.date : (dom.importDate.value || dom.date.value)))].filter(Boolean).sort();
   if (!dates.length) {
     const message = document.createElement("p");
-    message.textContent = "No rows can be applied. Review the issues or select a supported workbook.";
+    message.textContent = "No rows can be staged. Review the issues or select a supported workbook.";
     dom.importPreview.append(message);
     updateControls();
     return;
@@ -989,16 +1046,18 @@ function renderImportPreview() {
     const list = document.createElement("div");
     list.className = "schedule-import-rows";
     rows.forEach((row, index) => list.append(renderImportRow(row, index, date)));
-    const apply = document.createElement("button");
-    apply.type = "button";
-    apply.className = "button button-primary";
-    apply.textContent = `Apply ${rows.length} reviewed run(s) to ${date}`;
-    apply.dataset.importApplyDate = date;
-    apply.dataset.scheduleWrite = "true";
-    apply.addEventListener("click", () => applyReviewedDate(date, rows));
-    group.append(heading, list, apply);
+    group.append(heading, list);
     dom.importPreview.append(group);
   }
+  const stage = document.createElement("button");
+  stage.type = "button";
+  stage.className = "button button-primary";
+  stage.textContent = `Stage ${importPreview.rows.length} reviewed row(s) without changing schedules`;
+  stage.dataset.scheduleWrite = "true";
+  stage.dataset.scheduleImportAction = "true";
+  stage.addEventListener("click", stageReviewedImport);
+  dom.importPreview.append(stage);
+  renderImportHistory();
   updateControls();
 }
 
@@ -1016,28 +1075,256 @@ function validateImportedRows(rows) {
   }
 }
 
-async function applyReviewedDate(date, rows) {
-  if (!schedule || schedule.date !== date) {
-    dom.date.value = date;
-    await loadCanonical();
-    setAlert(`The server plan for ${date} is loaded. Review it, then apply the workbook rows again if still correct.`);
-    return;
-  }
+function stageReviewedImport() {
+  if (!importPreview || !schedule || !writeGate || getImportPending()) return;
   try {
-    validateImportedRows(rows);
+    validateImportedRows(importPreview.rows);
+    const runs = importPreview.rows.map((row) => {
+      const date = importPreview.multiDay ? row.date : (dom.importDate.value || dom.date.value);
+      if (!date) throw new Error(`Review row ${row.rowNumber}: choose a production date.`);
+      return {
+        date, id: row.importRunId, productCode: row.productCode,
+        productionSetupCode: row.productionSetupCode, runTemplateCode: row.runTemplateCode,
+        targetCases: Number(row.targetCases), notes: row.notes ?? "",
+        source: {
+          workbook: importPreview.source.fileName, sheet: row.sheet, row: row.sourceRow,
+          cells: row.sourceCells,
+        },
+      };
+    });
+    const pending = {
+      kind: "stage",
+      request: { importId: crypto.randomUUID(), requestId: crypto.randomUUID(), source: importPreview.source, runs },
+    };
+    try {
+      saveImportPending(pending);
+    } catch {
+      setAlert("This device could not retain the pending import. Nothing was sent; check browser storage and try again.");
+      return;
+    }
+    void sendImportPending(pending);
   } catch (error) {
-    setAlert(error instanceof Error ? error.message : "Review the imported rows.");
+    setAlert(error instanceof Error ? error.message : "Review every imported row before staging.");
+  }
+}
+
+async function sendImportPending(pending) {
+  if (!pending || requestInFlight || navigator.onLine === false || !writeGate || getPending()) return;
+  const requestGeneration = generation;
+  const requestUserId = staff?.userId;
+  requestInFlight = true;
+  updateControls();
+  setAlert("");
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15_000);
+  try {
+    const path = pending.kind === "stage"
+      ? `${API}/imports`
+      : `${API}/imports/${pending.importId}/${pending.kind}`;
+    const response = await fetch(path, {
+      method: "POST", credentials: "same-origin", signal: controller.signal,
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken() },
+      body: JSON.stringify(pending.request),
+    });
+    const body = await readJson(response);
+    if (requestGeneration !== generation || staff?.userId !== requestUserId) return;
+    if (body.outcome === "conflict") {
+      canonicalImport = body.import ?? canonicalImport;
+      if (body.schedule?.date === dom.date.value) {
+        schedule = body.schedule;
+        cacheConfirmedPlan(schedule);
+        renderSchedule();
+      }
+      clearImportPending();
+      setAlert("The import action was not applied. Review the current schedule and canonical date state.");
+    } else {
+      canonicalImport = body.import;
+      importPreview = null;
+      if (body.schedule?.date === dom.date.value) {
+        schedule = body.schedule;
+        cacheConfirmedPlan(schedule);
+        renderSchedule();
+      }
+      clearImportPending();
+      setStatus(pending.kind === "stage"
+        ? "Canonical schedule import staged. No schedule changed; Apply each date independently."
+        : `Canonical import ${pending.kind} confirmed for ${body.productionDate}.`);
+    }
+    await loadImportHistory();
+  } catch (error) {
+    if (requestGeneration !== generation || staff?.userId !== requestUserId) return;
+    if (error?.status === 409) {
+      if (error.body?.import) canonicalImport = error.body.import;
+      if (error.body?.schedule?.date === dom.date.value) {
+        schedule = error.body.schedule;
+        cacheConfirmedPlan(schedule);
+        renderSchedule();
+      }
+      clearImportPending();
+      setAlert("The import request was rejected against current state. Review canonical history before submitting again.");
+    } else {
+      if (error?.status >= 400 && error?.status < 500 && ![401, 403, 429].includes(error.status)) {
+        clearImportPending();
+      }
+      const message = error?.status === 401
+        ? "Your manager session expired. Sign in again; the same import request is retained for safe retry."
+        : error?.status === 403
+          ? "Your session could not authorize this import. Refresh your session; the same request is retained."
+          : error instanceof Error ? error.message : "The import request could not be confirmed.";
+      setAlert(`${message}${getImportPending() ? " The exact request remains pending." : ""}`);
+    }
+  } finally {
+    window.clearTimeout(timeout);
+    requestInFlight = false;
+    renderImportPreview();
+    updateControls();
+  }
+}
+
+async function scheduleImportAction(action, date) {
+  if (!canonicalImport || !schedule || !writeGate || getImportPending()) return;
+  if (schedule.date !== date) {
+    dom.date.value = date;
+    generation += 1;
+    await loadCanonical();
+    setAlert(`The server plan for ${date} is loaded. Review it before the canonical ${action}.`);
     return;
   }
-  const runs = rows.map((row) => ({
-    id: row.importRunId,
-    productCode: row.productCode,
-    productionSetupCode: row.productionSetupCode,
-    runTemplateCode: row.runTemplateCode,
-    targetCases: Number(row.targetCases),
-    notes: row.notes,
-  }));
-  submitCommand({ type: "merge-import", runs });
+  if (action === "undo" && !window.confirm(`Remove only unchanged runs created by this import for ${date}? Pre-existing updates are not reverted.`)) return;
+  const pending = {
+    kind: action, importId: canonicalImport.importId,
+    request: { requestId: crypto.randomUUID(), date, expectedRevision: schedule.revision },
+  };
+  try {
+    saveImportPending(pending);
+  } catch {
+    setAlert("This device could not retain the pending import action. Nothing was sent; check browser storage and try again.");
+    return;
+  }
+  void sendImportPending(pending);
+}
+
+async function loadImportHistory() {
+  if (!staff || navigator.onLine === false) return;
+  const requestGeneration = generation;
+  const requestUserId = staff?.userId;
+  try {
+    const response = await fetch(`${API}/imports?limit=50`, { credentials: "same-origin" });
+    const body = await readJson(response);
+    if (requestGeneration !== generation || staff?.userId !== requestUserId || navigator.onLine === false) return;
+    importHistory = Array.isArray(body.imports) ? body.imports : [];
+    importHistoryLoaded = true;
+    renderImportPreview();
+  } catch (error) {
+    if (requestGeneration !== generation || staff?.userId !== requestUserId || navigator.onLine === false) return;
+    importHistoryLoaded = false;
+    setAlert(error instanceof Error ? error.message : "Schedule import history could not be loaded.");
+  }
+}
+
+async function openCanonicalImport(importId) {
+  if (requestInFlight || navigator.onLine === false) return;
+  const requestGeneration = generation;
+  const requestUserId = staff?.userId;
+  requestInFlight = true;
+  updateControls();
+  try {
+    const response = await fetch(`${API}/imports/${importId}`, { credentials: "same-origin" });
+    const body = await readJson(response);
+    if (requestGeneration !== generation || staff?.userId !== requestUserId || navigator.onLine === false) return;
+    canonicalImport = body.import;
+    importPreview = null;
+    setStatus(`Reopened canonical import ${canonicalImport.source.fileName}. Workbook bytes are not retained.`);
+  } catch (error) {
+    if (requestGeneration !== generation || staff?.userId !== requestUserId) return;
+    setAlert(error instanceof Error ? error.message : "The canonical import could not be reopened.");
+  } finally {
+    requestInFlight = false;
+    renderImportPreview();
+    updateControls();
+  }
+}
+
+async function restoreImportState() {
+  if (!staff || navigator.onLine === false) return;
+  const pending = getImportPending();
+  if (pending) {
+    await sendImportPending(pending);
+    return;
+  }
+  await loadImportHistory();
+}
+
+function renderImportHistory() {
+  const heading = document.createElement("h4");
+  heading.textContent = "Canonical import history";
+  dom.importPreview.append(heading);
+  if (!importHistory.length) {
+    const empty = document.createElement("p");
+    empty.textContent = navigator.onLine === false
+      ? "Import history and reviewed notes are not cached offline." : "No canonical schedule imports have been staged.";
+    dom.importPreview.append(empty);
+    return;
+  }
+  for (const item of importHistory) {
+    const article = document.createElement("article");
+    article.className = "schedule-import-date-group";
+    const title = document.createElement("strong");
+    title.textContent = `${item.source.fileName} · ${item.rowCount} rows · ${item.source.parserVersion}`;
+    const states = document.createElement("p");
+    states.textContent = item.dates.map((date) => `${date.productionDate}: ${date.status}`).join(" · ");
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "button button-secondary";
+    open.textContent = `Open canonical import ${item.importId}`;
+    open.addEventListener("click", () => openCanonicalImport(item.importId));
+    article.append(title, states, open);
+    dom.importPreview.append(article);
+  }
+}
+
+function renderCanonicalImport() {
+  const title = document.createElement("h4");
+  title.textContent = canonicalImport.source.fileName;
+  const pin = document.createElement("p");
+  pin.className = "schedule-import-source";
+  pin.textContent = `SHA-256 ${canonicalImport.source.sha256} · ${canonicalImport.source.parserVersion}`;
+  const another = document.createElement("button");
+  another.type = "button";
+  another.className = "button button-secondary";
+  another.textContent = "Start another review";
+  another.addEventListener("click", () => { canonicalImport = null; importPreview = null; renderImportPreview(); });
+  dom.importPreview.append(title, pin, another);
+  for (const dateState of canonicalImport.dates) {
+    const group = document.createElement("section");
+    group.className = "schedule-import-date-group";
+    const heading = document.createElement("h5");
+    heading.textContent = `${dateState.productionDate} · ${dateState.status} · ${dateState.createdRunCount} created · ${dateState.updatedRunCount} pre-existing updated`;
+    group.append(heading);
+    for (const run of canonicalImport.runs.filter((item) => item.date === dateState.productionDate)) {
+      const row = document.createElement("p");
+      row.textContent = `${run.productCode} · ${run.targetCases} cases · ${run.productionSetupCode} · ${run.runTemplateCode}${run.notes ? ` · ${run.notes}` : ""} · ${run.source.sheet} row ${run.source.row} · ${Object.values(run.source.cells).join(" · ")}`;
+      group.append(row);
+    }
+    const action = dateState.status !== "applied" ? "apply" : dateState.undoAvailable ? "undo" : null;
+    if (action) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = action === "apply" ? "button button-primary" : "button button-secondary";
+      button.dataset.scheduleWrite = "true";
+      button.dataset.scheduleImportAction = "true";
+      button.textContent = action === "apply"
+        ? `Apply canonical rows to ${dateState.productionDate}`
+        : `Undo unchanged created runs for ${dateState.productionDate}`;
+      button.addEventListener("click", () => scheduleImportAction(action, dateState.productionDate));
+      group.append(button);
+    } else if (dateState.status === "applied") {
+      const note = document.createElement("p");
+      note.textContent = "No created runs are eligible for Undo; pre-existing updates are not reverted.";
+      group.append(note);
+    }
+    dom.importPreview.append(group);
+  }
 }
 
 async function reviewWorkbook(event) {
@@ -1048,10 +1335,15 @@ async function reviewWorkbook(event) {
     setAlert("Choose an XLSX workbook no larger than 5 MiB.");
     return;
   }
+  const requestGeneration = generation;
+  const requestUserId = staff?.userId;
+  canonicalImport = null;
+  importPreview = null;
+  renderImportPreview();
   requestInFlight = true;
   updateControls();
   setAlert("");
-  setStatus("Reviewing workbook contents. Nothing will be applied yet.");
+  setStatus("Reviewing workbook contents. Nothing will be staged or applied yet.");
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 15_000);
   try {
@@ -1069,11 +1361,13 @@ async function reviewWorkbook(event) {
       body: JSON.stringify({ fileName: file.name, workbookBase64: btoa(binary) }),
     });
     const body = await readJson(response);
+    if (requestGeneration !== generation || staff?.userId !== requestUserId || navigator.onLine === false) return;
     importPreview = body.preview;
     if (!importPreview.multiDay && !dom.importDate.value) dom.importDate.value = dom.date.value;
     renderImportPreview();
-    setStatus("Workbook reviewed. Nothing has been applied; choose mappings and apply each date separately.");
+    setStatus("Workbook reviewed. Nothing has been staged or applied; complete every mapping, then stage the canonical rows.");
   } catch (error) {
+    if (requestGeneration !== generation || staff?.userId !== requestUserId) return;
     const message = error?.name === "AbortError"
       ? "Workbook review timed out. No schedule changes were made; try again."
       : error instanceof Error ? error.message : "The workbook could not be reviewed.";
@@ -1132,40 +1426,48 @@ function bind() {
   dom.breakSave.addEventListener("click", () => submitCommand({ type: "breaks", breaks: collectBreaks() }));
   dom.importForm.addEventListener("submit", reviewWorkbook);
   dom.retry.addEventListener("click", retryPending);
+  dom.importRetry.addEventListener("click", () => {
+    const pending = getImportPending();
+    if (pending) void sendImportPending(pending);
+  });
   dom.importDate.addEventListener("change", () => {
     if (importPreview && !importPreview.multiDay) renderImportPreview();
   });
   window.addEventListener("online", () => {
     setWriteGate(false);
     setStatus("Connection restored. Reloading the canonical server schedule…");
-    void loadCanonical();
+    void loadCanonical().then(restoreImportState);
   });
   window.addEventListener("offline", () => {
     setWriteGate(false);
+    clearImportState();
     applyCachedSchedule(dom.date.value);
     setAlert("Disconnected: schedules are read-only. Reconnect to load the latest server plan.");
   });
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && staff && navigator.onLine !== false && !hasScheduleDraft()) void loadCanonical({ quiet: true });
+    if (!document.hidden && staff && navigator.onLine !== false && !hasScheduleDraft() && !getImportPending()) {
+      void loadCanonical({ quiet: true });
+    }
   });
 }
 
 export function updateScheduleContext(nextStaff, writable) {
   const changedUser = staff?.userId !== nextStaff?.userId;
   staff = nextStaff;
+  managerWritable = writable === true;
   if (changedUser) generation += 1;
   if (!staff || !staff.capabilities?.includes("manage-factory-settings")) {
     writeGate = false;
+    managerWritable = false;
     schedule = null;
     catalog = null;
     liveRuns = [];
-    importPreview = null;
     draftOverlay = null;
+    clearImportState();
     dom.panel.hidden = true;
     dom.runs.replaceChildren();
     dom.timeline.replaceChildren();
     dom.liveRuns.replaceChildren();
-    dom.importPreview.replaceChildren();
     window.clearInterval(pollTimer);
     return;
   }
@@ -1175,22 +1477,25 @@ export function updateScheduleContext(nextStaff, writable) {
     schedule = null;
     catalog = null;
     liveRuns = [];
-    importPreview = null;
     draftOverlay = null;
-    dom.importPreview.replaceChildren();
-    dom.importPreview.hidden = true;
+    clearImportState();
   }
-  writeGate = writable === true && navigator.onLine !== false;
+  writeGate = managerWritable && navigator.onLine !== false;
   const needsLoad = changedUser || !schedule || schedule.date !== dom.date.value || !catalog;
+  const shouldRestoreImports = !importHistoryLoaded || getImportPending() !== null;
   updateControls();
   if (navigator.onLine === false) {
+    clearImportState();
     applyCachedSchedule(dom.date.value);
   } else if (needsLoad) {
-    void loadCanonical();
+    void loadCanonical().then(restoreImportState);
+  } else if (shouldRestoreImports) {
+    void restoreImportState();
   }
   window.clearInterval(pollTimer);
   pollTimer = window.setInterval(() => {
-    if (staff && !document.hidden && navigator.onLine !== false && !requestInFlight && !isLoading && !hasScheduleDraft()) {
+    if (staff && !document.hidden && navigator.onLine !== false && !requestInFlight && !isLoading
+      && !hasScheduleDraft() && !getImportPending()) {
       void loadCanonical({ quiet: true });
     }
   }, POLL_MS);

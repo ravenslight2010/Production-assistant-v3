@@ -1100,6 +1100,156 @@ paths:
           $ref: "#/components/responses/Error"
         "405":
           $ref: "#/components/responses/Error"
+  /api/v3/schedules/imports:
+    get:
+      operationId: listScheduleImports
+      summary: List canonical schedule workbook imports
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Newest canonical schedule imports with independent date states
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScheduleImportListResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: stageScheduleImport
+      summary: Stage reviewed schedule rows without changing a schedule
+      description: Stores canonical reviewed rows and source citations only. Workbook bytes are not retained. Exact retries return the same import.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScheduleImportStageRequest" }
+      responses:
+        "200":
+          description: Canonical schedule import staged or exactly replayed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScheduleImportStageResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "415": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v3/schedules/imports/{importId}:
+    get:
+      operationId: getScheduleImport
+      summary: Reopen one canonical schedule import
+      parameters:
+        - name: importId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Canonical reviewed rows, source pin, citations, and date states
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScheduleImportDetailResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+  /api/v3/schedules/imports/{importId}/apply:
+    post:
+      operationId: applyScheduleImport
+      summary: Apply one canonical import date independently
+      description: Uses the normal revision-fenced schedule writer. Multi-day workbooks can partially complete; no corpus-wide transaction or rollback exists.
+      parameters:
+        - name: importId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScheduleImportActionRequest" }
+      responses:
+        "200":
+          description: Date applied or exact retry replayed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScheduleImportActionResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Stale schedule or lifecycle conflict with current canonical state
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ScheduleImportActionResponse"
+                  - $ref: "#/components/schemas/Error"
+        "413": { $ref: "#/components/responses/Error" }
+        "415": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v3/schedules/imports/{importId}/undo:
+    post:
+      operationId: undoScheduleImport
+      summary: Remove unchanged runs created by one import date
+      description: All created runs must still exist and exactly match their Apply snapshots. Updated pre-existing runs are never reverted. Break references are cleared.
+      parameters:
+        - name: importId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScheduleImportActionRequest" }
+      responses:
+        "200":
+          description: Created runs removed or exact retry replayed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScheduleImportActionResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Stale schedule, changed or missing created runs, no created runs, or lifecycle conflict
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ScheduleImportActionResponse"
+                  - $ref: "#/components/schemas/Error"
+        "413": { $ref: "#/components/responses/Error" }
+        "415": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
   /api/v3/schedules/import-preview:
     post:
       operationId: previewProductionScheduleWorkbook
@@ -6904,6 +7054,123 @@ components:
           type: boolean
         schedule:
           $ref: "#/components/schemas/ProductionSchedule"
+    ScheduleImportSource:
+      type: object
+      additionalProperties: false
+      required: [fileName, sha256, parserVersion]
+      properties:
+        fileName: { type: string, minLength: 1, maxLength: 160 }
+        sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        parserVersion: { type: string, const: v1-schedule-import/1 }
+    ScheduleImportSourceCitation:
+      type: object
+      additionalProperties: false
+      required: [workbook, sheet, row, cells]
+      properties:
+        workbook: { type: string, minLength: 1, maxLength: 160 }
+        sheet: { type: string, minLength: 1, maxLength: 200 }
+        row: { type: integer, minimum: 1, maximum: 20000 }
+        cells:
+          type: object
+          required: [brand, flavor, targetCases]
+          properties:
+            brand: { type: string }
+            flavor: { type: string }
+            targetCases: { type: string }
+            date: { type: string }
+    CanonicalScheduleImportRun:
+      allOf:
+        - $ref: "#/components/schemas/PlannedScheduleRun"
+        - type: object
+          required: [date, source]
+          properties:
+            date: { type: string, format: date }
+            source: { $ref: "#/components/schemas/ScheduleImportSourceCitation" }
+    ScheduleImportDate:
+      type: object
+      required: [productionDate, status, createdRunCount, updatedRunCount, appliedAt, undoneAt, undoAvailable]
+      properties:
+        productionDate: { type: string, format: date }
+        status: { type: string, enum: [staged, applied, undone] }
+        createdRunCount: { type: integer, minimum: 0, maximum: 100 }
+        updatedRunCount: { type: integer, minimum: 0, maximum: 100 }
+        appliedAt: { type: [string, "null"], format: date-time }
+        undoneAt: { type: [string, "null"], format: date-time }
+        undoAvailable: { type: boolean }
+    ScheduleImportSummary:
+      type: object
+      required: [importId, createdAt, source, rowCount, dates]
+      properties:
+        importId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        source: { $ref: "#/components/schemas/ScheduleImportSource" }
+        rowCount: { type: integer, minimum: 1, maximum: 2000 }
+        dates:
+          type: array
+          items: { $ref: "#/components/schemas/ScheduleImportDate" }
+    ScheduleImportDetail:
+      allOf:
+        - $ref: "#/components/schemas/ScheduleImportSummary"
+        - type: object
+          required: [runs]
+          properties:
+            runs:
+              type: array
+              minItems: 1
+              maxItems: 2000
+              items: { $ref: "#/components/schemas/CanonicalScheduleImportRun" }
+    ScheduleImportListResponse:
+      type: object
+      required: [imports]
+      properties:
+        imports:
+          type: array
+          items: { $ref: "#/components/schemas/ScheduleImportSummary" }
+    ScheduleImportDetailResponse:
+      type: object
+      required: [import]
+      properties:
+        import: { $ref: "#/components/schemas/ScheduleImportDetail" }
+    ScheduleImportStageRequest:
+      type: object
+      additionalProperties: false
+      required: [importId, requestId, source, runs]
+      properties:
+        importId: { type: string, format: uuid }
+        requestId: { type: string, format: uuid }
+        source: { $ref: "#/components/schemas/ScheduleImportSource" }
+        runs:
+          type: array
+          minItems: 1
+          maxItems: 2000
+          items: { $ref: "#/components/schemas/CanonicalScheduleImportRun" }
+    ScheduleImportStageResponse:
+      type: object
+      required: [outcome, replayed, import]
+      properties:
+        outcome: { type: string, const: staged }
+        replayed: { type: boolean }
+        import: { $ref: "#/components/schemas/ScheduleImportDetail" }
+    ScheduleImportActionRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, date, expectedRevision]
+      properties:
+        requestId: { type: string, format: uuid }
+        date: { type: string, format: date }
+        expectedRevision: { type: integer, minimum: 0 }
+    ScheduleImportActionResponse:
+      type: object
+      required: [outcome, replayed, productionDate, schedule, import]
+      properties:
+        outcome: { type: string, enum: [accepted, conflict] }
+        reason: { type: string, enum: [stale-schedule, created-runs-changed, no-created-runs] }
+        replayed: { type: boolean }
+        productionDate: { type: string, format: date }
+        schedule: { $ref: "#/components/schemas/ProductionSchedule" }
+        import: { $ref: "#/components/schemas/ScheduleImportDetail" }
+        createdRunCount: { type: integer, minimum: 0, maximum: 100 }
+        updatedRunCount: { type: integer, minimum: 0, maximum: 100 }
     ScheduleWorkbookPreviewRequest:
       type: object
       additionalProperties: false
@@ -6922,8 +7189,9 @@ components:
       properties:
         preview:
           type: object
-          required: [rows, errors, skipped, multiDay, fileName]
+          required: [rows, errors, skipped, multiDay, fileName, source]
           properties:
+            source: { $ref: "#/components/schemas/ScheduleImportSource" }
             rows:
               type: array
               maxItems: 2000

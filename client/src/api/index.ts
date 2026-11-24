@@ -32,6 +32,13 @@ export type ScheduleBreak = components["schemas"]["ScheduleBreak"];
 export type ScheduleCommand = components["schemas"]["ProductionScheduleCommandRequest"]["command"];
 export type ScheduleCommandRequest = Omit<components["schemas"]["ProductionScheduleCommandRequest"], "date"> & { date: string };
 export type ScheduleWorkbookPreview = components["schemas"]["ScheduleWorkbookPreviewResponse"]["preview"];
+export type ScheduleImportSource = components["schemas"]["ScheduleImportSource"];
+export type CanonicalScheduleImportRun = components["schemas"]["CanonicalScheduleImportRun"];
+export type ScheduleImportSummary = components["schemas"]["ScheduleImportSummary"];
+export type ScheduleImportDetail = components["schemas"]["ScheduleImportDetail"];
+export type ScheduleImportStageRequest = components["schemas"]["ScheduleImportStageRequest"];
+export type ScheduleImportActionRequest = components["schemas"]["ScheduleImportActionRequest"];
+export type ScheduleImportActionResponse = Omit<components["schemas"]["ScheduleImportActionResponse"], "schedule"> & { schedule: ProductionSchedule };
 export type SubstitutionOverlay = components["schemas"]["SubstitutionOverlay"];
 export type SubstitutionRule = components["schemas"]["SubstitutionRule"];
 export type SubstitutionProduct = components["schemas"]["SubstitutionProduct"];
@@ -725,6 +732,73 @@ export async function previewProductionScheduleWorkbook(input: {
     throw new ApiError("The workbook review was incomplete. No schedule changes were made.", 502);
   }
   return preview;
+}
+
+function isScheduleImportDetail(value: unknown): value is ScheduleImportDetail {
+  const candidate = value as Partial<ScheduleImportDetail> | null;
+  return object(candidate) && typeof candidate.importId === "string" && UUID.test(candidate.importId)
+    && object(candidate.source) && typeof candidate.source.fileName === "string"
+    && typeof candidate.source.sha256 === "string" && candidate.source.parserVersion === "v1-schedule-import/1"
+    && Array.isArray(candidate.runs) && Array.isArray(candidate.dates)
+    && candidate.runs.every((run) => object(run) && typeof run.id === "string" && UUID.test(run.id)
+      && typeof run.date === "string" && object(run.source))
+    && candidate.dates.every((item) => object(item) && typeof item.productionDate === "string"
+      && ["staged", "applied", "undone"].includes(item.status ?? "") && typeof item.undoAvailable === "boolean");
+}
+
+export async function listScheduleImports(limit = 50): Promise<ScheduleImportSummary[]> {
+  const result = await unwrap(await client.GET("/api/v3/schedules/imports", { params: { query: { limit } } }));
+  if (!Array.isArray(result.imports) || !result.imports.every((item) => object(item)
+    && typeof item.importId === "string" && UUID.test(item.importId) && Array.isArray(item.dates))) {
+    throw new ApiError("Schedule import history was incomplete. Refresh and try again.", 502);
+  }
+  return result.imports;
+}
+
+export async function getScheduleImport(importId: string): Promise<ScheduleImportDetail> {
+  const result = await unwrap(await client.GET("/api/v3/schedules/imports/{importId}", {
+    params: { path: { importId } },
+  }));
+  if (!isScheduleImportDetail(result.import) || result.import.importId !== importId.toLowerCase()) {
+    throw new ApiError("The canonical schedule import was incomplete. Refresh and try again.", 502);
+  }
+  return result.import;
+}
+
+export async function stageScheduleImport(request: ScheduleImportStageRequest): Promise<{ detail: ScheduleImportDetail; replayed: boolean }> {
+  const result = await unwrap(await client.POST("/api/v3/schedules/imports", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  if (result.outcome !== "staged" || !isScheduleImportDetail(result.import)
+    || result.import.importId !== request.importId.toLowerCase()
+    || result.import.source.sha256 !== request.source.sha256
+    || result.import.source.parserVersion !== request.source.parserVersion) {
+    throw new ApiError("The server did not confirm the canonical schedule import. Retry the same request.", 502);
+  }
+  return { detail: result.import, replayed: result.replayed };
+}
+
+export async function applyOrUndoScheduleImport(
+  action: "apply" | "undo", importId: string, request: ScheduleImportActionRequest,
+): Promise<ScheduleImportActionResponse> {
+  const path = action === "apply"
+    ? "/api/v3/schedules/imports/{importId}/apply" as const
+    : "/api/v3/schedules/imports/{importId}/undo" as const;
+  const result = await client.POST(path, {
+    params: { path: { importId }, header: mutationHeaders() }, body: request,
+  });
+  if (result.response.status === 409) {
+    const conflict = result.error as Partial<ScheduleImportActionResponse> | undefined;
+    if (conflict?.outcome === "conflict" && isProductionSchedule(conflict.schedule)
+      && isScheduleImportDetail(conflict.import)) return conflict as ScheduleImportActionResponse;
+  }
+  const accepted = await unwrap(result);
+  if (accepted.outcome !== "accepted" || !isProductionSchedule(accepted.schedule)
+    || !isScheduleImportDetail(accepted.import) || accepted.productionDate !== request.date
+    || accepted.import.importId !== importId.toLowerCase()) {
+    throw new ApiError("The server did not confirm the schedule import change. Retry the same request.", 502);
+  }
+  return accepted as ScheduleImportActionResponse;
 }
 
 const SETUP_CATALOG_FAMILIES: SetupCatalogFamily[] = [

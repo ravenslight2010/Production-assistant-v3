@@ -3,6 +3,7 @@ import { ArrowLeftRight, Plus, RefreshCw } from "lucide-react";
 import { centralDate } from "../../../core/schedule-planning.mjs";
 import {
   ApiError,
+  applyOrUndoScheduleImport,
   applyProductionScheduleCommand,
   getProductionSchedule,
   getScheduleCatalog,
@@ -15,6 +16,11 @@ import {
   type ScheduleCatalog,
   type ScheduleCommand,
   type ScheduleCommandRequest,
+  type ScheduleImportActionRequest,
+  type ScheduleImportActionResponse,
+  type ScheduleImportDetail,
+  type ScheduleImportStageRequest,
+  stageScheduleImport,
 } from "../api";
 import { ScheduleImport } from "../components/ScheduleImport";
 import { ScheduleRunCard } from "../components/ScheduleRunCard";
@@ -23,10 +29,14 @@ import { SubstitutionManager } from "../components/SubstitutionManager";
 import { scheduleRunTitle, validateScheduleRun } from "../components/schedule-utils";
 import {
   clearPendingScheduleCommand,
+  clearPendingScheduleImport,
   readPendingScheduleCommand,
+  readPendingScheduleImport,
   readScheduleCache,
   writePendingScheduleCommand,
+  writePendingScheduleImport,
   writeScheduleCache,
+  type PendingScheduleImportRequest,
 } from "../components/schedule-storage";
 
 function errorMessage(cause: unknown, fallback: string): string {
@@ -44,6 +54,8 @@ export function SchedulePage({ session, online }: { session: AuthSession; online
   const [newDraft, setNewDraft] = useState<PlannedScheduleRun | null>(null);
   const [breakDraft, setBreakDraft] = useState<ScheduleBreak[] | null>(null);
   const [pending, setPending] = useState<ScheduleCommandRequest | null>(null);
+  const [importPending, setImportPending] = useState<PendingScheduleImportRequest | null>(null);
+  const [importConfirmation, setImportConfirmation] = useState<ScheduleImportDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +71,7 @@ export function SchedulePage({ session, online }: { session: AuthSession; online
       return confirmed !== undefined && JSON.stringify(confirmed) !== JSON.stringify(draft);
     })
     || (breakDraft !== null && schedule !== null && JSON.stringify(breakDraft) !== JSON.stringify(schedule.breaks));
-  const writeDisabled = !online || !canManage || loading || saving || pending !== null || !schedule || !catalog;
+  const writeDisabled = !online || !canManage || loading || saving || pending !== null || importPending !== null || !schedule || !catalog;
 
   function cacheConfirmed(next: ProductionSchedule, nextCatalog: ScheduleCatalog | null): string | null {
     try {
@@ -156,9 +168,15 @@ export function SchedulePage({ session, online }: { session: AuthSession; online
   }, [date, online, canManage, userId]);
 
   useEffect(() => {
+    const request = readPendingScheduleImport(userId);
+    setImportPending(request);
+    if (request && online && canManage) void sendImportPending(request);
+  }, [online, canManage, userId]);
+
+  useEffect(() => {
     if (!online || !canManage) return;
     const refresh = () => {
-      if (document.visibilityState === "visible" && !isDirty && !saving && !loading) {
+      if (document.visibilityState === "visible" && !isDirty && !saving && !loading && !importPending) {
         void loadCanonical(date, true);
       }
     };
@@ -168,7 +186,7 @@ export function SchedulePage({ session, online }: { session: AuthSession; online
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, [online, canManage, date, isDirty, saving, loading, catalog, schedule, pending]);
+  }, [online, canManage, date, isDirty, saving, loading, catalog, schedule, pending, importPending]);
 
   function clearDrafts() {
     setDrafts({});
@@ -186,6 +204,82 @@ export function SchedulePage({ session, online }: { session: AuthSession; online
     if (isDirty && !window.confirm("Reloading replaces unsaved schedule edits on this device. Continue?")) return;
     clearDrafts();
     void loadCanonical(date);
+  }
+
+  async function sendImportPending(pendingRequest: PendingScheduleImportRequest): Promise<ScheduleImportDetail | ScheduleImportActionResponse | null> {
+    if (!online || saving) return null;
+    setSaving(true);
+    setError(null);
+    setNotice(pendingRequest.kind === "stage" ? "Staging the canonical schedule import…" : `${pendingRequest.kind === "apply" ? "Applying" : "Undoing"} the canonical import date…`);
+    try {
+      if (pendingRequest.kind === "stage") {
+        const result = await stageScheduleImport(pendingRequest.request);
+        clearPendingScheduleImport(userId);
+        setImportPending(null);
+        setImportConfirmation(result.detail);
+        setNotice(result.replayed ? "The previous staging request was confirmed; no schedule changed." : "Canonical schedule import staged. No schedule changed.");
+        return result.detail;
+      }
+      const result = await applyOrUndoScheduleImport(pendingRequest.kind, pendingRequest.importId, pendingRequest.request);
+      clearPendingScheduleImport(userId);
+      setImportPending(null);
+      setImportConfirmation(result.import);
+      if (result.schedule.date === date) {
+        setSchedule(result.schedule);
+        clearDrafts();
+        const cacheWarning = cacheConfirmed(result.schedule, catalog);
+        if (cacheWarning) setError(cacheWarning);
+      }
+      if (result.outcome === "conflict") {
+        setNotice(null);
+        setError("The import action was not applied. Review the current schedule and canonical date state.");
+      } else {
+        setNotice(result.replayed ? "The previous import action was confirmed from its exact retry." : `Canonical import ${pendingRequest.kind === "apply" ? "Apply" : "Undo"} confirmed for ${result.productionDate}.`);
+      }
+      return result;
+    } catch (cause) {
+      const status = cause instanceof ApiError ? cause.status : 0;
+      if (status === 409) {
+        clearPendingScheduleImport(userId);
+        setImportPending(null);
+        await loadCanonical(date, true);
+        setError("The import request was rejected against the current state. Review canonical history before submitting a new request.");
+      } else {
+        setNotice(null);
+        setError(`${errorMessage(cause, "The import request could not be confirmed.")} The exact request remains pending; no different request will be substituted.`);
+      }
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function stageImport(request: ScheduleImportStageRequest): Promise<ScheduleImportDetail | null> {
+    if (writeDisabled) return null;
+    const pendingRequest: PendingScheduleImportRequest = { kind: "stage", request };
+    try {
+      writePendingScheduleImport(userId, pendingRequest);
+    } catch {
+      setError("This device could not retain the pending import. Nothing was sent; check browser storage and try again.");
+      return null;
+    }
+    setImportPending(pendingRequest);
+    return await sendImportPending(pendingRequest) as ScheduleImportDetail | null;
+  }
+
+  async function importAction(
+    action: "apply" | "undo", importId: string, request: ScheduleImportActionRequest,
+  ): Promise<ScheduleImportActionResponse | null> {
+    if (writeDisabled) return null;
+    const pendingRequest: PendingScheduleImportRequest = { kind: action, importId, request };
+    try {
+      writePendingScheduleImport(userId, pendingRequest);
+    } catch {
+      setError("This device could not retain the pending import action. Nothing was sent; check browser storage and try again.");
+      return null;
+    }
+    setImportPending(pendingRequest);
+    return await sendImportPending(pendingRequest) as ScheduleImportActionResponse | null;
   }
 
   function submitCommand(command: ScheduleCommand) {
@@ -356,6 +450,12 @@ export function SchedulePage({ session, online }: { session: AuthSession; online
           </button>
         </div>
       ) : null}
+      {importPending ? (
+        <div className="notice-banner" role="status">
+          <span>A canonical schedule import {importPending.kind} request is unresolved. Other schedule writes are paused until its exact retry resolves.</span>
+          <button type="button" className="button-secondary ml-auto" disabled={!online || saving} onClick={() => void sendImportPending(importPending)}>Retry the same import {importPending.kind}</button>
+        </div>
+      ) : null}
 
       {schedule && catalog && schedule.date === date ? (
         <>
@@ -516,15 +616,11 @@ export function SchedulePage({ session, online }: { session: AuthSession; online
             schedule={schedule}
             catalog={catalog}
             online={online}
-            disabled={loading || saving || pending !== null || schedule.date !== date}
+            confirmedImport={importConfirmation}
+            disabled={loading || saving || pending !== null || importPending !== null || isDirty || schedule.date !== date}
             onLoadDate={changeDate}
-            onApply={(importDate, runs) => {
-              if (schedule.date !== importDate) {
-                changeDate(importDate);
-                return;
-              }
-              submitCommand({ type: "merge-import", runs });
-            }}
+            onStage={stageImport}
+            onAction={importAction}
           />
         </div>
       ) : null}

@@ -466,6 +466,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/schedules/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List canonical schedule workbook imports */
+        get: operations["listScheduleImports"];
+        put?: never;
+        /**
+         * Stage reviewed schedule rows without changing a schedule
+         * @description Stores canonical reviewed rows and source citations only. Workbook bytes are not retained. Exact retries return the same import.
+         */
+        post: operations["stageScheduleImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/schedules/imports/{importId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reopen one canonical schedule import */
+        get: operations["getScheduleImport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/schedules/imports/{importId}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply one canonical import date independently
+         * @description Uses the normal revision-fenced schedule writer. Multi-day workbooks can partially complete; no corpus-wide transaction or rollback exists.
+         */
+        post: operations["applyScheduleImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/schedules/imports/{importId}/undo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove unchanged runs created by one import date
+         * @description All created runs must still exist and exactly match their Apply snapshots. Updated pre-existing runs are never reverted. Break references are cleared.
+         */
+        post: operations["undoScheduleImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/schedules/import-preview": {
         parameters: {
             query?: never;
@@ -3445,12 +3523,100 @@ export interface components {
             replayed: boolean;
             schedule: components["schemas"]["ProductionSchedule"];
         };
+        ScheduleImportSource: {
+            fileName: string;
+            sha256: string;
+            /** @constant */
+            parserVersion: "v1-schedule-import/1";
+        };
+        ScheduleImportSourceCitation: {
+            workbook: string;
+            sheet: string;
+            row: number;
+            cells: {
+                brand: string;
+                flavor: string;
+                targetCases: string;
+                date?: string;
+            };
+        };
+        CanonicalScheduleImportRun: components["schemas"]["PlannedScheduleRun"] & {
+            /** Format: date */
+            date: string;
+            source: components["schemas"]["ScheduleImportSourceCitation"];
+        };
+        ScheduleImportDate: {
+            /** Format: date */
+            productionDate: string;
+            /** @enum {string} */
+            status: "staged" | "applied" | "undone";
+            createdRunCount: number;
+            updatedRunCount: number;
+            /** Format: date-time */
+            appliedAt: string | null;
+            /** Format: date-time */
+            undoneAt: string | null;
+            undoAvailable: boolean;
+        };
+        ScheduleImportSummary: {
+            /** Format: uuid */
+            importId: string;
+            /** Format: date-time */
+            createdAt: string;
+            source: components["schemas"]["ScheduleImportSource"];
+            rowCount: number;
+            dates: components["schemas"]["ScheduleImportDate"][];
+        };
+        ScheduleImportDetail: components["schemas"]["ScheduleImportSummary"] & {
+            runs: components["schemas"]["CanonicalScheduleImportRun"][];
+        };
+        ScheduleImportListResponse: {
+            imports: components["schemas"]["ScheduleImportSummary"][];
+        };
+        ScheduleImportDetailResponse: {
+            import: components["schemas"]["ScheduleImportDetail"];
+        };
+        ScheduleImportStageRequest: {
+            /** Format: uuid */
+            importId: string;
+            /** Format: uuid */
+            requestId: string;
+            source: components["schemas"]["ScheduleImportSource"];
+            runs: components["schemas"]["CanonicalScheduleImportRun"][];
+        };
+        ScheduleImportStageResponse: {
+            /** @constant */
+            outcome: "staged";
+            replayed: boolean;
+            import: components["schemas"]["ScheduleImportDetail"];
+        };
+        ScheduleImportActionRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: date */
+            date: string;
+            expectedRevision: number;
+        };
+        ScheduleImportActionResponse: {
+            /** @enum {string} */
+            outcome: "accepted" | "conflict";
+            /** @enum {string} */
+            reason?: "stale-schedule" | "created-runs-changed" | "no-created-runs";
+            replayed: boolean;
+            /** Format: date */
+            productionDate: string;
+            schedule: components["schemas"]["ProductionSchedule"];
+            import: components["schemas"]["ScheduleImportDetail"];
+            createdRunCount?: number;
+            updatedRunCount?: number;
+        };
         ScheduleWorkbookPreviewRequest: {
             fileName: string;
             workbookBase64: string;
         };
         ScheduleWorkbookPreviewResponse: {
             preview: {
+                source: components["schemas"]["ScheduleImportSource"];
                 rows: {
                     rowNumber: number;
                     sheet: string;
@@ -4517,6 +4683,194 @@ export interface operations {
             415: components["responses"]["Error"];
             429: components["responses"]["Error"];
             500: components["responses"]["Error"];
+        };
+    };
+    listScheduleImports: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newest canonical schedule imports with independent date states */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleImportListResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+        };
+    };
+    stageScheduleImport: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleImportStageRequest"];
+            };
+        };
+        responses: {
+            /** @description Canonical schedule import staged or exactly replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleImportStageResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    getScheduleImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical reviewed rows, source pin, citations, and date states */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleImportDetailResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+        };
+    };
+    applyScheduleImport: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleImportActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Date applied or exact retry replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleImportActionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            /** @description Stale schedule or lifecycle conflict with current canonical state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleImportActionResponse"] | components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    undoScheduleImport: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleImportActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Created runs removed or exact retry replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleImportActionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            /** @description Stale schedule, changed or missing created runs, no created runs, or lifecycle conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleImportActionResponse"] | components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
         };
     };
     previewProductionScheduleWorkbook: {

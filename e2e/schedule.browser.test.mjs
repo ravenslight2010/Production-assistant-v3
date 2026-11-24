@@ -71,7 +71,11 @@ async function installScheduleApi(context, baseUrl, { manager = true } = {}) {
   const receipts = new Map();
   const commands = [];
   const scheduleRequests = [];
+  const imports = new Map();
+  const importReceipts = new Map();
+  const importRequests = [];
   let loseNextResponse = false;
+  let loseNextImportResponse = false;
   const getSchedule = (date) => {
     if (!schedules.has(date)) schedules.set(date, emptySchedule(date));
     return schedules.get(date);
@@ -104,6 +108,7 @@ async function installScheduleApi(context, baseUrl, { manager = true } = {}) {
     }
     if (path === "/api/v3/auth/bootstrap-status" && method === "GET") return json(route, { available: false });
     if (path === "/api/v3/runs" && method === "GET") return json(route, { runs: [] });
+    if (path === "/api/v3/schedules/substitution-products" && method === "GET") return json(route, { products: [] });
     if (path === "/api/v3/schedules/catalog" && method === "GET") {
       scheduleRequests.push(path);
       return json(route, CATALOG);
@@ -120,6 +125,7 @@ async function installScheduleApi(context, baseUrl, { manager = true } = {}) {
       return json(route, {
         preview: {
           fileName: body.fileName,
+          source: { fileName: body.fileName, sha256: "c".repeat(64), parserVersion: "v1-schedule-import/1" },
           multiDay: false,
           rows: [{
             rowNumber: 2,
@@ -129,7 +135,7 @@ async function installScheduleApi(context, baseUrl, { manager = true } = {}) {
             flavor: "Pizza",
             targetCases: 8,
             notes: "Synthetic PO",
-            sourceCells: { brand: "A2" },
+            sourceCells: { brand: "A2", flavor: "B2", targetCases: "C2" },
             sourceRow: 2,
             importRunId: IMPORT_RUN_ID,
           }],
@@ -137,6 +143,79 @@ async function installScheduleApi(context, baseUrl, { manager = true } = {}) {
           skipped: [],
         },
       });
+    }
+    if (path === "/api/v3/schedules/imports" && method === "GET") {
+      return json(route, { imports: [...imports.values()].map(({ runs, createdRuns, ...summary }) => summary) });
+    }
+    if (path === "/api/v3/schedules/imports" && method === "POST") {
+      const body = request.postDataJSON();
+      importRequests.push({ kind: "stage", body });
+      const previous = importReceipts.get(body.requestId);
+      if (previous) return json(route, { outcome: "staged", replayed: true, import: previous.import });
+      const dates = [...new Set(body.runs.map((run) => run.date))].sort().map((productionDate) => ({
+        productionDate, status: "staged", createdRunCount: 0, updatedRunCount: 0,
+        appliedAt: null, undoneAt: null, undoAvailable: false,
+      }));
+      const detail = {
+        importId: body.importId, createdAt: "2026-11-18T12:00:00.000Z", source: body.source,
+        rowCount: body.runs.length, dates, runs: body.runs, createdRuns: [],
+      };
+      imports.set(body.importId, detail);
+      importReceipts.set(body.requestId, { import: detail });
+      if (loseNextImportResponse) {
+        loseNextImportResponse = false;
+        return json(route, { error: "Synthetic response loss after staging commit." }, 500);
+      }
+      return json(route, { outcome: "staged", replayed: false, import: detail });
+    }
+    const importDetail = /^\/api\/v3\/schedules\/imports\/([0-9a-f-]+)$/u.exec(path);
+    if (importDetail && method === "GET") return json(route, { import: imports.get(importDetail[1]) });
+    const importAction = /^\/api\/v3\/schedules\/imports\/([0-9a-f-]+)\/(apply|undo)$/u.exec(path);
+    if (importAction && method === "POST") {
+      const body = request.postDataJSON();
+      const action = importAction[2];
+      importRequests.push({ kind: action, body });
+      const previous = importReceipts.get(body.requestId);
+      if (previous) return json(route, { ...previous.response, replayed: true, schedule: projectSurplus(getSchedule(body.date)), import: imports.get(importAction[1]) });
+      const detail = imports.get(importAction[1]);
+      const current = getSchedule(body.date);
+      if (body.expectedRevision !== current.revision) {
+        return json(route, { outcome: "conflict", reason: "stale-schedule", replayed: false, productionDate: body.date, schedule: projectSurplus(current), import: detail }, 409);
+      }
+      const rows = detail.runs.filter((run) => run.date === body.date);
+      const dateState = detail.dates.find((item) => item.productionDate === body.date);
+      let next;
+      if (action === "apply") {
+        const before = new Set(current.runs.map((run) => run.id));
+        const canonicalRuns = rows.map(({ date, source, ...run }) => run);
+        next = { ...applyScheduleCommand(current, { type: "merge-import", runs: canonicalRuns }), revision: current.revision + 1 };
+        detail.createdRuns = canonicalRuns.filter((run) => !before.has(run.id));
+        dateState.createdRunCount = detail.createdRuns.length;
+        dateState.updatedRunCount = rows.length - detail.createdRuns.length;
+        dateState.status = "applied";
+        dateState.undoAvailable = detail.createdRuns.length > 0;
+      } else {
+        const ids = new Set(detail.createdRuns.map((run) => run.id));
+        next = {
+          ...current, revision: current.revision + 1,
+          runs: current.runs.filter((run) => !ids.has(run.id)),
+          breaks: current.breaks.map((item) => ids.has(item.runId) ? { ...item, runId: null } : item),
+        };
+        dateState.status = "undone";
+        dateState.undoAvailable = false;
+      }
+      schedules.set(body.date, next);
+      const response = {
+        outcome: "accepted", replayed: false, productionDate: body.date,
+        schedule: projectSurplus(next), import: detail,
+        createdRunCount: dateState.createdRunCount, updatedRunCount: dateState.updatedRunCount,
+      };
+      importReceipts.set(body.requestId, { response });
+      if (loseNextImportResponse) {
+        loseNextImportResponse = false;
+        return json(route, { error: "Synthetic response loss after import action commit." }, 500);
+      }
+      return json(route, response);
     }
     if (path === "/api/v3/schedules/commands" && method === "POST") {
       const body = request.postDataJSON();
@@ -163,8 +242,10 @@ async function installScheduleApi(context, baseUrl, { manager = true } = {}) {
   });
   return {
     commands,
+    importRequests,
     scheduleRequests,
     loseNextResponse: () => { loseNextResponse = true; },
+    loseNextImportResponse: () => { loseNextImportResponse = true; },
     getSchedule,
   };
 }
@@ -261,20 +342,48 @@ test("React schedule confirms commands, exact retry, conflicts, import review, a
     buffer: Buffer.from("synthetic workbook bytes"),
   });
   await page.getByRole("button", { name: "Review workbook" }).click();
-  await page.getByText(/Workbook reviewed\. Nothing has been applied/).waitFor();
+  await page.getByText(/Workbook reviewed\. Nothing has been staged or applied/).waitFor();
   const importRow = page.getByRole("article", { name: "Import review row 2", exact: true });
   assert.equal(await importRow.getByLabel(/Product ·/).inputValue(), "PIZZA-A");
   assert.equal(await importRow.getByLabel(/Run template ·/).inputValue(), "TEMPLATE-A");
   await importRow.getByLabel("Production setup for import row 2", { exact: true }).selectOption("LINE-A");
-  await page.getByRole("button", { name: `Apply 1 reviewed run(s) to ${DATE}` }).click();
-  await page.getByRole("status").filter({ hasText: "Schedule change saved to the server." }).waitFor();
-  assert.equal(api.commands.at(-1).command.type, "merge-import");
+  api.loseNextImportResponse();
+  await page.getByRole("button", { name: "Stage 1 reviewed row(s) without changing schedules" }).click();
+  await page.getByText(/The exact request remains pending/).waitFor();
+  assert.equal(api.getSchedule(DATE).runs.length, 2);
+  const stageRequest = api.importRequests.at(-1);
+  await page.reload();
+  await page.getByTestId("canonical-schedule-import").waitFor();
+  await page.getByLabel("Production date", { exact: true }).fill(DATE);
+  assert.equal(api.importRequests[0].body.requestId, stageRequest.body.requestId);
+  assert.equal(api.importRequests[1].body.importId, stageRequest.body.importId);
+  assert.equal(api.getSchedule(DATE).runs.length, 2);
+
+  api.loseNextImportResponse();
+  await page.getByRole("button", { name: `Apply canonical rows to ${DATE}` }).click();
+  await page.getByRole("button", { name: "Retry the same import apply" }).waitFor();
+  const applyRequest = api.importRequests.at(-1);
+  await page.getByRole("button", { name: "Retry the same import apply" }).click();
+  await page.getByTestId("canonical-schedule-import").getByText("applied", { exact: true }).waitFor();
+  assert.equal(api.importRequests.at(-1).body.requestId, applyRequest.body.requestId);
   assert.equal(api.getSchedule(DATE).runs.length, 3);
+  const canonicalPanel = page.getByTestId("canonical-schedule-import");
+  await canonicalPanel.screenshot({ path: "/tmp/v3-schedule-canonical-desktop.png" });
+  await page.setViewportSize({ width: 375, height: 812 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await canonicalPanel.screenshot({ path: "/tmp/v3-schedule-canonical-phone.png" });
+  await page.setViewportSize({ width: 1440, height: 1000 });
 
   await page.reload();
   await page.getByRole("heading", { name: "Production schedule", exact: true }).waitFor();
   await page.getByLabel("Production date", { exact: true }).fill(DATE);
   await page.getByRole("article", { name: "Planned run 3", exact: true }).waitFor();
+  await page.getByRole("button", { name: /Open schedule import synthetic-schedule\.xlsx/ }).click();
+  await page.getByTestId("canonical-schedule-import").waitFor();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: `Undo unchanged created runs for ${DATE}` }).click();
+  await page.getByText(`Undo confirmed for ${DATE}.`, { exact: false }).waitFor();
+  assert.equal(api.getSchedule(DATE).runs.length, 2);
   await page.getByRole("article", { name: "Planned run 1", exact: true })
     .getByText("Setup review recommended", { exact: true }).waitFor();
 

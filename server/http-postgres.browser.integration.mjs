@@ -675,23 +675,66 @@ async function main() {
       buffer: workbookBytes,
     });
     await page.getByRole("button", { name: "Review workbook", exact: true }).click();
-    await page.getByText(/Workbook reviewed\. Nothing has been applied/).waitFor();
+    await page.getByText(/Workbook reviewed\. Nothing has been staged or applied/).waitFor();
     const importRow = page.getByRole("article", { name: "Import review row 2", exact: true });
     await importRow.getByLabel(/Product ·/).selectOption("DOUGH-A");
     await importRow.getByLabel("Production setup for import row 2", { exact: true }).selectOption("LINE-A");
     await importRow.getByLabel(/Run template ·/).selectOption("SCHEDULE-TEMPLATE");
-    await page.getByRole("button", { name: `Apply 1 reviewed run(s) to ${SCHEDULE_DATE}`, exact: true }).click();
-    await waitScheduleSaved(page);
+    const stageScheduleResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v3/schedules/imports"
+      && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Stage 1 reviewed row(s) without changing schedules", exact: true }).click();
+    const stageScheduleResponse = await stageScheduleResponsePromise;
+    const stageScheduleBody = await stageScheduleResponse.json();
+    assert.equal(stageScheduleResponse.status(), 200, JSON.stringify({ body: stageScheduleBody, request: stageScheduleResponse.request().postDataJSON() }));
+    const stagedScheduleImport = stageScheduleBody.import;
+    assert.equal(stagedScheduleImport.source.fileName, "schedule-browser-integration.xlsx");
+    assert.match(stagedScheduleImport.source.sha256, /^[0-9a-f]{64}$/);
+    assert.equal(stagedScheduleImport.source.parserVersion, "v1-schedule-import/1");
+    confirmedSchedule = await scheduleRead();
+    assert.equal(confirmedSchedule.runs.length, 2, "canonical staging must not change the schedule");
+
+    const applyScheduleImport = async () => {
+      const responsePromise = page.waitForResponse((response) =>
+        new URL(response.url()).pathname === `/api/v3/schedules/imports/${stagedScheduleImport.importId}/apply`
+        && response.request().method() === "POST");
+      await page.getByRole("button", { name: `Apply canonical rows to ${SCHEDULE_DATE}`, exact: true }).click();
+      const response = await responsePromise;
+      const body = await response.json();
+      assert.equal(response.status(), 200, JSON.stringify(body));
+      assert.equal(body.outcome, "accepted");
+    };
+    await applyScheduleImport();
     confirmedSchedule = await scheduleRead();
     assert.equal(confirmedSchedule.runs.length, 3);
     assert.equal(confirmedSchedule.runs[2].targetCases, 6);
     assert.equal(confirmedSchedule.runs[2].notes, "Real database import");
+
+    const undoScheduleResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/schedules/imports/${stagedScheduleImport.importId}/undo`
+      && response.request().method() === "POST");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: `Undo unchanged created runs for ${SCHEDULE_DATE}`, exact: true }).click();
+    const undoScheduleResponse = await undoScheduleResponsePromise;
+    const undoScheduleBody = await undoScheduleResponse.json();
+    assert.equal(undoScheduleResponse.status(), 200, JSON.stringify(undoScheduleBody));
+    assert.equal(undoScheduleBody.outcome, "accepted");
+    confirmedSchedule = await scheduleRead();
+    assert.equal(confirmedSchedule.runs.length, 2, "guarded Undo removes only the created run");
+    await applyScheduleImport();
+    confirmedSchedule = await scheduleRead();
+    assert.equal(confirmedSchedule.runs.length, 3, "canonical rows support reapply after Undo");
 
     await page.reload();
     await page.getByRole("heading", { name: "Production schedule", exact: true }).waitFor();
     await page.getByLabel("Production date", { exact: true }).fill(SCHEDULE_DATE);
     await page.getByRole("article", { name: "Planned run 3", exact: true }).waitFor();
     assert.equal(await page.getByRole("article", { name: /^Planned run / }).count(), 3);
+    await page.getByRole("button", { name: new RegExp(`Open schedule import schedule-browser-integration\\.xlsx ${stagedScheduleImport.importId}`) }).click();
+    const reopenedScheduleImport = page.getByTestId("canonical-schedule-import");
+    await reopenedScheduleImport.waitFor();
+    await reopenedScheduleImport.getByText(stagedScheduleImport.source.sha256, { exact: false }).waitFor();
+    await reopenedScheduleImport.getByText("Real database import", { exact: false }).waitFor();
     const writesBeforeScheduleOffline = browserWrites.length;
     offlineCheckActive = true;
     await context.setOffline(true);
@@ -1566,7 +1609,7 @@ async function main() {
       "500 /api/v3/inventory/opening-counts",
       "500 /api/v3/inventory/freezer-surplus/confirm",
     ], "only deliberate stale conflicts and injected post-commit response loss should be rejected");
-    console.log("V3 authenticated Chromium/PostgreSQL journey passed: run control; React schedule commands, exact retry, stale conflict, deterministic workbook Apply; setup CSV/source-workbook lifecycle, typed create/edit/before-review/Apply, stale-Apply recovery, product-capacity Apply/Undo, named-recipe variants/customer pairings, fixed-nine allergen review, reviewed die defaults/history, and offline lockout with real catalog readback; inventory warehouse/opening-count exact retry/Review/Apply, stock/movement and production-warehouse readback; freezer-surplus exact replay, single-lot carry-in, schedule projection, physical damage, and no repeat ingredient deduction; reload persistence, staff creation, and desktop/phone/tablet layouts.");
+    console.log("V3 authenticated Chromium/PostgreSQL journey passed: run control; React schedule commands, exact retry, stale conflict, canonical workbook stage/Apply/guarded Undo/reapply/reopen; setup CSV/source-workbook lifecycle, typed create/edit/before-review/Apply, stale-Apply recovery, product-capacity Apply/Undo, named-recipe variants/customer pairings, fixed-nine allergen review, reviewed die defaults/history, and offline lockout with real catalog readback; inventory warehouse/opening-count exact retry/Review/Apply, stock/movement and production-warehouse readback; freezer-surplus exact replay, single-lot carry-in, schedule projection, physical damage, and no repeat ingredient deduction; reload persistence, staff creation, and desktop/phone/tablet layouts.");
 
     let webkitBrowser;
     try {
