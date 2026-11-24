@@ -81,6 +81,9 @@ export type ReviewedDieDefaults = { defaults: ReviewedDieDefault[]; history: Die
 export type SourceWorkbookFamily = components["schemas"]["SourceWorkbookPreviewRequest"]["family"];
 export type SourceWorkbookPreview = components["schemas"]["SourceWorkbookPreviewResponse"];
 export type SourceImportSummary = components["schemas"]["SourceImportSummary"];
+export type CombinedSetupReviewRequest = components["schemas"]["CombinedSetupReviewRequest"];
+export type CombinedSetupReviewSummary = components["schemas"]["CombinedSetupReviewSummary"];
+export type CombinedSetupReview = components["schemas"]["CombinedSetupReview"];
 export type Warehouse = components["schemas"]["Warehouse"];
 export type InventoryProduct = components["schemas"]["InventoryProduct"];
 export type StockItem = components["schemas"]["StockItem"];
@@ -829,6 +832,60 @@ function isSetupCatalogDetail(value: unknown): value is SetupCatalogDetail {
     && (candidate.after === null || (Array.isArray(candidate.after) && candidate.after.every(object)));
 }
 
+function isCombinedSetupReviewSummary(value: unknown): value is CombinedSetupReviewSummary {
+  return object(value) && typeof value.id === "string" && UUID.test(value.id)
+    && typeof value.createdBy === "string" && UUID.test(value.createdBy)
+    && typeof value.createdAt === "string"
+    && Number.isSafeInteger(value.importCount) && Number(value.importCount) >= 1 && Number(value.importCount) <= 100
+    && Number.isSafeInteger(value.recordCount) && Number(value.recordCount) >= 1 && Number(value.recordCount) <= 2000;
+}
+
+function isSourceCitation(value: unknown): boolean {
+  return value === null || (object(value) && typeof value.workbook === "string" && typeof value.cell === "string");
+}
+
+function isCombinedSetupReview(value: unknown): value is CombinedSetupReview {
+  if (!object(value) || typeof value.id !== "string" || !UUID.test(value.id)
+    || typeof value.createdBy !== "string" || !UUID.test(value.createdBy)
+    || typeof value.createdAt !== "string" || typeof value.replayed !== "boolean"
+    || !Array.isArray(value.dependencyOrder) || value.dependencyOrder.length !== SOURCE_WORKBOOK_FAMILIES.length
+    || !value.dependencyOrder.every((family) => SOURCE_WORKBOOK_FAMILIES.includes(family as SourceWorkbookFamily))
+    || !Array.isArray(value.imports) || value.imports.length < 1 || value.imports.length > 100
+    || !Array.isArray(value.entries) || !Array.isArray(value.missingDependencies)
+    || !Array.isArray(value.unresolvedIdentities) || !object(value.summary)) return false;
+  const summary = value.summary as Record<string, unknown>;
+  const citationsValid = (item: unknown) => object(item) && isSourceCitation(item.source)
+    && (item.sourceDetails === null || object(item.sourceDetails))
+    && typeof item.importId === "string" && UUID.test(item.importId) && item.revision === 1
+    && ["staged", "applied"].includes(String(item.importStatus))
+    && SOURCE_WORKBOOK_FAMILIES.includes(item.sourceFamily as SourceWorkbookFamily)
+    && typeof item.sourceSha256 === "string" && /^[0-9a-f]{64}$/u.test(item.sourceSha256)
+    && ["v1-source-import/1", "v1-source-import/2"].includes(String(item.parserVersion));
+  return value.imports.every((item) => object(item) && typeof item.importId === "string" && UUID.test(item.importId)
+      && item.revision === 1 && ["mixes", "run-templates"].includes(String(item.family))
+      && ["staged", "applied"].includes(String(item.status))
+      && Number.isSafeInteger(item.rowCount) && Number(item.rowCount) >= 1 && isSourceImportSummary(item.sourceSummary))
+    && value.entries.every((entry) => object(entry) && ["mixes", "run-templates"].includes(String(entry.targetFamily))
+      && typeof entry.code === "string" && typeof entry.field === "string"
+      && typeof entry.currentRecordPresent === "boolean" && Array.isArray(entry.proposedValues)
+      && ["fill", "match", "mismatch", "conflict"].includes(String(entry.disposition))
+      && typeof entry.requiresDecision === "boolean" && Array.isArray(entry.proposals)
+      && entry.proposals.length >= 1 && entry.proposals.every((proposal) => citationsValid(proposal)
+        && typeof proposal.code === "string"))
+    && value.missingDependencies.every((item) => citationsValid(item) && item.targetFamily === "run-templates"
+      && typeof item.code === "string" && typeof item.field === "string" && typeof item.reference === "string"
+      && item.reason === "no-unique-exact-or-normalized-match" && item.suggestionOnly === true
+      && Array.isArray(item.suggestions) && item.suggestions.every((suggestion: unknown) => object(suggestion)
+        && typeof suggestion.code === "string" && typeof suggestion.name === "string"))
+    && value.unresolvedIdentities.every((item) => object(item)
+      && ["ambiguous-name", "ambiguous-dependency"].includes(String(item.type))
+      && ["mixes", "run-templates"].includes(String(item.targetFamily))
+      && typeof item.normalizedName === "string" && (item.reference === null || typeof item.reference === "string")
+      && Array.isArray(item.candidates) && item.candidates.every(object) && Array.isArray(item.suggestions))
+    && ["imports", "records", "fills", "matches", "mismatches", "conflicts", "missingDependencies", "unresolvedIdentities"]
+      .every((key) => Number.isSafeInteger(summary[key]) && Number(summary[key]) >= 0);
+}
+
 function isSetupMasterRecord(value: unknown): value is SetupMasterRecord {
   return object(value) && typeof value.code === "string" && typeof value.name === "string"
     && typeof value.productCode === "string" && object(value.data);
@@ -957,6 +1014,41 @@ export async function stageSetupCatalogImport(
           .every((key) => result.sourceSummary?.[key] === request.sourceSummary?.[key])
       : result.sourceSummary != null)) {
     throw new ApiError("The server did not return a complete staged setup review. Retry the same request.", 502);
+  }
+  return result;
+}
+
+export async function listCombinedSetupReviews(): Promise<CombinedSetupReviewSummary[]> {
+  const result = await unwrap(await client.GET("/api/v3/setup-catalog/combined-reviews", {
+    params: { query: { limit: 50 } },
+  }));
+  if (!Array.isArray(result.reviews) || !result.reviews.every(isCombinedSetupReviewSummary)) {
+    throw new ApiError("The server returned incomplete combined-review history. Refresh and retry.", 502);
+  }
+  return result.reviews;
+}
+
+export async function createCombinedSetupReview(
+  request: CombinedSetupReviewRequest,
+): Promise<CombinedSetupReview> {
+  const result = await unwrap(await client.POST("/api/v3/setup-catalog/combined-reviews", {
+    params: { header: mutationHeaders() },
+    body: request,
+  }));
+  const expectedIds = [...request.importIds].sort().join("\u0000");
+  if (!isCombinedSetupReview(result)
+    || result.imports.map((item) => item.importId).sort().join("\u0000") !== expectedIds) {
+    throw new ApiError("The server did not return the complete pinned combined review. Retry the same request.", 502);
+  }
+  return result;
+}
+
+export async function getCombinedSetupReview(reviewId: string): Promise<CombinedSetupReview> {
+  const result = await unwrap(await client.GET("/api/v3/setup-catalog/combined-reviews/{reviewId}", {
+    params: { path: { reviewId } },
+  }));
+  if (!isCombinedSetupReview(result) || result.id !== reviewId) {
+    throw new ApiError("The stored combined review was incomplete. Reload history and retry.", 502);
   }
   return result;
 }

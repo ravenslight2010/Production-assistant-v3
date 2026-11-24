@@ -426,10 +426,10 @@
               </form>
               <div class="manager-subsection">
                 <h4>V1 source workbooks</h4>
-                <p class="manager-help">Preview a supported Excel layout, correct its V3 mapping, and stage only reviewed rows. The original workbook is not retained. Photos, OCR suggestions, and unsupported layouts stay out of Apply.</p>
+                <p class="manager-help">Queue mixed workbooks, choose each source family, and preview and stage one file at a time. The original workbook is not retained. Photos, OCR suggestions, and unsupported layouts stay out of Apply.</p>
                 <form id="source-workbook-form" class="manager-form">
                   <label class="field" for="source-workbook-family">
-                    <span>Source family</span>
+                    <span>Default family for added files</span>
                     <select id="source-workbook-family" name="family" required>
                       <option value="spec-sheets">Spec sheet</option>
                       <option value="premix-sheets">Premix sheet</option>
@@ -441,15 +441,25 @@
                   </label>
                   <label class="field" for="source-workbook-file">
                     <span id="source-workbook-file-label">XLSX workbook</span>
-                    <input id="source-workbook-file" name="workbook" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required aria-describedby="source-workbook-help" />
+                    <input id="source-workbook-file" name="workbook" type="file" accept=".xlsx,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple aria-describedby="source-workbook-help" />
                   </label>
-                  <p class="field-hint" id="source-workbook-help">Up to 5 MiB. Excel formulas and cached formula values require review. Photos and OCR are not applied.</p>
-                  <button class="button button-primary" id="source-workbook-preview-button" type="submit">Preview source rows</button>
+                  <p class="field-hint" id="source-workbook-help">Up to 5 MiB per file. DOCX is valid only for sauce guides. Raw queued files are cleared on reload or offline transition.</p>
+                  <button class="button button-primary" id="source-workbook-preview-button" type="submit">Preview first queued workbook</button>
                 </form>
+                <div id="source-workbook-queue" class="manager-list" aria-label="Source workbook queue"></div>
                 <div id="source-workbook-preview" class="manager-preview" aria-live="polite" hidden></div>
                 <div class="manager-actions" id="source-workbook-actions" hidden>
                   <button class="button button-primary" id="source-workbook-stage" type="button">Stage reviewed rows</button>
                 </div>
+              </div>
+              <div class="manager-subsection" aria-labelledby="combined-setup-review-heading">
+                <h4 id="combined-setup-review-heading">Combined setup review</h4>
+                <p class="manager-help">Combine canonical staged or applied source imports in dependency order. This projection never writes setup values; Apply and Undo remain on each individual import.</p>
+                <div id="combined-review-sources" class="manager-list" aria-label="Canonical source imports"></div>
+                <button class="button button-secondary" id="combined-review-create" type="button">Create combined review</button>
+                <h5 class="manager-subheading">Saved combined reviews</h5>
+                <div id="combined-review-history" class="manager-list" aria-live="polite"></div>
+                <div id="combined-review-projection" class="manager-preview" aria-live="polite" hidden></div>
               </div>
               <div id="setup-catalog-preview" class="manager-preview" aria-live="polite" hidden></div>
               <div class="manager-actions" id="setup-catalog-actions" hidden>

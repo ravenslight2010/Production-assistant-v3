@@ -2,6 +2,7 @@ import { renderImportCsvTemplate } from "../core/import-csv-templates.mjs";
 import { parseSetupCatalogCsv, setupCatalogCsvTemplates } from "../core/setup-catalog-csv.mjs";
 
 const API = "/api/v3/setup-catalog/imports";
+const COMBINED_API = "/api/v3/setup-catalog/combined-reviews";
 const PENDING_KEY = "fieldline:v3:setup-catalog-pending";
 const dom = Object.fromEntries([
   "setup-catalog-panel", "setup-catalog-family", "setup-catalog-form", "setup-catalog-file",
@@ -9,6 +10,7 @@ const dom = Object.fromEntries([
   "setup-catalog-actions", "setup-catalog-apply", "setup-catalog-retry", "setup-catalog-history",
   "setup-catalog-status", "source-workbook-form", "source-workbook-family", "source-workbook-file",
   "source-workbook-preview-button", "source-workbook-preview", "source-workbook-actions", "source-workbook-stage",
+  "source-workbook-queue", "combined-review-sources", "combined-review-create", "combined-review-history", "combined-review-projection",
 ].map((id) => [id, document.getElementById(id)]));
 
 let staff = null;
@@ -21,6 +23,11 @@ let validating = false;
 let historyLoading = false;
 let lastHistoryLoadAt = 0;
 let sourceReview = null;
+let sourceQueue = [];
+let activeSourceId = null;
+let combinedHistory = [];
+let combinedReview = null;
+const combinedSelected = new Set();
 
 function object(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function uuid(value) { return typeof value === "string" && /^[0-9a-f-]{36}$/iu.test(value); }
@@ -69,9 +76,13 @@ function validSourceRecords(value) {
 function readPending() {
   try {
     const value = JSON.parse(localStorage.getItem(PENDING_KEY) || "null");
-    if (object(value) && uuid(value.actorId) && text(value.requestId, 200)
-      && text(value.family, 40) && typeof value.csv === "string"
-      && (value.sourceSummary == null || (validSourceSummary(value.sourceSummary) && validSourceRecords(value.sourceRecords)))) return value;
+    if (object(value) && uuid(value.actorId) && text(value.requestId, 200)) {
+      if (Array.isArray(value.importIds) && value.importIds.length >= 1 && value.importIds.length <= 100
+        && value.importIds.every(uuid) && new Set(value.importIds.map((id) => id.toLowerCase())).size === value.importIds.length
+        && Object.keys(value).sort().join("\u0000") === "actorId\u0000importIds\u0000requestId") return value;
+      if (text(value.family, 40) && typeof value.csv === "string"
+        && (value.sourceSummary == null || (validSourceSummary(value.sourceSummary) && validSourceRecords(value.sourceRecords)))) return value;
+    }
   } catch {}
   localStorage.removeItem(PENDING_KEY);
   return null;
@@ -363,30 +374,130 @@ async function fileToBase64(file) {
   return btoa(binary);
 }
 
-async function previewSourceWorkbook(event) {
-  event.preventDefault();
-  if (!canWrite || inFlight || validating) return;
-  const file = dom["source-workbook-file"].files?.[0];
-  if (!file) {
-    setStatus("Choose a supported source workbook or sauce guide document.", true);
+function completeActiveSource() {
+  sourceQueue = sourceQueue.filter((item) => item.id !== activeSourceId);
+  activeSourceId = null;
+  sourceReview = null;
+  renderSourceReview();
+  renderSourceQueue();
+}
+
+function closeSourceReview() {
+  activeSourceId = null;
+  sourceReview = null;
+  renderSourceReview();
+  renderSourceQueue();
+  setStatus("Preview closed. The file remains queued; nothing was staged or applied.");
+}
+
+function removeSourceQueueEntry(id) {
+  sourceQueue = sourceQueue.filter((item) => item.id !== id);
+  if (activeSourceId === id) {
+    activeSourceId = null;
+    sourceReview = null;
+    renderSourceReview();
+  }
+  renderSourceQueue();
+  setStatus("Queued workbook removed. Nothing was staged or applied.");
+}
+
+function renderSourceQueue() {
+  const container = dom["source-workbook-queue"];
+  container.replaceChildren();
+  if (!sourceQueue.length) {
+    const empty = document.createElement("p");
+    empty.className = "manager-help";
+    empty.textContent = "No workbooks queued. Raw files are held only in this online queue and are cleared on reload or offline transition.";
+    container.append(empty);
     return;
   }
+  for (const [index, item] of sourceQueue.entries()) {
+    const row = document.createElement("div");
+    row.className = "manager-list-notice";
+    row.setAttribute("aria-label", `Queued workbook ${index + 1}`);
+    const name = document.createElement("strong");
+    name.textContent = item.file.name;
+    const label = document.createElement("label");
+    label.className = "field";
+    const caption = document.createElement("span");
+    caption.textContent = "Source family";
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", `Source family for ${item.file.name}`);
+    for (const family of ["spec-sheets", "premix-sheets", "cheese-mix-specs", "shipping-guides", "sauce-guides", "dough-guides"]) {
+      const option = document.createElement("option");
+      option.value = family;
+      option.textContent = sourceFamilyLabel(family);
+      select.append(option);
+    }
+    select.value = item.family;
+    select.disabled = !canWrite || inFlight || validating || sourceReview !== null;
+    select.addEventListener("change", () => { item.family = select.value; item.error = null; });
+    label.append(caption, select);
+    const controls = document.createElement("div");
+    controls.className = "manager-actions";
+    const reviewButton = button(item.id === activeSourceId && sourceReview ? "Close workbook preview" : "Preview queued workbook", () => {
+      if (item.id === activeSourceId && sourceReview) closeSourceReview();
+      else void previewQueuedSource(item.id);
+    });
+    reviewButton.disabled = !canWrite || inFlight || validating || (sourceReview !== null && item.id !== activeSourceId);
+    const removeButton = button("Remove queued workbook", () => removeSourceQueueEntry(item.id));
+    removeButton.disabled = !canWrite || inFlight || validating || sourceReview !== null;
+    controls.append(reviewButton, removeButton);
+    row.append(name, label, controls);
+    if (item.error) {
+      const error = document.createElement("p");
+      error.className = "manager-help";
+      error.setAttribute("role", "alert");
+      error.textContent = item.error;
+      row.append(error);
+    }
+    container.append(row);
+  }
+}
+
+function queueSourceFiles(files) {
+  if (!canWrite || inFlight || validating || sourceReview || !files?.length) return;
+  const family = dom["source-workbook-family"].value;
+  sourceQueue.push(...Array.from(files, (file) => ({ id: crypto.randomUUID(), file, family, error: null })));
+  dom["source-workbook-file"].value = "";
+  renderSourceQueue();
+  updateControls();
+  setStatus("Choose each queued file’s source family, then preview and stage each independently.");
+}
+
+async function previewSourceWorkbook(event) {
+  event.preventDefault();
+  if (sourceQueue[0]) await previewQueuedSource(sourceQueue[0].id);
+  else setStatus("Queue at least one supported source workbook or sauce guide document.", true);
+}
+
+async function previewQueuedSource(id) {
+  if (!canWrite || inFlight || validating || sourceReview) return;
+  const queued = sourceQueue.find((item) => item.id === id);
+  if (!queued) return;
+  const { file, family } = queued;
   if (file.size > 5 * 1024 * 1024) {
-    setStatus("Source workbooks must be 5 MiB or smaller.", true);
+    queued.error = "Source workbooks must be 5 MiB or smaller.";
+    renderSourceQueue();
+    setStatus(queued.error, true);
+    return;
+  }
+  if (!/\.xlsx$/iu.test(file.name) && !(family === "sauce-guides" && /\.docx$/iu.test(file.name))) {
+    queued.error = family === "sauce-guides" ? "Choose an XLSX workbook or DOCX sauce guide." : "Choose an XLSX workbook for this source family.";
+    renderSourceQueue();
+    setStatus(queued.error, true);
     return;
   }
   validating = true;
+  activeSourceId = id;
+  queued.error = null;
   updateControls();
   try {
     const body = await request(`${API}/workbooks/preview`, {
       method: "POST",
-      body: JSON.stringify({
-        family: dom["source-workbook-family"].value,
-        fileName: file.name,
-        workbookBase64: await fileToBase64(file),
-      }),
+      body: JSON.stringify({ family, fileName: file.name, workbookBase64: await fileToBase64(file) }),
     });
-    if (!validateSourcePreview(body)) throw new Error("The source preview did not match the expected review format.");
+    if (!validateSourcePreview(body) || body.family !== family) throw new Error("The source preview did not match the expected review format.");
     sourceReview = {
       fileName: file.name,
       sourceFamily: body.family,
@@ -403,19 +514,18 @@ async function previewSourceWorkbook(event) {
         reviewed: false,
         jsonError: false,
       })),
-      unresolved: body.unresolvedRows.map((entry) => ({
-        ...entry,
-        resolved: false,
-        acknowledged: false,
-        skipped: false,
-      })),
+      unresolved: body.unresolvedRows.map((entry) => ({ ...entry, resolved: false, acknowledged: false, skipped: false })),
     };
     renderSourceReview();
+    renderSourceQueue();
     setStatus("Review every proposed row and acknowledge unresolved rows before staging.");
   } catch (error) {
+    activeSourceId = null;
     sourceReview = null;
+    queued.error = error instanceof Error ? error.message : "The source workbook could not be previewed.";
     renderSourceReview();
-    setStatus(error instanceof Error ? error.message : "The source workbook could not be previewed.", true);
+    renderSourceQueue();
+    setStatus(queued.error, true);
   } finally {
     validating = false;
     updateControls();
@@ -478,26 +588,198 @@ async function stageSourceReview() {
       sourceRecords,
     };
     localStorage.setItem(PENDING_KEY, JSON.stringify(pending));
-    await submitPending(parseSetupCatalogCsv(pending.family, pending.csv));
-    sourceReview = null;
-    renderSourceReview();
-    dom["source-workbook-file"].value = "";
+    const staged = await submitPending(parseSetupCatalogCsv(pending.family, pending.csv));
+    if (staged) completeActiveSource();
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "The source rows could not be staged.", true);
   }
 }
 
 function updateSourceFileAccept() {
-  const sauce = dom["source-workbook-family"].value === "sauce-guides";
-  document.getElementById("source-workbook-file-label").textContent = sauce
-    ? "XLSX workbook or DOCX guide"
-    : "XLSX workbook";
-  dom["source-workbook-file"].accept = sauce
-    ? ".xlsx,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    : ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-  document.getElementById("source-workbook-help").textContent = sauce
-    ? "Up to 5 MiB. Sauce guides accept XLSX sentence tables or DOCX text; unsupported sentences remain review-only."
-    : "Up to 5 MiB. Excel formulas and cached formula values require review.";
+  document.getElementById("source-workbook-file-label").textContent = "Mixed XLSX workbooks and DOCX sauce guides";
+  dom["source-workbook-file"].accept = ".xlsx,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  document.getElementById("source-workbook-help").textContent = "Up to 5 MiB per file. DOCX is valid only for sauce guides. Raw queued files are cleared on reload or offline transition.";
+}
+
+function validCombinedReview(value) {
+  return object(value) && uuid(value.id) && uuid(value.createdBy) && text(value.createdAt, 60)
+    && typeof value.replayed === "boolean" && Array.isArray(value.dependencyOrder)
+    && Array.isArray(value.imports) && value.imports.length >= 1 && value.imports.length <= 100
+    && value.imports.every((item) => object(item) && uuid(item.importId) && item.revision === 1
+      && ["mixes", "run-templates"].includes(item.family) && ["staged", "applied"].includes(item.status)
+      && validSourceSummary(item.sourceSummary))
+    && Array.isArray(value.entries) && value.entries.every((entry) => object(entry)
+      && ["fill", "match", "mismatch", "conflict"].includes(entry.disposition)
+      && typeof entry.requiresDecision === "boolean" && Array.isArray(entry.proposals))
+    && Array.isArray(value.missingDependencies) && Array.isArray(value.unresolvedIdentities)
+    && object(value.summary) && ["imports", "records", "fills", "matches", "mismatches", "conflicts", "missingDependencies", "unresolvedIdentities"]
+      .every((key) => Number.isSafeInteger(value.summary[key]) && value.summary[key] >= 0);
+}
+
+function combinedValue(value) {
+  const pre = document.createElement("pre");
+  pre.textContent = value === undefined ? "Not present" : JSON.stringify(value, null, 2) ?? String(value);
+  return pre;
+}
+
+function renderCombinedSources() {
+  const container = dom["combined-review-sources"];
+  container.replaceChildren();
+  const eligible = imports.filter((item) => validSourceSummary(item.sourceSummary) && item.status !== "undone");
+  const eligibleIds = new Set(eligible.map((item) => item.id));
+  for (const id of combinedSelected) if (!eligibleIds.has(id)) combinedSelected.delete(id);
+  if (!eligible.length) {
+    const empty = document.createElement("p");
+    empty.className = "manager-help";
+    empty.textContent = "Stage a source workbook first. CSV-only and undone imports cannot join a combined review.";
+    container.append(empty);
+  }
+  for (const item of eligible) {
+    const label = document.createElement("label");
+    label.className = "source-review-check";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = combinedSelected.has(item.id);
+    input.disabled = !canWrite || inFlight || validating;
+    input.addEventListener("change", () => {
+      if (input.checked) combinedSelected.add(item.id);
+      else combinedSelected.delete(item.id);
+    });
+    const caption = document.createElement("span");
+    caption.textContent = `${sourceFamilyLabel(item.sourceSummary.sourceFamily)} · ${item.status} · revision ${item.revision} · ${item.sourceSummary.parserVersion} · SHA-256 ${item.sourceSummary.sourceSha256.slice(0, 12)}… · ${item.id}`;
+    label.append(input, caption);
+    container.append(label);
+  }
+  dom["combined-review-create"].disabled = !canWrite || inFlight || validating || !eligible.length;
+}
+
+function renderCombinedHistory() {
+  const container = dom["combined-review-history"];
+  container.replaceChildren();
+  if (!combinedHistory.length) {
+    const empty = document.createElement("p");
+    empty.className = "manager-help";
+    empty.textContent = "No combined reviews have been saved.";
+    container.append(empty);
+    return;
+  }
+  combinedHistory.forEach((item, index) => {
+    const control = button(`Reopen combined review ${index + 1}`, () => { void reopenCombinedReview(item.id); });
+    control.setAttribute("aria-label", `Reopen combined review ${index + 1}`);
+    const counts = document.createElement("span");
+    counts.className = "manager-help";
+    counts.textContent = `${item.importCount} imports · ${item.recordCount} records · ${item.createdAt}`;
+    container.append(control, counts);
+  });
+}
+
+function renderCombinedReview() {
+  const container = dom["combined-review-projection"];
+  container.replaceChildren();
+  container.hidden = !combinedReview;
+  if (!combinedReview) return;
+  const heading = document.createElement("strong");
+  heading.textContent = `Server-owned projection · ${combinedReview.id}`;
+  const summary = document.createElement("p");
+  summary.className = "manager-help";
+  summary.textContent = `${combinedReview.summary.imports} imports · ${combinedReview.summary.records} records · ${combinedReview.summary.fills} fills · ${combinedReview.summary.matches} matches · ${combinedReview.summary.mismatches} mismatches · ${combinedReview.summary.conflicts} conflicts · ${combinedReview.summary.missingDependencies} missing dependencies · ${combinedReview.summary.unresolvedIdentities} unresolved identities`;
+  const boundary = document.createElement("p");
+  boundary.className = "manager-help";
+  boundary.textContent = "No corpus-wide Apply, transaction, or automatic rollback exists. Open the responsible individual import for every setup decision.";
+  container.append(heading, summary, boundary);
+  for (const item of combinedReview.imports) {
+    const row = document.createElement("div");
+    row.className = "manager-list-notice";
+    const text = document.createElement("span");
+    text.textContent = `${sourceFamilyLabel(item.sourceSummary.sourceFamily)} · ${item.status} · revision ${item.revision} · ${item.importId}`;
+    row.append(text, button("Open individual import", () => {
+      const source = imports.find((candidate) => candidate.id === item.importId);
+      if (source) void reopen(source);
+    }));
+    container.append(row);
+  }
+  for (const entry of combinedReview.entries) {
+    const details = document.createElement("details");
+    details.className = "source-review-row";
+    details.open = entry.requiresDecision;
+    const title = document.createElement("summary");
+    title.textContent = `${entry.disposition} · ${entry.code} · ${entry.field}${entry.requiresDecision ? " · individual decision required" : ""}`;
+    details.append(title);
+    const current = document.createElement("p");
+    current.className = "manager-help";
+    current.textContent = "Current canonical value";
+    details.append(current, combinedValue(entry.currentRecordPresent ? entry.currentValue : null));
+    for (const proposal of entry.proposals) {
+      const proposed = document.createElement("p");
+      proposed.className = "manager-help";
+      proposed.textContent = `Proposed ${JSON.stringify(proposal.value)} · ${proposal.source ? `${proposal.source.workbook} · ${proposal.source.cell}` : "Citation unavailable in legacy /1 history"} · import ${proposal.importId} · revision ${proposal.revision}`;
+      details.append(proposed, combinedValue(proposal.value), button("Review this source import", () => {
+        const source = imports.find((candidate) => candidate.id === proposal.importId);
+        if (source) void reopen(source);
+      }));
+    }
+    container.append(details);
+  }
+  for (const dependency of combinedReview.missingDependencies) {
+    const row = document.createElement("div");
+    row.className = "manager-list-notice";
+    const text = document.createElement("p");
+    text.textContent = `${dependency.code} · ${dependency.field} references ${dependency.reference}. ${dependency.source ? `${dependency.source.workbook} · ${dependency.source.cell}. ` : ""}Near-name suggestions are read-only and never learned or linked automatically.`;
+    const suggestions = document.createElement("pre");
+    suggestions.textContent = JSON.stringify(dependency.suggestions, null, 2);
+    row.append(text, suggestions, button("Open referring import", () => {
+      const source = imports.find((candidate) => candidate.id === dependency.importId);
+      if (source) void reopen(source);
+    }));
+    container.append(row);
+  }
+  for (const identity of combinedReview.unresolvedIdentities) {
+    const row = document.createElement("div");
+    row.className = "manager-list-notice";
+    const text = document.createElement("p");
+    text.textContent = `${identity.type} · ${identity.reference ?? identity.normalizedName} · candidates remain distinct; select a stable canonical code in an individual import.`;
+    const candidates = document.createElement("pre");
+    candidates.textContent = JSON.stringify(identity.candidates, null, 2);
+    row.append(text, candidates);
+    container.append(row);
+  }
+}
+
+async function loadCombinedReviews() {
+  const body = await request(`${COMBINED_API}?limit=50`);
+  if (!Array.isArray(body.reviews) || !body.reviews.every((item) => object(item) && uuid(item.id)
+    && uuid(item.createdBy) && text(item.createdAt, 60)
+    && Number.isSafeInteger(item.importCount) && item.importCount >= 1
+    && Number.isSafeInteger(item.recordCount) && item.recordCount >= 1)) {
+    throw new Error("The combined-review history is incomplete. Refresh to try again.");
+  }
+  combinedHistory = body.reviews;
+  renderCombinedHistory();
+}
+
+function createCombinedReview() {
+  if (!canWrite || inFlight || validating || pending) return;
+  const importIds = [...combinedSelected].sort();
+  if (!importIds.length) {
+    setStatus("Select at least one staged or applied source import.", true);
+    return;
+  }
+  pending = { actorId: staff.userId, requestId: crypto.randomUUID(), importIds };
+  localStorage.setItem(PENDING_KEY, JSON.stringify(pending));
+  void submitPending();
+}
+
+async function reopenCombinedReview(id) {
+  if (!canWrite || inFlight) return;
+  try {
+    const body = await request(`${COMBINED_API}/${encodeURIComponent(id)}`);
+    if (!validCombinedReview(body) || body.id !== id) throw new Error("The stored combined review was incomplete.");
+    combinedReview = body;
+    renderCombinedReview();
+    setStatus("Canonical combined projection reloaded; no setup values were written.");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "The combined review could not be reopened.", true);
+  }
 }
 
 function briefRecord(record) {
@@ -600,6 +882,8 @@ async function loadImports(force = false) {
     imports = body.imports;
     lastHistoryLoadAt = Date.now();
     renderHistory();
+    renderCombinedSources();
+    await loadCombinedReviews();
   } finally {
     historyLoading = false;
   }
@@ -695,6 +979,23 @@ async function submitPending(records = null) {
   dom["setup-catalog-retry"].disabled = true;
   dom["setup-catalog-review"].disabled = true;
   try {
+    if (pending.importIds) {
+      const response = await request(COMBINED_API, {
+        method: "POST",
+        body: JSON.stringify({ requestId: pending.requestId, importIds: pending.importIds }),
+      });
+      const expectedIds = [...pending.importIds].sort().join("\u0000");
+      if (!validCombinedReview(response) || response.imports.map((item) => item.importId).sort().join("\u0000") !== expectedIds) {
+        throw new Error("The server did not return the complete pinned combined review.");
+      }
+      localStorage.removeItem(PENDING_KEY);
+      pending = null;
+      combinedReview = response;
+      renderCombinedReview();
+      setStatus(`${response.replayed ? "Previous combined-review request confirmed. " : "Combined review saved. "}No setup values were written.`);
+      await loadImports(true);
+      return true;
+    }
     const validated = records || parseSetupCatalogCsv(pending.family, pending.csv);
     const response = await request(API, {
       method: "POST",
@@ -718,9 +1019,12 @@ async function submitPending(records = null) {
       ? `${sourceSummary.importedRows} ${sourceFamilyLabel(sourceSummary.sourceFamily).toLocaleLowerCase()} rows are staged; ${sourceSummary.skippedRows} skipped and ${sourceSummary.unresolvedRows} remain review-only.`
       : `${response.rowCount} setup rows are staged. Apply only after reviewing the values.`);
     await loadImports(true);
+    if (sourceSummary && activeSourceId) completeActiveSource();
+    return true;
   } catch (error) {
     dom["setup-catalog-retry"].hidden = false;
     setStatus(error instanceof Error ? error.message : "The result is not confirmed. Retry the same import.", true);
+    return false;
   } finally {
     inFlight = false;
     updateControls();
@@ -749,6 +1053,7 @@ async function act(item, action) {
     dom["setup-catalog-preview"].hidden = true;
     dom["setup-catalog-actions"].hidden = true;
     await loadImports(true);
+    if (combinedReview) await reopenCombinedReview(combinedReview.id);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "The setup action was not confirmed. Refresh history before retrying.", true);
   } finally {
@@ -761,6 +1066,7 @@ function updateControls() {
   const retryOwned = pending && pending.actorId === staff?.userId;
   dom["setup-catalog-retry"].hidden = !retryOwned;
   dom["setup-catalog-retry"].disabled = !canWrite || inFlight;
+  dom["setup-catalog-retry"].textContent = pending?.importIds ? "Retry the same combined review request" : "Retry the same import";
   dom["setup-catalog-review"].disabled = !canWrite || inFlight || validating;
   dom["setup-catalog-family"].disabled = !canWrite || inFlight || validating;
   dom["setup-catalog-file"].disabled = !canWrite || inFlight || validating;
@@ -769,9 +1075,14 @@ function updateControls() {
   dom["setup-catalog-history"].querySelectorAll("button").forEach((control) => {
     control.disabled = !canWrite || inFlight;
   });
-  dom["source-workbook-family"].disabled = !canWrite || inFlight || validating;
-  dom["source-workbook-file"].disabled = !canWrite || inFlight || validating;
-  dom["source-workbook-preview-button"].disabled = !canWrite || inFlight || validating;
+  dom["source-workbook-family"].disabled = !canWrite || inFlight || validating || sourceReview !== null;
+  dom["source-workbook-file"].disabled = !canWrite || inFlight || validating || sourceReview !== null;
+  dom["source-workbook-preview-button"].disabled = !canWrite || inFlight || validating || sourceReview !== null || sourceQueue.length === 0;
+  dom["source-workbook-queue"].querySelectorAll("select").forEach((control) => {
+    control.disabled = !canWrite || inFlight || validating || sourceReview !== null;
+  });
+  dom["combined-review-create"].disabled = !canWrite || inFlight || validating || imports.every((item) => !validSourceSummary(item.sourceSummary) || item.status === "undone");
+  dom["combined-review-history"].querySelectorAll("button").forEach((control) => { control.disabled = !canWrite || inFlight; });
   updateSourceStageButton();
 }
 
@@ -779,17 +1090,16 @@ dom["setup-catalog-family"].addEventListener("change", () => {
   dom["setup-catalog-preview"].hidden = true;
   dom["setup-catalog-actions"].hidden = true;
   dom["setup-catalog-file"].value = "";
-  sourceReview = null;
-  renderSourceReview();
   renderTemplate();
 });
 dom["source-workbook-form"].addEventListener("submit", (event) => { void previewSourceWorkbook(event); });
-dom["source-workbook-family"].addEventListener("change", () => {
-  sourceReview = null;
-  updateSourceFileAccept();
-  renderSourceReview();
-});
+dom["source-workbook-family"].addEventListener("change", updateSourceFileAccept);
+dom["source-workbook-file"].addEventListener("change", () => queueSourceFiles(dom["source-workbook-file"].files));
+dom["combined-review-create"].addEventListener("click", createCombinedReview);
 updateSourceFileAccept();
+renderSourceQueue();
+renderCombinedSources();
+renderCombinedHistory();
 dom["source-workbook-stage"].addEventListener("click", () => { void stageSourceReview(); });
 dom["setup-catalog-form"].addEventListener("submit", (event) => {
   event.preventDefault();
@@ -807,11 +1117,25 @@ export function updateSetupCatalogContext(nextStaff, writable) {
   staff = nextStaff;
   canWrite = writable === true && staff?.capabilities?.includes("manage-inventory") === true;
   dom["setup-catalog-panel"].hidden = !staff?.capabilities?.includes("manage-inventory");
+  if (!writable) {
+    sourceQueue = [];
+    activeSourceId = null;
+    sourceReview = null;
+    dom["source-workbook-file"].value = "";
+    renderSourceQueue();
+    renderSourceReview();
+  }
   if (!staff) {
     imports = [];
     reviewed = null;
+    combinedHistory = [];
+    combinedReview = null;
+    combinedSelected.clear();
     dom["setup-catalog-history"].replaceChildren();
     dom["setup-catalog-preview"].hidden = true;
+    renderCombinedSources();
+    renderCombinedHistory();
+    renderCombinedReview();
     return;
   }
   updateControls();

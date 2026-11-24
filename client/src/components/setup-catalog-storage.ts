@@ -1,5 +1,6 @@
 import {
   isSourceImportSummary,
+  type CombinedSetupReviewRequest,
   type DieDefaultSaveRequest,
   type SetupCatalogEditRequest,
   type SetupCatalogStageRequest,
@@ -14,6 +15,7 @@ const FAMILIES = new Set([
   "freezer-pull-items", "run-templates", "manager-lists", "aliases",
 ]);
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const FINGERPRINT = /^[0-9a-f]{64}$/u;
 
 function isSourceRecords(value: unknown): value is NonNullable<SetupCatalogStageRequest["sourceRecords"]> {
@@ -25,7 +27,7 @@ function isSourceRecords(value: unknown): value is NonNullable<SetupCatalogStage
       && !Array.isArray(item.sourceDetails))));
 }
 
-export type PendingSetupCatalogRequest = SetupCatalogStageRequest | SetupCatalogEditRequest | SetupMasterEditRequest | DieDefaultSaveRequest;
+export type PendingSetupCatalogRequest = SetupCatalogStageRequest | SetupCatalogEditRequest | SetupMasterEditRequest | DieDefaultSaveRequest | CombinedSetupReviewRequest;
 
 function pendingKey(userId: string): string {
   return `${PENDING_PREFIX}${userId}`;
@@ -55,6 +57,16 @@ export function readPendingSetupCatalogImport(userId: string): PendingSetupCatal
         return null;
       }
       return value as unknown as DieDefaultSaveRequest;
+    }
+    if (Object.hasOwn(value, "importIds")) {
+      if (Object.keys(value).sort().join("\u0000") !== "importIds\u0000requestId"
+        || !Array.isArray(value.importIds) || value.importIds.length < 1 || value.importIds.length > 100
+        || value.importIds.some((item) => typeof item !== "string" || !UUID.test(item))
+        || new Set(value.importIds.map((item) => String(item).toLocaleLowerCase("en-US"))).size !== value.importIds.length) {
+        sessionStorage.removeItem(key);
+        return null;
+      }
+      return { requestId: value.requestId, importIds: value.importIds };
     }
     if (Object.hasOwn(value, "kind")) {
       if (Object.keys(value).sort().join("\u0000") !== "expectedFingerprint\u0000kind\u0000record\u0000requestId"

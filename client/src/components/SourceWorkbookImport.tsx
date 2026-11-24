@@ -33,6 +33,12 @@ type Review = Omit<SourceWorkbookPreview, "records" | "unresolvedRows"> & {
   candidates: Candidate[];
   unresolved: Unresolved[];
 };
+type QueueEntry = {
+  id: string;
+  file: File;
+  family: SourceWorkbookFamily;
+  error: string | null;
+};
 
 function message(cause: unknown, fallback: string): string {
   return cause instanceof Error ? cause.message : fallback;
@@ -75,26 +81,42 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(binary);
 }
 
-export function SourceWorkbookImport({ online, disabled, pending, onStage }: {
+export function SourceWorkbookImport({ online, disabled, confirmedRequestId, onStage }: {
   online: boolean;
   disabled: boolean;
-  pending: boolean;
+  confirmedRequestId: string | null;
   onStage: (request: SetupCatalogStageRequest) => Promise<boolean>;
 }) {
   const [family, setFamily] = useState<SourceWorkbookFamily>("spec-sheets");
+  const [queue, setQueue] = useState<QueueEntry[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [review, setReview] = useState<Review | null>(null);
   const [busy, setBusy] = useState<"preview" | "stage" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const previewController = useRef<AbortController | null>(null);
-  const sourceRequested = useRef(false);
-  const sawSourcePending = useRef(false);
+  const activeRequestId = useRef<string | null>(null);
+  const activeIdRef = useRef<string | null>(null);
   const controlsDisabled = disabled || busy !== null;
-  const sauce = family === "sauce-guides";
+  const fileControlsDisabled = controlsDisabled || review !== null;
 
   function clearFile() {
     if (fileInput.current) fileInput.current.value = "";
+  }
+
+  function activate(id: string | null) {
+    activeIdRef.current = id;
+    setActiveId(id);
+  }
+
+  function completeActive() {
+    const completedId = activeIdRef.current;
+    if (completedId) setQueue((current) => current.filter((item) => item.id !== completedId));
+    activate(null);
+    setReview(null);
+    activeRequestId.current = null;
+    clearFile();
   }
 
   useEffect(() => () => previewController.current?.abort(), []);
@@ -103,28 +125,54 @@ export function SourceWorkbookImport({ online, disabled, pending, onStage }: {
     if (!online) {
       previewController.current?.abort();
       clearFile();
+      setQueue([]);
+      activate(null);
+      activeRequestId.current = null;
+      setReview(null);
       setBusy(null);
       setNotice(null);
     }
   }, [online]);
 
   useEffect(() => {
-    if (pending && sourceRequested.current) sawSourcePending.current = true;
-    if (!pending && sawSourcePending.current) {
-      sourceRequested.current = false;
-      sawSourcePending.current = false;
-      setReview(null);
-      clearFile();
-    }
-  }, [pending]);
+    if (confirmedRequestId && confirmedRequestId === activeRequestId.current) completeActive();
+  }, [confirmedRequestId]);
 
   function changeFamily(next: SourceWorkbookFamily) {
-    previewController.current?.abort();
     setFamily(next);
-    setReview(null);
     setError(null);
     setNotice(null);
+  }
+
+  function queueFiles(files: FileList | null) {
+    if (!files || files.length === 0 || fileControlsDisabled) return;
+    const additions = Array.from(files, (file) => ({ id: crypto.randomUUID(), file, family, error: null }));
+    setQueue((current) => [...current, ...additions]);
+    setError(null);
+    setNotice(`${additions.length} workbook${additions.length === 1 ? "" : "s"} queued. Choose each source family, then preview and stage each file independently.`);
     clearFile();
+  }
+
+  function changeQueueFamily(id: string, next: SourceWorkbookFamily) {
+    setQueue((current) => current.map((item) => item.id === id ? { ...item, family: next, error: null } : item));
+  }
+
+  function closeReview() {
+    setReview(null);
+    activate(null);
+    setError(null);
+    setNotice("Preview closed. The file remains queued; nothing was staged or applied.");
+  }
+
+  function removeQueued(id: string) {
+    if (id === activeIdRef.current) {
+      setReview(null);
+      activate(null);
+      activeRequestId.current = null;
+    }
+    setQueue((current) => current.filter((item) => item.id !== id));
+    setError(null);
+    setNotice("Queued workbook removed. Nothing was staged or applied.");
   }
 
   function updateCandidate(index: number, update: (candidate: Candidate) => Candidate) {
@@ -144,16 +192,25 @@ export function SourceWorkbookImport({ online, disabled, pending, onStage }: {
     } : current);
   }
 
-  async function preview(event: FormEvent<HTMLFormElement>) {
+  function preview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const file = fileInput.current?.files?.[0];
-    if (!file || controlsDisabled) return;
+    if (!review && queue[0]) void previewQueued(queue[0].id);
+  }
+
+  async function previewQueued(id: string) {
+    const queued = queue.find((item) => item.id === id);
+    if (!queued || controlsDisabled || review) return;
+    const { file, family: sourceFamily } = queued;
+    const sauce = sourceFamily === "sauce-guides";
+    let validationError: string | null = null;
     if (file.size > 5 * 1024 * 1024) {
-      setError("Source workbooks must be 5 MiB or smaller. Nothing was previewed or staged.");
-      return;
+      validationError = "Source workbooks must be 5 MiB or smaller. Nothing was previewed or staged.";
+    } else if (!/\.xlsx$/iu.test(file.name) && !(sauce && /\.docx$/iu.test(file.name))) {
+      validationError = sauce ? "Choose an XLSX workbook or DOCX sauce guide." : "Choose an XLSX workbook for this source family.";
     }
-    if (!/\.xlsx$/iu.test(file.name) && !(sauce && /\.docx$/iu.test(file.name))) {
-      setError(sauce ? "Choose an XLSX workbook or DOCX sauce guide." : "Choose an XLSX workbook.");
+    if (validationError) {
+      setQueue((current) => current.map((item) => item.id === id ? { ...item, error: validationError } : item));
+      setError(validationError);
       return;
     }
     previewController.current?.abort();
@@ -161,11 +218,13 @@ export function SourceWorkbookImport({ online, disabled, pending, onStage }: {
     previewController.current = controller;
     setBusy("preview");
     setReview(null);
+    activate(id);
+    setQueue((current) => current.map((item) => item.id === id ? { ...item, error: null } : item));
     setError(null);
     setNotice(null);
     try {
       const result = await previewSourceWorkbook({
-        family,
+        family: sourceFamily,
         fileName: file.name,
         workbookBase64: await fileToBase64(file),
         signal: controller.signal,
@@ -185,7 +244,12 @@ export function SourceWorkbookImport({ online, disabled, pending, onStage }: {
       });
       setNotice("Deterministic preview loaded. Nothing has been staged or applied; review every included and unresolved row.");
     } catch (cause) {
-      if (!controller.signal.aborted) setError(message(cause, "The source workbook could not be previewed. Nothing was staged."));
+      if (!controller.signal.aborted) {
+        const previewError = message(cause, "The source workbook could not be previewed. Nothing was staged.");
+        setQueue((current) => current.map((item) => item.id === id ? { ...item, error: previewError } : item));
+        setError(previewError);
+        activate(null);
+      }
     } finally {
       if (previewController.current === controller) {
         previewController.current = null;
@@ -230,24 +294,19 @@ export function SourceWorkbookImport({ online, disabled, pending, onStage }: {
           + review.unresolved.filter((row) => row.resolution === "skipped").length,
         unresolvedRows: review.unresolved.filter((row) => row.resolution === "review-only").length,
       };
-      sourceRequested.current = true;
       const workbook = review.fileName;
       const sourceRecords = included.map((candidate) => ({
         code: candidate.record.code,
         source: { workbook, cell: candidate.source },
         sourceDetails: candidate.sourceDetails ?? null,
       }));
+      const requestId = crypto.randomUUID();
+      activeRequestId.current = requestId;
       const staged = await onStage({
-        requestId: crypto.randomUUID(), family: review.targetFamily, csv, sourceSummary, sourceRecords,
+        requestId, family: review.targetFamily, csv, sourceSummary, sourceRecords,
       });
-      if (staged) {
-        sourceRequested.current = false;
-        sawSourcePending.current = false;
-        setReview(null);
-        clearFile();
-      }
+      if (staged) completeActive();
     } catch (cause) {
-      sourceRequested.current = false;
       setError(message(cause, "The reviewed source records could not be staged."));
     } finally {
       setBusy(null);
@@ -259,23 +318,48 @@ export function SourceWorkbookImport({ online, disabled, pending, onStage }: {
       <div className="flex items-start gap-3">
         <FileSearch className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
         <div>
-          <h2 id="source-workbook-heading" className="font-medium">Review a source workbook</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Deterministic XLSX preview, with DOCX also accepted for sauce guides. Review and confirm records before staging them into the shared setup-import history. Nothing is applied automatically.</p>
+          <h2 id="source-workbook-heading" className="font-medium">Review source workbooks</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Queue mixed XLSX workbooks, with DOCX also accepted for sauce guides. Choose each file’s source family, then review and stage one workbook at a time into shared setup-import history. Nothing is applied automatically.</p>
         </div>
       </div>
       <form className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] md:items-end" onSubmit={preview}>
-        <label className="text-sm font-medium">Source family
-          <select className="mt-1 w-full rounded-md border bg-background px-3 py-2 font-normal" aria-label="Source workbook family" value={family} disabled={!online || controlsDisabled} onChange={(event) => changeFamily(event.target.value as SourceWorkbookFamily)}>
+        <label className="text-sm font-medium">Default family for added files
+          <select className="mt-1 w-full rounded-md border bg-background px-3 py-2 font-normal" aria-label="Source workbook family" value={family} disabled={!online || fileControlsDisabled} onChange={(event) => changeFamily(event.target.value as SourceWorkbookFamily)}>
             {Object.entries(FAMILY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
-        <label className="text-sm font-medium">Source file
-          <input ref={fileInput} className="mt-1 block w-full rounded-md border bg-background px-3 py-1.5 text-sm font-normal file:mr-3 file:rounded file:border-0 file:bg-secondary file:px-3 file:py-1" type="file" aria-label="Source workbook file" accept={sauce ? ".xlsx,.docx" : ".xlsx"} required disabled={!online || controlsDisabled} onChange={() => { setError(null); setNotice(null); }} />
+        <label className="text-sm font-medium">Source files
+          <input ref={fileInput} className="mt-1 block w-full rounded-md border bg-background px-3 py-1.5 text-sm font-normal file:mr-3 file:rounded file:border-0 file:bg-secondary file:px-3 file:py-1" type="file" aria-label="Source workbook file" accept=".xlsx,.docx" multiple disabled={!online || fileControlsDisabled} onChange={(event) => queueFiles(event.target.files)} />
         </label>
-        <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground disabled:opacity-50" type="submit" disabled={!online || controlsDisabled}>
+        <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground disabled:opacity-50" type="submit" disabled={!online || fileControlsDisabled || queue.length === 0}>
           <FileUp className="size-4" aria-hidden="true" />{busy === "preview" ? "Previewing…" : "Preview workbook"}
         </button>
       </form>
+      {queue.length > 0 ? <div className="mt-4 space-y-3" aria-label="Source workbook queue">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-medium">Mixed workbook queue</h3>
+          <span className="text-xs text-muted-foreground">{queue.length} file{queue.length === 1 ? "" : "s"} · staged files leave the queue only after confirmation</span>
+        </div>
+        {queue.map((item, index) => <article key={item.id} className="rounded-md border p-3" aria-label={`Queued workbook ${index + 1}`}>
+          <div className="grid gap-3 md:grid-cols-2 md:items-end">
+            <div className="min-w-0">
+              <p className="break-words text-sm font-medium">{item.file.name}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{(item.file.size / 1024).toFixed(1)} KiB · {item.id === activeId ? review ? "Preview open" : "Previewing" : "Waiting for its own evidence review"}</p>
+            </div>
+            <label className="text-xs font-medium">Source family
+              <select className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm font-normal" aria-label={`Source family for ${item.file.name}`} value={item.family} disabled={!online || fileControlsDisabled} onChange={(event) => changeQueueFamily(item.id, event.target.value as SourceWorkbookFamily)}>
+                {Object.entries(FAMILY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <div className="flex flex-wrap gap-2 md:col-span-2">
+              {item.id === activeId && review ? <button type="button" className="min-h-10 rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-50" disabled={!online || controlsDisabled} onClick={closeReview}>Close workbook preview</button>
+                : <button type="button" className="min-h-10 rounded-md bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground disabled:opacity-50" disabled={!online || fileControlsDisabled} onClick={() => void previewQueued(item.id)}>Preview queued workbook</button>}
+              <button type="button" className="min-h-10 rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-50" disabled={!online || fileControlsDisabled} onClick={() => removeQueued(item.id)}>Remove queued workbook</button>
+            </div>
+          </div>
+          {item.error ? <p role="alert" className="mt-3 text-xs text-destructive">{item.error}</p> : null}
+        </article>)}
+      </div> : <p className="mt-4 rounded-md border border-dashed p-3 text-sm text-muted-foreground">No workbooks queued. Raw files are held only in this online queue and are cleared when the page reloads or goes offline.</p>}
       {error && <p role="alert" className="mt-3 rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
       {notice && <p role="status" className="mt-3 rounded-md bg-muted p-3 text-sm">{notice}</p>}
       {review && <div className="mt-4 border-t pt-4" aria-label="Source workbook review">

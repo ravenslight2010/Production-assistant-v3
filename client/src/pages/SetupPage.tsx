@@ -6,8 +6,11 @@ import {
   actOnSetupCatalogImport,
   actOnSetupImport,
   ApiError,
+  createCombinedSetupReview,
+  getCombinedSetupReview,
   getSetupCatalogImport,
   getSetupImport,
+  listCombinedSetupReviews,
   listSetupCatalogImports,
   listSetupImports,
   saveReviewedDieDefault,
@@ -15,6 +18,8 @@ import {
   stageSetupCatalogImport,
   stageSetupMasterEdit,
   type AuthSession,
+  type CombinedSetupReview,
+  type CombinedSetupReviewSummary,
   type SetupCatalogActionResult,
   type SetupCatalogDetail,
   type SetupCatalogFamily,
@@ -31,6 +36,7 @@ import {
   writePendingSetupCatalogImport,
 } from "../components/setup-catalog-storage";
 import { SourceWorkbookImport } from "../components/SourceWorkbookImport";
+import { CombinedSetupReviewPanel } from "../components/CombinedSetupReview";
 import { CatalogRecordEditor, MasterRecordEditor } from "../components/CatalogRecordEditor";
 import { ReviewedDieDefaults } from "../components/ReviewedDieDefaults";
 
@@ -73,8 +79,11 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
   const [review, setReview] = useState<SetupCatalogDetail | null>(null);
   const [masterHistory, setMasterHistory] = useState<SetupImportHistoryItem[]>([]);
   const [masterReview, setMasterReview] = useState<SetupImportDetail | null>(null);
+  const [combinedHistory, setCombinedHistory] = useState<CombinedSetupReviewSummary[]>([]);
+  const [combinedReview, setCombinedReview] = useState<CombinedSetupReview | null>(null);
+  const [confirmedSourceRequestId, setConfirmedSourceRequestId] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingSetupCatalogRequest | null>(null);
-  const [busy, setBusy] = useState<"history" | "stage" | "apply" | "undo" | "reopen" | null>(null);
+  const [busy, setBusy] = useState<"history" | "stage" | "apply" | "undo" | "reopen" | "combined" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -87,7 +96,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
 
   useEffect(() => () => URL.revokeObjectURL(templateUrl), [templateUrl]);
 
-  async function loadCanonical(importId?: string, quiet = false, store: "catalog" | "master" = "catalog"): Promise<boolean> {
+  async function loadCanonical(importId?: string, quiet = false, store: "catalog" | "master" | "combined" = "catalog"): Promise<boolean> {
     if (!online || !canManage) return false;
     const generation = ++loadGeneration.current;
     if (!quiet) {
@@ -95,21 +104,26 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       setError(null);
     }
     try {
-      const [nextHistory, nextMasterHistory, nextReview] = await Promise.all([
+      const [nextHistory, nextMasterHistory, nextCombinedHistory, nextReview] = await Promise.all([
         listSetupCatalogImports(),
         listSetupImports(),
-        importId ? (store === "catalog" ? getSetupCatalogImport(importId) : getSetupImport(importId)) : Promise.resolve(null),
+        listCombinedSetupReviews(),
+        importId ? store === "catalog" ? getSetupCatalogImport(importId)
+          : store === "master" ? getSetupImport(importId) : getCombinedSetupReview(importId) : Promise.resolve(null),
       ]);
       if (generation !== loadGeneration.current) return false;
       setHistory(nextHistory);
       setMasterHistory(nextMasterHistory);
+      setCombinedHistory(nextCombinedHistory);
       setHistoryLoaded(true);
       if (nextReview) {
         if (store === "catalog") setReview(nextReview as SetupCatalogDetail);
-        else setMasterReview(nextReview as SetupImportDetail);
+        else if (store === "master") setMasterReview(nextReview as SetupImportDetail);
+        else setCombinedReview(nextReview as CombinedSetupReview);
       } else if (!importId) {
         if (review && !nextHistory.some((item) => item.id === review.id)) setReview(null);
         if (masterReview && !nextMasterHistory.some((item) => item.id === masterReview.id)) setMasterReview(null);
+        if (combinedReview && !nextCombinedHistory.some((item) => item.id === combinedReview.id)) setCombinedReview(null);
       }
       return true;
     } catch (cause) {
@@ -124,6 +138,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
   useEffect(() => {
     loadGeneration.current += 1;
     setPending(readPendingSetupCatalogImport(userId));
+    setConfirmedSourceRequestId(null);
     setError(null);
     setNotice(null);
     setBusy(null);
@@ -133,6 +148,8 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       setReview(null);
       setMasterHistory([]);
       setMasterReview(null);
+      setCombinedHistory([]);
+      setCombinedReview(null);
       setHistoryLoaded(false);
       return;
     }
@@ -196,8 +213,18 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
     setError(null);
     setNotice("dieCode" in request
       ? "Saving the reviewed die defaults with its current revision…"
-      : "Staging the reviewed setup records. Nothing will be applied yet.");
+      : "importIds" in request
+        ? "Creating the pinned combined review. No setup values are being written."
+        : "Staging the reviewed setup records. Nothing will be applied yet.");
     try {
+      if ("importIds" in request) {
+        const result = await createCombinedSetupReview(request);
+        clearPendingSetupCatalogImport(userId);
+        setPending(null);
+        const reloaded = await loadCanonical(result.id, true, "combined");
+        setNotice(`${result.replayed ? "Previous combined-review request confirmed. " : "Combined review saved. "}${reloaded ? "Canonical projection reloaded; no setup values were written." : "Canonical projection reload failed; reopen it from combined history."}`);
+        return true;
+      }
       if ("dieCode" in request) {
         const saved = await saveReviewedDieDefault(request);
         clearPendingSetupCatalogImport(userId);
@@ -215,6 +242,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       clearPendingSetupCatalogImport(userId);
       setPending(null);
       clearFile();
+      if (!isMasterEdit && "csv" in request && request.sourceSummary) setConfirmedSourceRequestId(request.requestId);
       const reloaded = await loadCanonical(result.importId, true, isMasterEdit ? "master" : "catalog");
       const stagedDescription = isMasterEdit ? "Typed product capacity edit"
         : "csv" in request ? (request.sourceSummary ? "Reviewed source records" : "CSV") : "Typed edit";
@@ -274,6 +302,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       setBusy(null);
     }
     const reloaded = await loadCanonical(importId, true);
+    if (combinedReview) await loadCanonical(combinedReview.id, true, "combined");
     window.dispatchEvent(new Event("fieldline:v3:setup-catalog-changed"));
     setNotice(action === "apply"
       ? `${result.replayed ? "Previous Apply confirmed. " : ""}${result.createdCount ?? 0} setup rows created and ${result.updatedCount ?? 0} updated. ${reloaded ? "Canonical history reloaded." : "Canonical reload failed; refresh history."}`
@@ -345,6 +374,7 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
         <button type="button" className="button-secondary" disabled={!online || busy !== null} onClick={() => void (async () => {
           await loadCanonical(review?.id);
           if (masterReview) await loadCanonical(masterReview.id, true, "master");
+          if (combinedReview) await loadCanonical(combinedReview.id, true, "combined");
         })()}>
           <RefreshCw className={`h-4 w-4 ${busy === "history" || busy === "reopen" ? "animate-spin" : ""}`} />Refresh history
         </button>
@@ -359,8 +389,10 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
       {notice ? <div className="notice-banner" role="status">{notice}<button type="button" className="ml-auto underline" onClick={() => setNotice(null)}>Dismiss</button></div> : null}
       {pending ? (
         <div className="notice-banner" role="status">
-          <span>A setup staging response is unresolved. Other setup writes are paused until the exact request succeeds or is rejected.</span>
-          <button type="button" className="button-secondary ml-auto" disabled={!online || busy !== null} onClick={() => void sendPending(pending)}>Retry the same staging request</button>
+          <span>{"importIds" in pending
+            ? "A combined-review response is unresolved. Other setup writes are paused until the exact pinned request succeeds or is rejected."
+            : "A setup staging response is unresolved. Other setup writes are paused until the exact request succeeds or is rejected."}</span>
+          <button type="button" className="button-secondary ml-auto" disabled={!online || busy !== null} onClick={() => void sendPending(pending)}>{"importIds" in pending ? "Retry the same combined review request" : "Retry the same staging request"}</button>
         </div>
       ) : null}
 
@@ -412,11 +444,26 @@ export function SetupPage({ session, online }: { session: AuthSession; online: b
           <SourceWorkbookImport
             online={online}
             disabled={writeDisabled}
-            pending={pending !== null}
+            confirmedRequestId={confirmedSourceRequestId}
             onStage={async (request) => {
               if (writeDisabled || !persistPending(request)) return false;
               return sendPending(request);
             }}
+          />
+
+          <CombinedSetupReviewPanel
+            online={online}
+            disabled={writeDisabled}
+            busy={busy !== null}
+            imports={history}
+            history={combinedHistory}
+            review={combinedReview}
+            onCreate={async (request) => {
+              if (writeDisabled || !persistPending(request)) return false;
+              return sendPending(request);
+            }}
+            onReopen={async (reviewId) => { await loadCanonical(reviewId, false, "combined"); }}
+            onOpenImport={(importId) => { void loadCanonical(importId, false, "catalog"); }}
           />
 
           {review ? (

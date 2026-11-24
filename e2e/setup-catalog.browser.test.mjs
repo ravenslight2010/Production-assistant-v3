@@ -11,6 +11,8 @@ const CSRF_TOKEN = "b".repeat(43);
 const STAFF_ID = "75000000-0000-4000-8000-000000000001";
 const IMPORT_ID = "75000000-0000-4000-8000-000000000002";
 const MASTER_IMPORT_ID = "75000000-0000-4000-8000-000000000003";
+const SECOND_IMPORT_ID = "75000000-0000-4000-8000-000000000004";
+const COMBINED_REVIEW_ID = "75000000-0000-4000-8000-000000000005";
 const MASTER_FINGERPRINT = "e".repeat(64);
 const CSV = 'code,name,categories_json,allergens_json,allergens_reviewed,merged_into_code,enabled\n'
   + 'BROWSER-ING,Browser Reviewed Flour,"[""dough""]","[]",true,,true\n';
@@ -93,6 +95,64 @@ function masterDetail(importItem) {
   };
 }
 
+function combinedProjection(importIds, imports, replayed = false) {
+  const order = ["spec-sheets", "dough-guides", "sauce-guides", "premix-sheets", "cheese-mix-specs", "shipping-guides"];
+  const pinned = importIds.map((id) => detail(imports.get(id)))
+    .sort((left, right) => order.indexOf(left.sourceSummary.sourceFamily) - order.indexOf(right.sourceSummary.sourceFamily));
+  const proposal = (item, value) => ({
+    code: item.records[0].code,
+    source: item.sourceRecords[0]?.source ?? null,
+    sourceDetails: item.sourceRecords[0]?.sourceDetails ?? null,
+    value,
+    importId: item.id,
+    revision: 1,
+    importStatus: item.status,
+    targetFamily: item.family,
+    sourceFamily: item.sourceSummary.sourceFamily,
+    sourceSha256: item.sourceSummary.sourceSha256,
+    parserVersion: item.sourceSummary.parserVersion,
+  });
+  const first = pinned[0];
+  const second = pinned[1] ?? first;
+  const entry = (field, disposition, currentRecordPresent, currentValue, proposedValues, proposals) => ({
+    targetFamily: "run-templates", code: first.records[0].code, field, currentRecordPresent, currentValue,
+    proposedValues, disposition, requiresDecision: disposition === "mismatch" || disposition === "conflict", proposals,
+  });
+  return {
+    id: COMBINED_REVIEW_ID,
+    createdBy: STAFF_ID,
+    createdAt: "2026-11-21T12:03:00.000Z",
+    replayed,
+    dependencyOrder: order,
+    imports: pinned.map((item) => ({
+      importId: item.id, revision: 1, family: item.family, status: item.status,
+      rowCount: item.rowCount, sourceSummary: item.sourceSummary,
+    })),
+    entries: [
+      entry("values.fill", "fill", false, null, ["synthetic"], [proposal(first, "synthetic")]),
+      entry("values.match", "match", true, 4, [4], [proposal(first, 4)]),
+      entry("values.mismatch", "mismatch", true, 4, [5], [proposal(first, 5)]),
+      entry("values.conflict", "conflict", true, 4, [5, 6], [proposal(first, 5), proposal(second, 6)]),
+    ],
+    missingDependencies: [{
+      targetFamily: "run-templates", code: first.records[0].code, field: "values.doughRecipeName",
+      reference: "Synthetic missing dough", importId: first.id, revision: 1, importStatus: first.status,
+      sourceFamily: first.sourceSummary.sourceFamily, sourceSha256: first.sourceSummary.sourceSha256,
+      parserVersion: first.sourceSummary.parserVersion, source: first.sourceRecords[0]?.source ?? null,
+      sourceDetails: first.sourceRecords[0]?.sourceDetails ?? null, reason: "no-unique-exact-or-normalized-match",
+      suggestions: [{ code: "SYNTHETIC-DOUGH", name: "Synthetic dough suggestion" }], suggestionOnly: true,
+    }],
+    unresolvedIdentities: [{
+      type: "ambiguous-name", targetFamily: "run-templates", normalizedName: "synthetic ambiguous",
+      reference: null, candidates: [{ code: "SYNTHETIC-A" }, { code: "SYNTHETIC-B" }], suggestions: [],
+    }],
+    summary: {
+      imports: pinned.length, records: pinned.reduce((sum, item) => sum + item.rowCount, 0),
+      fills: 1, matches: 1, mismatches: 1, conflicts: 1, missingDependencies: 1, unresolvedIdentities: 1,
+    },
+  };
+}
+
 async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = false } = {}) {
   const imports = new Map();
   const requests = new Map();
@@ -108,8 +168,12 @@ async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = 
       doughballYield: 100, doughballWeightOz: 8, doughballsPerTray: 24,
     },
   }]]);
+  const combinedReviews = new Map();
+  const combinedRequests = new Map();
   let loseNextStageResponse = false;
+  let rejectNextStageResponse = false;
   let loseNextMasterStageResponse = false;
+  let loseNextCombinedResponse = false;
   if (seedSetup2) {
     appliedRecords.set("LEGACY-ING", {
       code: "LEGACY-ING", name: "Legacy allergen ingredient",
@@ -229,6 +293,38 @@ async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = 
         return historyItem;
       }) });
     }
+    if (path === "/api/v3/setup-catalog/combined-reviews" && method === "GET") {
+      assert.equal(url.searchParams.get("limit"), "50");
+      return json(route, { reviews: [...combinedReviews.values()].map((review) => ({
+        id: review.id, createdBy: review.createdBy, createdAt: review.createdAt,
+        importCount: review.summary.imports, recordCount: review.summary.records,
+      })) });
+    }
+    if (path === "/api/v3/setup-catalog/combined-reviews" && method === "POST") {
+      const body = request.postDataJSON();
+      assert.equal(request.headers()["x-csrf-token"], CSRF_TOKEN);
+      assert.deepEqual(Object.keys(body).sort(), ["importIds", "requestId"]);
+      const prior = combinedRequests.get(body.requestId);
+      if (prior) {
+        assert.deepEqual(body, prior, "exact combined retry must preserve its request and source pins");
+        return json(route, combinedProjection(body.importIds, imports, true));
+      }
+      assert.ok(body.importIds.every((id) => imports.has(id)));
+      const review = combinedProjection(body.importIds, imports);
+      combinedRequests.set(body.requestId, body);
+      combinedReviews.set(COMBINED_REVIEW_ID, review);
+      if (loseNextCombinedResponse) {
+        loseNextCombinedResponse = false;
+        return json(route, { error: "Synthetic combined-review response loss after commit." }, 500);
+      }
+      return json(route, review, 201);
+    }
+    const combinedDetailMatch = path.match(/^\/api\/v3\/setup-catalog\/combined-reviews\/([0-9a-f-]+)$/);
+    if (combinedDetailMatch && method === "GET") {
+      const review = combinedReviews.get(combinedDetailMatch[1]);
+      return review ? json(route, combinedProjection(review.summary ? review.imports.map((item) => item.importId) : [], imports))
+        : json(route, { error: "Not found" }, 404);
+    }
     if (path === "/api/v3/setup-catalog/records" && method === "GET") {
       const family = url.searchParams.get("family");
       return json(route, {
@@ -282,8 +378,14 @@ async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = 
         const item = imports.get(IMPORT_ID);
         return json(route, { outcome: "staged", importId: IMPORT_ID, revision: 1, family: item.family, rowCount: item.rowCount, replayed: true, records, sourceSummary: item.sourceSummary ?? null });
       }
+      if (rejectNextStageResponse) {
+        rejectNextStageResponse = false;
+        return json(route, { error: "Synthetic staging rejection before commit." }, 400);
+      }
+      const importId = imports.size === 0 ? IMPORT_ID : SECOND_IMPORT_ID;
+      assert.ok(!imports.has(importId), "synthetic browser harness supports two independent imports");
       const item = {
-        id: IMPORT_ID,
+        id: importId,
         family: body.family,
         status: "staged",
         rowCount: records.length,
@@ -292,12 +394,12 @@ async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = 
         sourceRecords: body.sourceRecords ?? [],
       };
       requests.set(body.requestId, body);
-      imports.set(IMPORT_ID, item);
+      imports.set(importId, item);
       if (loseNextStageResponse) {
         loseNextStageResponse = false;
         return json(route, { error: "Synthetic response loss after staging commit." }, 500);
       }
-      return json(route, { outcome: "staged", importId: IMPORT_ID, revision: 1, family: item.family, rowCount: item.rowCount, replayed: false, records, sourceSummary: item.sourceSummary }, 201);
+      return json(route, { outcome: "staged", importId, revision: 1, family: item.family, rowCount: item.rowCount, replayed: false, records, sourceSummary: item.sourceSummary }, 201);
     }
     if (path === "/api/v3/setup-catalog/edits" && method === "POST") {
       const body = request.postDataJSON();
@@ -362,8 +464,12 @@ async function installSetupApi(context, baseUrl, { manager = true, seedSetup2 = 
     masterImports,
     masterRequests,
     masterRecords,
+    combinedReviews,
+    combinedRequests,
     loseNextStageResponse: () => { loseNextStageResponse = true; },
+    rejectNextStageResponse: () => { rejectNextStageResponse = true; },
     loseNextMasterStageResponse: () => { loseNextMasterStageResponse = true; },
+    loseNextCombinedResponse: () => { loseNextCombinedResponse = true; },
   };
 }
 
@@ -451,6 +557,7 @@ test("source workbook review gates edits, preserves source summaries on exact re
   assert.deepEqual(await family.locator("option").allTextContents(), ["Spec sheets", "Premix sheets", "Cheese mix specs", "Shipping guides", "Sauce guides", "Dough guides"]);
   await family.selectOption("sauce-guides");
   assert.equal(await page.getByLabel("Source workbook file", { exact: true }).getAttribute("accept"), ".xlsx,.docx");
+  assert.equal(await page.getByLabel("Source workbook file", { exact: true }).getAttribute("multiple"), "");
   await family.selectOption("spec-sheets");
   await page.getByLabel("Source workbook file", { exact: true }).setInputFiles({ name: "source.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from("synthetic workbook bytes") });
   await page.getByRole("button", { name: "Preview workbook", exact: true }).click();
@@ -477,11 +584,19 @@ test("source workbook review gates edits, preserves source summaries on exact re
   await page.getByText("Loaded values only · no file retained or writes queued", { exact: true }).waitFor();
   assert.equal(await page.getByLabel("Source workbook file", { exact: true }).evaluate((input) => input.files.length), 0);
   assert.equal(await page.getByRole("button", { name: "Preview workbook", exact: true }).isDisabled(), true);
-  assert.equal(await page.getByRole("button", { name: "Stage reviewed source records", exact: true }).isDisabled(), true);
-  assert.equal(await first.getByLabel("V3 code", { exact: true }).inputValue(), "SOURCE-EDITED");
+  assert.equal(await page.getByRole("button", { name: "Stage reviewed source records", exact: true }).count(), 0);
+  await page.getByText(/No workbooks queued\. Raw files are held only in this online queue/).waitFor();
   assert.equal(api.writes.length, writesBeforeOffline, "offline source review must not issue writes");
   await context.setOffline(false);
   await page.getByText("Server-owned import lifecycle · manage-inventory", { exact: true }).waitFor();
+  await page.getByLabel("Source workbook file", { exact: true }).setInputFiles({ name: "source.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from("synthetic workbook bytes") });
+  await page.getByRole("button", { name: "Preview workbook", exact: true }).click();
+  await page.getByText(/Deterministic preview loaded\. Nothing has been staged or applied/).waitFor();
+  await second.getByLabel("Include", { exact: true }).uncheck();
+  await first.getByLabel("V3 code", { exact: true }).fill("SOURCE-EDITED");
+  await first.getByLabel("Mapped V3 JSON", { exact: true }).fill(mappedJson);
+  await first.getByLabel("Reviewed and confirmed", { exact: true }).check();
+  await page.getByRole("button", { name: "Acknowledge review-only", exact: true }).click();
 
   api.loseNextStageResponse();
   await page.getByRole("button", { name: "Stage reviewed source records", exact: true }).click();
@@ -507,6 +622,131 @@ test("source workbook review gates edits, preserves source summaries on exact re
   await review.getByText("SOURCE-EDITED", { exact: true }).waitFor();
   await review.getByText(/Source spec-sheets · 4 source row\(s\) · 1 imported · 2 skipped · 1 still unresolved/).waitFor();
   assert.equal(api.appliedRecords.size, 0, "source staging remains review-only until Apply");
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test("mixed workbooks queue independently and leave only after confirmed staging", { timeout: 90_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installSetupApi(context, baseUrl);
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#setup`);
+  await page.getByRole("heading", { name: "Setup and master data", exact: true }).waitFor();
+  await page.getByLabel("Source workbook file", { exact: true }).setInputFiles([
+    { name: "first.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from("synthetic workbook bytes") },
+    { name: "second.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: Buffer.from("synthetic workbook bytes") },
+  ]);
+  await page.getByRole("article", { name: "Queued workbook 2", exact: true }).waitFor();
+  await page.getByLabel("Source family for second.docx", { exact: true }).selectOption("sauce-guides");
+  assert.equal(await page.getByLabel("Source workbook file", { exact: true }).evaluate((input) => input.files.length), 0);
+
+  async function previewAndStage(rejectFirst = false) {
+    await page.getByRole("button", { name: "Preview workbook", exact: true }).click();
+    await page.getByText(/Deterministic preview loaded\. Nothing has been staged or applied/).waitFor();
+    for (const index of [1, 2]) {
+      await page.getByRole("article", { name: `Source record ${index}`, exact: true })
+        .getByLabel("Reviewed and confirmed", { exact: true }).check();
+    }
+    await page.getByRole("button", { name: "Acknowledge review-only", exact: true }).click();
+    if (rejectFirst) api.rejectNextStageResponse();
+    await page.getByRole("button", { name: "Stage reviewed source records", exact: true }).click();
+    if (rejectFirst) {
+      await page.getByText("Synthetic staging rejection before commit.", { exact: true }).waitFor();
+      assert.equal(api.imports.size, 0);
+      await page.getByRole("article", { name: "Source record 1", exact: true }).waitFor();
+      await page.getByRole("article", { name: "Queued workbook 2", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Stage reviewed source records", exact: true }).click();
+    }
+    await page.getByText(/Reviewed source records staged\. Review the stored records/).waitFor();
+  }
+
+  await page.getByRole("button", { name: "Preview workbook", exact: true }).click();
+  await page.getByText(/Deterministic preview loaded/).waitFor();
+  await page.getByRole("button", { name: "Close workbook preview", exact: true }).click();
+  await page.getByText(/Preview closed\. The file remains queued/).waitFor();
+  assert.equal(await page.getByRole("article", { name: "Queued workbook 2", exact: true }).count(), 1);
+  assert.equal(api.imports.size, 0);
+
+  await previewAndStage(true);
+  assert.equal(api.imports.size, 1);
+  assert.equal(await page.getByRole("article", { name: "Queued workbook 2", exact: true }).count(), 0);
+  await page.getByRole("article", { name: "Queued workbook 1", exact: true }).getByText("second.docx", { exact: true }).waitFor();
+  assert.equal([...api.requests.values()][0].sourceSummary.sourceFamily, "spec-sheets");
+
+  await previewAndStage();
+  assert.equal(api.imports.size, 2);
+  assert.equal([...api.requests.values()][1].sourceSummary.sourceFamily, "sauce-guides");
+  await page.getByText(/No workbooks queued\. Raw files are held only in this online queue/).waitFor();
+  assert.equal(api.appliedRecords.size, 0, "mixed queue staging must never apply setup values");
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test("combined review retries exactly, reopens canonical history, and links decisions to individual Apply", { timeout: 90_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const context = await openBrowser(t);
+  const api = await installSetupApi(context, baseUrl);
+  const sourceSummary = (sourceFamily, sourceSha256) => ({
+    sourceFamily, sourceSha256, parserVersion: "v1-source-import/2",
+    sourceRows: 1, importedRows: 1, skippedRows: 0, unresolvedRows: 0,
+  });
+  for (const [id, family, sha] of [[IMPORT_ID, "spec-sheets", "a"], [SECOND_IMPORT_ID, "dough-guides", "b"]]) {
+    api.imports.set(id, {
+      id, family: "run-templates", status: "staged", rowCount: 1,
+      records: [{ code: `RECORD-${id.slice(-1)}`, name: "Synthetic combined record", data: { brand: "Brand", flavor: "Original", values: {} } }],
+      sourceSummary: sourceSummary(family, sha.repeat(64)),
+      sourceRecords: [{ code: `RECORD-${id.slice(-1)}`, source: { workbook: `${family}.xlsx`, cell: `${family}.xlsx / Sheet1 / row 2` }, sourceDetails: { synthetic: true } }],
+    });
+  }
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${baseUrl}/#setup`);
+  const combined = page.getByRole("region", { name: "Combined setup review", exact: true });
+  await combined.getByRole("checkbox").nth(0).check();
+  await combined.getByRole("checkbox").nth(1).check();
+  api.loseNextCombinedResponse();
+  await combined.getByRole("button", { name: "Create combined review", exact: true }).click();
+  await page.getByRole("button", { name: "Retry the same combined review request", exact: true }).waitFor();
+  assert.equal(api.combinedReviews.size, 1);
+  assert.equal(api.appliedRecords.size, 0);
+  const originalRequest = [...api.combinedRequests.values()][0];
+
+  await page.reload();
+  await page.getByRole("button", { name: "Retry the same combined review request", exact: true }).click();
+  await page.getByText(/Previous combined-review request confirmed\. Canonical projection reloaded; no setup values were written\./).waitFor();
+  assert.equal(api.combinedReviews.size, 1);
+  assert.deepEqual([...api.combinedRequests.values()], [originalRequest]);
+  const projection = page.getByLabel("Combined setup projection", { exact: true });
+  await projection.getByText("Canonical review", { exact: true }).waitFor();
+  await projection.getByText("spec-sheets.xlsx · spec-sheets.xlsx / Sheet1 / row 2", { exact: true }).first().waitFor();
+  await projection.getByText("Synthetic missing dough", { exact: true }).waitFor();
+  await projection.getByText("SYNTHETIC-DOUGH — Synthetic dough suggestion", { exact: true }).waitFor();
+  await projection.getByText(/Ambiguous normalized name: synthetic ambiguous/).waitFor();
+  assert.equal(await projection.getByRole("article", { name: "mismatch RECORD-2 values.mismatch", exact: true }).count(), 1);
+  assert.equal(await projection.getByRole("article", { name: "conflict RECORD-2 values.conflict", exact: true }).count(), 1);
+  assert.equal(await projection.getByRole("article", { name: "fill RECORD-2 values.fill", exact: true }).count(), 0);
+  await projection.getByLabel("Combined review filter", { exact: true }).selectOption("fills");
+  await projection.getByRole("article", { name: "fill RECORD-2 values.fill", exact: true }).waitFor();
+  await projection.getByLabel("Combined review filter", { exact: true }).selectOption("matches");
+  await projection.getByRole("article", { name: "match RECORD-2 values.match", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: /Apply combined|combined Apply/iu }).count(), 0);
+
+  await projection.getByRole("button", { name: "Open referring import", exact: true }).click();
+  const individual = page.getByRole("region", { name: "Setup import review", exact: true });
+  await individual.getByRole("button", { name: "Apply reviewed import", exact: true }).click();
+  await page.getByText(/1 setup rows created and 0 updated\./).waitFor();
+  assert.equal(api.imports.get(IMPORT_ID).status, "applied");
+  assert.equal(api.imports.get(SECOND_IMPORT_ID).status, "staged", "individual Apply must not apply other corpus imports");
+  await projection.getByText("applied", { exact: true }).first().waitFor();
+
+  await page.reload();
+  await page.getByRole("button", { name: "Reopen combined review 1", exact: true }).click();
+  await page.getByLabel("Combined setup projection", { exact: true }).waitFor();
+  await page.getByLabel("Combined setup projection", { exact: true }).getByText("applied", { exact: true }).first().waitFor();
   assert.deepEqual(errors, []);
   await context.close();
 });
