@@ -14,20 +14,25 @@ count-only schedule value with setup values from the matching source workbooks.
 It is an archived schedule example, not a synthetic run or a live production
 database record. No production database was queried.
 
-Tests pin SHA-256 fingerprints for the source workbooks. If a workbook changes,
-the source cells and expected results must be reviewed before updating the pins.
+Tests pin SHA-256 fingerprints for the five current non-schedule source workbooks.
+Their cited cells and expected results were reviewed on 2026-11-24 before the
+current paths and hashes were updated. The archived schedule is absent from the
+current corpus, so its historical SHA-256
+`f7066f55fc9f335daa691a5ab4d915c3a26ccc08f8e57b5038d4bf0db119c46d`
+is documentation only and is not a current-corpus qualification requirement. No
+current production row is substituted for its approved 55-case example.
 
 ## Evidence and expected results
 
 | Station/example | Approved source and native units | V2 input / expected result |
 | --- | --- | --- |
-| Cheese worked example | `attached_assets/source-library/cheese/Cheese_Mix_Recipe_Specs_-_Tabbed_by_Customer_-_07.10.26_1784339826076.xlsx`, `Edwardo!A21:A25`: 1,092 cases, 12 pizzas/case, 0.01 oz/pizza, total 8.19 lb. `Edwardo!B29:B30`: 5.000 lb + 1.250 lb = 6.25 lb/batch. | 8.19 lb required; 2 batches. The workbook separately rounds component amounts to 6.6 lb and 1.6 lb (8.2 lb combined); the station total follows its explicit 8.19 lb figure. |
+| Cheese worked example | `Cheese/Cheese Mix Recipe Specs - Tabbed by Customer - 10.08.26.xlsx`, `Edwardo!A21:A25`: 1,092 cases, 12 pizzas/case, 0.01 oz/pizza, total 8.19 lb. `Edwardo!B29:B30`: 5.000 lb + 1.250 lb = 6.25 lb/batch. | 8.19 lb required; 2 batches. The workbook separately rounds component amounts to 6.6 lb and 1.6 lb (8.2 lb combined); the station total follows its explicit 8.19 lb figure. |
 | Line and case target | `attached_assets/source-library/schedule/Production_Schedule_7-8-26_1784339875921.xlsx`, `3-17!E8`: 55 planned units/cases. Only the count is used. `_archived/v1/artifacts/run-calculator/src/utils/runExcel.ts` confirms V1 maps `Units` to planned cases. | At run start: target 55, remaining 55, work in progress 0, completion 0%. |
-| Shipping units | `attached_assets/source-library/shipping/Shipping_and_Palletizing_Guide_07.02.2026_1784339849858.xlsx`, `Sheet1!E3`: 12 pizzas/case; `F3`: 60 cases/skid. | 55 cases require 1 skid. |
-| Cheese / Frontline recipe | `attached_assets/source-library/specs/Aldo's_Pizza_Specs_-_09_1784339783417.xlsx`, `OZ!B24`: 2.90 oz/pizza. `attached_assets/source-library/cheese/Cheese_Mix_Recipe_Specs_-_Tabbed_by_Customer_-_07.10.26_1784339826076.xlsx`, `Aldo!B13:B17`: 20.000 + 35.000 + 0.300 + 0.300 = 55.600 lb/batch. | Cheese: 119.63 lb, 3 batches. Frontline: the V2 +20 lb allowance yields 139.63 lb; with 20 lb on line and 10 lb consumed (test-state values, not workbook facts), 2 batches remain to make. |
-| Pepperoni | `attached_assets/source-library/specs/Aldo's_Pizza_Specs_-_09_1784339783417.xlsx`, `OZ!C25`: 1.90 oz/pizza. No positive pepperoni batch weight is supplied by the cited workbooks. | 78.38 lb; batch count remains unknown (`null`) rather than inventing a recipe size. |
-| Sauce | `attached_assets/source-library/specs/Aldo's_Pizza_Specs_-_09_1784339783417.xlsx`, `OZ!B23`: 4.00 oz/pizza. `attached_assets/source-library/sauce/Aldo_Pizza_Sauce_02_1784339518984.xlsx`, `Sheet1!C19`: 271.50 lb recipe batch. | V2 adds its 30 lb preparation allowance: 195 lb total; 0.72 estimated barrels; 1 full barrel remains to make when none are made. |
-| Dough | `attached_assets/source-library/dough/Aldo's_Dough_Mixing_Procedure_-_09_1784339683714.xlsx`, `Sheet1!D11`: 310.50 lb/batch; `C32`: 7.7 oz/doughball; `E32`: 645.19 doughballs/batch; `F32`: 24 doughballs/tray. | The yield formula gives 645.19 doughballs/batch. At 12 pizzas/case, the approved fractional capacity is 53.7658 cases/batch. For 55 cases, V2 needs 2 batches. |
+| Shipping units | `extra/Shipping and Palletizing Guide 10.12.26.xlsx`, `Sheet1!E3`: 12 pizzas/case; `F3`: 60 cases/skid. | 55 cases require 1 skid. |
+| Cheese / Frontline recipe | `Specs/Aldo_s Pizza Specs - 09.xlsx`, `OZ!B24`: 2.90 oz/pizza. `Cheese/Cheese Mix Recipe Specs - Tabbed by Customer - 10.08.26.xlsx`, `Aldo!B13:B17`: 20.000 + 35.000 + 0.300 + 0.300 = 55.600 lb/batch. | Cheese: 119.63 lb, 3 batches. Frontline: the V2 +20 lb allowance yields 139.63 lb; with 20 lb on line and 10 lb consumed (test-state values, not workbook facts), 2 batches remain to make. |
+| Pepperoni | `Specs/Aldo_s Pizza Specs - 09.xlsx`, `OZ!C25`: 1.90 oz/pizza. No positive pepperoni batch weight is supplied by the cited workbooks. | 78.38 lb; batch count remains unknown (`null`) rather than inventing a recipe size. |
+| Sauce | `Specs/Aldo_s Pizza Specs - 09.xlsx`, `OZ!B23`: 4.00 oz/pizza. `Sauce/Aldo Pizza Sauce 02.xlsx`, `Sheet1!C19`: 271.50 lb recipe batch. | V2 adds its 30 lb preparation allowance: 195 lb total; 0.72 estimated barrels; 1 full barrel remains to make when none are made. |
+| Dough | `Dough/Aldo_s Dough Mixing Procedure - 09.xlsx`, `Sheet1!D11`: 310.50 lb/batch; `C32`: 7.7 oz/doughball; `E32`: 645.19 doughballs/batch; `F32`: 24 doughballs/tray. | The yield formula gives 645.19 doughballs/batch. At 12 pizzas/case, the approved fractional capacity is 53.7658 cases/batch. For 55 cases, V2 needs 2 batches. |
 | Packaging remainder | Shipping guide `Sheet1!F3`: 60 cases/skid; the count-only target is 55 cases. | 1 skid needed, none complete, 0 cases on the current skid before packing. Boundary checks cover 59, 60, and 61 packed cases. |
 
 ## Boundary checks

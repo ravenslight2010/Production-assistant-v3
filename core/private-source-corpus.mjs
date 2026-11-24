@@ -48,6 +48,25 @@ function normalizedRelativePath(value) {
   return value.split(path.sep).join("/");
 }
 
+const corpusFamilyAliases = Object.freeze({
+  cheese: "cheese",
+  dough: "dough",
+  mix: "mix",
+  premix: "mix",
+  sauce: "sauce",
+  schedule: "schedule",
+  shipping: "shipping",
+  specs: "specs",
+});
+
+export function privateSourceCorpusFamily(relativePath) {
+  const segments = normalizedRelativePath(relativePath).split("/");
+  if (segments.length === 1) return "unclassified";
+  const directory = segments[0].toLocaleLowerCase("en-US");
+  if (directory === "extra" && /shipping|palletizing/iu.test(segments.at(-1))) return "shipping";
+  return corpusFamilyAliases[directory] || directory;
+}
+
 export function listPrivateSourceCorpusFiles(root) {
   if (!isDirectory(root)) throw new Error(`Private source corpus directory is unavailable at ${root}.`);
   const files = [];
@@ -60,11 +79,10 @@ export function listPrivateSourceCorpusFiles(root) {
       if (entry.isDirectory()) visit(absolutePath);
       else {
         const relativePath = normalizedRelativePath(path.relative(root, absolutePath));
-        const segments = relativePath.split("/");
         files.push({
           absolutePath,
           relativePath,
-          family: segments.length > 1 ? segments[0] : "unclassified",
+          family: privateSourceCorpusFamily(relativePath),
           format: path.extname(entry.name).toLocaleLowerCase("en-US") || "no-extension",
         });
       }

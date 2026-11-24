@@ -9,6 +9,7 @@ import {
   buildPrivateSourceCorpusManifest,
   listPrivateSourceCorpusFiles,
   PRIVATE_SOURCE_CORPUS_MANIFEST_VERSION,
+  privateSourceCorpusFamily,
   privateSourceCorpusTestOptions,
   REQUIRE_PRIVATE_SOURCE_CORPUS_ENV,
   SKIP_PRIVATE_SOURCE_CORPUS_ENV,
@@ -63,6 +64,15 @@ test("recursive discovery accounts for every regular file without fixed family c
 
   writeFileSync(path.join(root, "dough", "three.xlsx"), "changed");
   assert.notEqual(buildPrivateSourceCorpusManifest(root).corpusSha256, manifest.corpusSha256);
+});
+
+test("normalizes Drive family folders and classifies the extra shipping guide", () => {
+  assert.equal(privateSourceCorpusFamily("Dough/procedure.xlsx"), "dough");
+  assert.equal(privateSourceCorpusFamily("Specs/product.xlsx"), "specs");
+  assert.equal(privateSourceCorpusFamily("Mix/premix.xlsx"), "mix");
+  assert.equal(privateSourceCorpusFamily("extra/Shipping and Palletizing Guide.xlsx"), "shipping");
+  assert.equal(privateSourceCorpusFamily("extra/other.xlsx"), "extra");
+  assert.equal(privateSourceCorpusFamily("root.xlsx"), "unclassified");
 });
 
 test("private manifests cannot be written into the corpus or repository", (t) => {

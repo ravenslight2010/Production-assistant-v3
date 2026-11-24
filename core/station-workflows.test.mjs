@@ -19,32 +19,31 @@ const floorExampleRun = { setupSnapshot: { label: "Workbook example", targetCase
 
 const floorExampleSources = [
   {
-    path: "cheese/Cheese_Mix_Recipe_Specs_-_Tabbed_by_Customer_-_07.10.26_1784339826076.xlsx",
-    sha256: "21432dc3c0260f578d66989830458f51c19d2524ebf0453efcf7b761e78d9878",
+    path: "Cheese/Cheese Mix Recipe Specs - Tabbed by Customer - 10.08.26.xlsx",
+    sha256: "b34b4a17ade6cc9045ee77bf60ef9d5771bb780bfc405616415f640e0220a533",
   },
   {
-    path: "specs/Aldo's_Pizza_Specs_-_09_1784339783417.xlsx",
-    sha256: "54c6e9660c5da91e80f41180d5b181d53758d55e688ad5684e5217d130fc100c",
+    path: "Specs/Aldo_s Pizza Specs - 09.xlsx",
+    sha256: "a0242d75065add71dd2739dc5c7e0fa565f865e3d710e01dc7053f9f7614c06e",
   },
   {
-    path: "dough/Aldo's_Dough_Mixing_Procedure_-_09_1784339683714.xlsx",
+    path: "Dough/Aldo_s Dough Mixing Procedure - 09.xlsx",
     sha256: "f6d80526acda8ea185c067fc8a2ea229cfc43d3346c61423f7ba3301930d7900",
   },
   {
-    path: "sauce/Aldo_Pizza_Sauce_02_1784339518984.xlsx",
+    path: "Sauce/Aldo Pizza Sauce 02.xlsx",
     sha256: "e42ab181171c5abdbbbe17b28fdca2d2053ae22356c1cf65f0f19feb4c1d1f74",
   },
   {
-    path: "shipping/Shipping_and_Palletizing_Guide_07.02.2026_1784339849858.xlsx",
-    sha256: "bf76dcf04c37218e41a1a16d118922647b0e488e5264365696c65705799e8de6",
-  },
-  {
-    path: "schedule/Production_Schedule_7-8-26_1784339875921.xlsx",
-    sha256: "f7066f55fc9f335daa691a5ab4d915c3a26ccc08f8e57b5038d4bf0db119c46d",
+    path: "extra/Shipping and Palletizing Guide 10.12.26.xlsx",
+    sha256: "010ea154641cb60964a77ea1c2dccaa1e4bb38e91d83f9b6204e9019044ab801",
   },
 ];
 
-test("pins the exact workbook versions used by the floor examples", privateSourceCorpusTestOptions(), () => {
+// The archived schedule supporting the 55-case example is absent from the current
+// corpus. Its historical citation remains documented; no current production row
+// is substituted into that example.
+test("pins current non-schedule workbook versions used by the floor examples", privateSourceCorpusTestOptions(), () => {
   const corpusRoot = requirePrivateSourceCorpus();
   for (const source of floorExampleSources) {
     const workbook = readFileSync(path.join(corpusRoot, source.path));
