@@ -222,6 +222,7 @@ function parseMasterListQuery(url) {
 
 function safeStatus(error) {
   if (error instanceof InventoryApiError) return error.status;
+  if (typeof error?.message === "string" && /referenced|undo is blocked|changed after this import/i.test(error.message)) return 409;
   if (error instanceof ImportCsvError) return 400;
   if (error instanceof WorkbookCapacityImportError) return 400;
   if (error instanceof SourceWorkbookImportError) return 400;
