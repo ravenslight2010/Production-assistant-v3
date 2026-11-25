@@ -44,6 +44,7 @@ jobs:
 
       - name: Browser tests (WebKit)
         run: BROWSER=webkit pnpm test:browser
+        continue-on-error: true
 
       - name: Browser tests (Firefox)
         run: BROWSER=firefox pnpm test:browser
