@@ -3148,6 +3148,244 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
+  /api/v3/qc/runs/{runId}:
+    get:
+      operationId: getQcRunDashboard
+      summary: Read immutable QC evidence for one facility-owned run
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run context, confirmed QC high-water mark, and ordered evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcDashboard"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+  /api/v3/qc/lots:
+    post:
+      operationId: recordQcLot
+      summary: Append a separate component lot record to a run
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QcLotRequest"
+      responses:
+        "201":
+          description: Lot evidence appended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "200":
+          description: Exact retry confirmed without duplicating evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+  /api/v3/qc/weight-checks:
+    post:
+      operationId: recordQcWeightCheck
+      summary: Append a pre-run or 30-minute weight observation
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QcWeightCheckRequest"
+      responses:
+        "201":
+          description: Weight evidence appended with its exact target snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "200":
+          description: Exact retry confirmed without duplicating evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+  /api/v3/qc/brix-checks:
+    post:
+      operationId: recordQcBrixCheck
+      summary: Append a Brix observation
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QcBrixCheckRequest"
+      responses:
+        "201":
+          description: Brix evidence appended with its exact target snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "200":
+          description: Exact retry confirmed without duplicating evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+  /api/v3/qc/targets:
+    get:
+      operationId: getQcTargets
+      summary: List current reviewed weight and Brix targets
+      responses:
+        "200":
+          description: Facility-scoped current targets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcTargets"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: saveQcTarget
+      summary: Create or revise a reviewed target with a revision fence
+      description: QC manager only. Existing observations retain their original target snapshot.
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QcTargetSaveRequest"
+      responses:
+        "200":
+          description: Target accepted or confirmed by exact retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcTargetSaveAccepted"
+        "409":
+          description: Canonical current targets for stale-revision or request-ID review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcTargetSaveResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     v3Session:
@@ -7265,6 +7503,325 @@ components:
         reason:
           type: string
           maxLength: 300
+    QcTargetKey:
+      type: string
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$"
+      maxLength: 120
+    QcDecimal:
+      type: string
+      pattern: "^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,6})?$"
+      description: Non-negative decimal represented as a string to preserve precision.
+    QcMeasurementValue:
+      type: string
+      pattern: "^(0|[1-9][0-9]{0,5})(\\.[0-9]{1,6})?$"
+      description: Positive decimal observation represented as a string.
+    QcWeightUnit:
+      type: string
+      enum: [g, kg, oz, lb]
+    QcNotEvaluatedReason:
+      type: string
+      enum: [no-reviewed-target, target-unavailable, target-kind-mismatch, target-inactive, unit-mismatch]
+    QcTarget:
+      type: object
+      additionalProperties: false
+      required: [targetKey, kind, unit, minimum, maximum, active, revision, updatedBy, updatedAt]
+      properties:
+        targetKey:
+          $ref: "#/components/schemas/QcTargetKey"
+        kind:
+          type: string
+          enum: [weight, brix]
+        unit:
+          type: string
+          enum: [g, kg, oz, lb, brix]
+        minimum:
+          type: [string, "null"]
+          pattern: "^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,6})?$"
+        maximum:
+          type: [string, "null"]
+          pattern: "^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,6})?$"
+        active:
+          type: boolean
+        revision:
+          type: integer
+          minimum: 1
+        updatedBy:
+          type: string
+          format: uuid
+        updatedAt:
+          type: string
+          format: date-time
+    QcTargets:
+      type: object
+      additionalProperties: false
+      required: [targets]
+      properties:
+        targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/QcTarget"
+    QcLotInput:
+      type: object
+      additionalProperties: false
+      required: [productCode, lotNumber, notes]
+      properties:
+        productCode:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+          maxLength: 80
+        lotNumber:
+          type: string
+          minLength: 1
+          maxLength: 120
+        notes:
+          type: string
+          maxLength: 1000
+    QcWeightCheckInput:
+      type: object
+      additionalProperties: false
+      required: [phase, value, unit, targetKey, notes]
+      properties:
+        phase:
+          type: string
+          enum: [pre-run, 30-minute]
+        value:
+          $ref: "#/components/schemas/QcMeasurementValue"
+        unit:
+          $ref: "#/components/schemas/QcWeightUnit"
+        targetKey:
+          type: [string, "null"]
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$"
+          maxLength: 120
+        notes:
+          type: string
+          maxLength: 1000
+    QcBrixCheckInput:
+      type: object
+      additionalProperties: false
+      required: [phase, value, unit, targetKey, notes]
+      properties:
+        phase:
+          type: "null"
+        value:
+          $ref: "#/components/schemas/QcMeasurementValue"
+        unit:
+          const: brix
+        targetKey:
+          type: [string, "null"]
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$"
+          maxLength: 120
+        notes:
+          type: string
+          maxLength: 1000
+    QcLotRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, runId, details]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        runId:
+          type: string
+          format: uuid
+        details:
+          $ref: "#/components/schemas/QcLotInput"
+    QcWeightCheckRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, runId, details]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        runId:
+          type: string
+          format: uuid
+        details:
+          $ref: "#/components/schemas/QcWeightCheckInput"
+    QcBrixCheckRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, runId, details]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        runId:
+          type: string
+          format: uuid
+        details:
+          $ref: "#/components/schemas/QcBrixCheckInput"
+    QcTargetInput:
+      type: object
+      additionalProperties: false
+      required: [kind, unit, minimum, maximum, active]
+      properties:
+        kind:
+          type: string
+          enum: [weight, brix]
+        unit:
+          type: string
+          enum: [g, kg, oz, lb, brix]
+        minimum:
+          type: [string, "null"]
+          pattern: "^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,6})?$"
+        maximum:
+          type: [string, "null"]
+          pattern: "^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,6})?$"
+        active:
+          type: boolean
+    QcTargetSaveRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, targetKey, expectedRevision, details]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        targetKey:
+          $ref: "#/components/schemas/QcTargetKey"
+        expectedRevision:
+          type: integer
+          minimum: 0
+        details:
+          $ref: "#/components/schemas/QcTargetInput"
+    QcRecordBase:
+      type: object
+      required: [recordId, sequence, runId, actorId, relatedRecordId, recordedAt]
+      properties:
+        recordId:
+          type: string
+          format: uuid
+        sequence:
+          type: string
+          pattern: "^[1-9][0-9]*$"
+          description: Immutable facility QC sequence, serialized as a decimal string.
+        runId:
+          type: string
+          format: uuid
+        actorId:
+          type: string
+          format: uuid
+        relatedRecordId:
+          type: "null"
+        recordedAt:
+          type: string
+          format: date-time
+    QcEvaluation:
+      type: object
+      required: [target, outcome, notEvaluatedReason]
+      properties:
+        target:
+          oneOf:
+            - $ref: "#/components/schemas/QcTarget"
+            - type: "null"
+        outcome:
+          type: string
+          enum: [pass, fail, not-evaluated]
+        notEvaluatedReason:
+          oneOf:
+            - $ref: "#/components/schemas/QcNotEvaluatedReason"
+            - type: "null"
+    QcLotRecord:
+      allOf:
+        - $ref: "#/components/schemas/QcRecordBase"
+        - type: object
+          required: [kind, details]
+          properties:
+            kind:
+              const: lot
+            details:
+              $ref: "#/components/schemas/QcLotInput"
+    QcWeightCheckRecord:
+      allOf:
+        - $ref: "#/components/schemas/QcRecordBase"
+        - type: object
+          required: [kind, details]
+          properties:
+            kind:
+              const: weight-check
+            details:
+              allOf:
+                - $ref: "#/components/schemas/QcWeightCheckInput"
+                - $ref: "#/components/schemas/QcEvaluation"
+    QcBrixCheckRecord:
+      allOf:
+        - $ref: "#/components/schemas/QcRecordBase"
+        - type: object
+          required: [kind, details]
+          properties:
+            kind:
+              const: brix-check
+            details:
+              allOf:
+                - $ref: "#/components/schemas/QcBrixCheckInput"
+                - $ref: "#/components/schemas/QcEvaluation"
+    QcRunRecord:
+      oneOf:
+        - $ref: "#/components/schemas/QcLotRecord"
+        - $ref: "#/components/schemas/QcWeightCheckRecord"
+        - $ref: "#/components/schemas/QcBrixCheckRecord"
+    QcDashboard:
+      type: object
+      additionalProperties: false
+      required: [run, highWaterMark, records]
+      properties:
+        run:
+          $ref: "#/components/schemas/Run"
+        highWaterMark:
+          type: string
+          pattern: "^[0-9]+$"
+          description: Highest confirmed run QC sequence; zero means no QC evidence.
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/QcRunRecord"
+    QcRecordResult:
+      allOf:
+        - $ref: "#/components/schemas/QcDashboard"
+        - type: object
+          required: [outcome, replayed, record]
+          properties:
+            outcome:
+              const: accepted
+            replayed:
+              type: boolean
+            record:
+              $ref: "#/components/schemas/QcRunRecord"
+    QcTargetSaveAccepted:
+      type: object
+      additionalProperties: false
+      required: [outcome, replayed, target, targets]
+      properties:
+        outcome:
+          const: accepted
+        replayed:
+          type: boolean
+        target:
+          $ref: "#/components/schemas/QcTarget"
+        targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/QcTarget"
+    QcTargetConflict:
+      type: object
+      additionalProperties: false
+      required: [outcome, replayed, targets]
+      properties:
+        outcome:
+          const: conflict
+        replayed:
+          type: boolean
+        targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/QcTarget"
+    QcTargetSaveResult:
+      oneOf:
+        - $ref: "#/components/schemas/QcTargetSaveAccepted"
+        - $ref: "#/components/schemas/QcTargetConflict"
+        - $ref: "#/components/schemas/Error"
     Error:
       type: object
       required: [error]

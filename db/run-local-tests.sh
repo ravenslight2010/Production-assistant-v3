@@ -724,6 +724,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0021-source-workbook-parser-v2.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0022-combined-setup-review.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0023-schedule-import-history.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0024-qc-evidence-foundation.sql" >/dev/null
 "${PSQL[@]}" -c "
   GRANT EXECUTE ON FUNCTION v3.list_staff_accounts(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_staff_roles(uuid) TO v3_api_test;
@@ -777,6 +778,12 @@ fi
   GRANT EXECUTE ON FUNCTION v3.apply_run_operation_command(uuid, uuid, uuid, text, text, text, jsonb, bigint) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.get_stop_reason_settings(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.save_stop_reason_settings(uuid, uuid, text, text, bigint, jsonb) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.get_qc_run_dashboard(uuid, uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.get_qc_targets(uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.record_qc_lot(uuid, text, text, uuid, jsonb) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.record_qc_weight_check(uuid, text, text, uuid, jsonb) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.record_qc_brix_check(uuid, text, text, uuid, jsonb) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.save_qc_target(uuid, text, text, text, bigint, jsonb) TO v3_api_test;
 " >/dev/null
 for table in v3.cycle_count_schedules v3.cycle_count_confirmations v3.inventory_lots v3.inventory_lot_movements v3.freezer_surplus_lots v3.freezer_surplus_confirmations v3.freezer_surplus_allocations v3.freezer_surplus_events v3.warehouse_guidance_settings v3.inventory_reorder_points v3.run_stoppages v3.facility_stop_reason_settings v3.facility_operation_events v3.substitution_overlays v3.substitution_rules v3.substitution_rule_history v3.completed_run_substitutions v3.mix_recipes v3.mix_recipe_components v3.mix_recipe_history v3.mix_plan_days v3.mix_plan_amounts v3.mix_finalizations v3.mix_surplus_state v3.mix_surplus_lots v3.mix_surplus_allocations v3.mix_surplus_history; do
   assert_no_direct_table_access "$table"
@@ -802,6 +809,11 @@ assert_no_direct_table_access "v3.combined_setup_review_imports"
 assert_no_direct_table_access "v3.schedule_imports"
 assert_no_direct_table_access "v3.schedule_import_dates"
 assert_no_direct_table_access "v3.schedule_import_action_receipts"
+assert_no_direct_table_access "v3.qc_records"
+assert_no_direct_table_access "v3.qc_command_receipts"
+assert_no_direct_table_access "v3.qc_audit_events"
+assert_no_direct_table_access "v3.qc_targets"
+assert_no_direct_table_access "v3.qc_outbox_events"
 assert_no_direct_table_access "v3.setup_ingredient_records"
 assert_no_direct_table_access "v3.setup_mix_records"
 assert_no_direct_table_access "v3.setup_mix_component_links"
@@ -849,6 +861,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0021-source-workbook-parser-v2.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0022-combined-setup-review.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0023-schedule-import-history.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0024-qc-evidence-foundation.test.sql"
 ACCOUNT_FUNCTION_PRIVILEGES="$("${PSQL[@]}" -c "
   SET ROLE v3_api_test;
   SELECT has_function_privilege(current_user,
@@ -896,6 +909,8 @@ V3_TEST_ADMIN_URL="$V3_TEST_ADMIN_URL" V3_DATABASE_URL="$V3_API_URL" \
 "${PSQL[@]}" -f "$ROOT/db/0008-reviewed-die-defaults.test.sql"
 V3_TEST_ADMIN_URL="$V3_TEST_ADMIN_URL" V3_DATABASE_URL="$V3_API_URL" NODE_ENV=development \
   node "$ROOT/server/http-postgres.browser.integration.mjs"
+V3_TEST_ADMIN_URL="$V3_TEST_ADMIN_URL" V3_DATABASE_URL="$V3_API_URL" NODE_ENV=development \
+  node "$ROOT/server/http-postgres.qc-browser.integration.mjs"
 "${PSQL[@]}" -f "$ROOT/db/0007-staff-role-equivalents.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0007-staff-role-equivalents.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/cutover-transfer-rehearsal.test.sql"

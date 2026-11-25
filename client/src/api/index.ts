@@ -60,6 +60,20 @@ export type MixSurplusCommandRequest = components["schemas"]["MixSurplusCommandR
 export type MixRecipeCommandResult = { catalog: MixRecipeCatalog; recipe: MixRecipe | null; replayed: boolean; conflict: boolean };
 export type MixPlanCommandResult = { plan: MixPlan; replayed: boolean; conflict: boolean; reason: "finalized" | null };
 export type MixSurplusCommandResult = { surplus: MixSurplus; replayed: boolean; conflict: boolean; reason: "over_allocation" | null };
+export type QcDashboard = components["schemas"]["QcDashboard"];
+export type QcRunRecord = components["schemas"]["QcRunRecord"];
+export type QcTarget = components["schemas"]["QcTarget"];
+export type QcWeightUnit = components["schemas"]["QcWeightUnit"];
+export type QcLotRequest = components["schemas"]["QcLotRequest"];
+export type QcWeightCheckRequest = components["schemas"]["QcWeightCheckRequest"];
+export type QcBrixCheckRequest = components["schemas"]["QcBrixCheckRequest"];
+export type QcTargetSaveRequest = components["schemas"]["QcTargetSaveRequest"];
+export type QcRecordResult = components["schemas"]["QcRecordResult"];
+export type QcTargetSaveAccepted = components["schemas"]["QcTargetSaveAccepted"];
+export type QcTargetConflict = components["schemas"]["QcTargetConflict"];
+export type QcTargetSaveOutcome =
+  | { outcome: "accepted"; replayed: boolean; targets: QcTarget[]; target: QcTarget; conflict: false }
+  | { outcome: "conflict"; replayed: boolean; targets: QcTarget[]; conflict: true };
 export type SetupCatalogFamily = components["schemas"]["SetupCatalogStageResponse"]["family"];
 export type SetupCatalogRecord = components["schemas"]["SetupCatalogRecord"];
 export type SetupCatalogHistoryItem = components["schemas"]["SetupCatalogHistoryItem"];
@@ -166,6 +180,120 @@ async function unwrap<T>(result: { data?: T; error?: unknown; response: Response
     ? parsedRetryAfter
     : undefined;
   throw new ApiError(message, result.response.status, details, retryAfterSeconds);
+}
+
+export function isQcTarget(value: unknown): value is QcTarget {
+  if (!object(value) || typeof value.targetKey !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/u.test(value.targetKey)
+    || !["weight", "brix"].includes(String(value.kind)) || !["g", "kg", "oz", "lb", "brix"].includes(String(value.unit))
+    || typeof value.active !== "boolean" || !Number.isSafeInteger(value.revision) || Number(value.revision) < 1
+    || !UUID.test(String(value.updatedBy)) || !isTimestamp(value.updatedAt)) return false;
+  return [value.minimum, value.maximum].every((bound) => bound === null
+    || (typeof bound === "string" && /^(0|[1-9][0-9]{0,11})(\.[0-9]{1,6})?$/u.test(bound)))
+    && (value.minimum !== null || value.maximum !== null);
+}
+
+function isQcRecord(value: unknown): value is QcRunRecord {
+  if (!object(value) || !UUID.test(String(value.recordId)) || !/^[1-9][0-9]*$/u.test(String(value.sequence))
+    || !UUID.test(String(value.runId)) || !UUID.test(String(value.actorId)) || value.relatedRecordId !== null
+    || !isTimestamp(value.recordedAt) || !object(value.details)) return false;
+  const details = value.details;
+  if (value.kind === "lot") {
+    return typeof details.productCode === "string" && typeof details.lotNumber === "string"
+      && typeof details.notes === "string";
+  }
+  if (!["weight-check", "brix-check"].includes(String(value.kind)) || typeof details.value !== "string"
+    || typeof details.unit !== "string" || !(details.targetKey === null || typeof details.targetKey === "string")
+    || typeof details.notes !== "string" || !(details.target === null || isQcTarget(details.target))
+    || !["pass", "fail", "not-evaluated"].includes(String(details.outcome))
+    || !(details.notEvaluatedReason === null || ["no-reviewed-target", "target-unavailable", "target-kind-mismatch",
+      "target-inactive", "unit-mismatch"].includes(String(details.notEvaluatedReason)))) return false;
+  if (details.target !== null && details.targetKey !== details.target.targetKey) return false;
+  return value.kind === "weight-check"
+    ? ["pre-run", "30-minute"].includes(String(details.phase)) && ["g", "kg", "oz", "lb"].includes(String(details.unit))
+    : details.phase === null && details.unit === "brix";
+}
+
+export function isQcDashboard(value: unknown, runId: string): value is QcDashboard {
+  if (!object(value) || !object(value.run) || value.run.id !== runId
+    || !/^[0-9]+$/u.test(String(value.highWaterMark)) || !Array.isArray(value.records)
+    || !value.records.every(isQcRecord)) return false;
+  const records: QcRunRecord[] = value.records;
+  return records.every((record, index) => record.runId === runId
+    && (index === 0 || BigInt(record.sequence) > BigInt(records[index - 1]!.sequence)));
+}
+
+function confirmQcRecord(value: unknown, runId: string): QcRecordResult {
+  if (!object(value) || value.outcome !== "accepted" || typeof value.replayed !== "boolean"
+    || !isQcRecord(value.record) || !isQcDashboard(value, runId)) {
+    throw new ApiError("The server did not confirm the QC record. Retry the same request.", 502);
+  }
+  const confirmed = value as QcDashboard & { record: QcRunRecord };
+  if (!confirmed.records.some((record) => record.recordId === confirmed.record.recordId)) {
+    throw new ApiError("The server did not confirm the QC record. Retry the same request.", 502);
+  }
+  return value as QcRecordResult;
+}
+
+export async function getQcRunDashboard(runId: string): Promise<QcDashboard> {
+  const result: unknown = await unwrap(await client.GET("/api/v3/qc/runs/{runId}", {
+    params: { path: { runId } },
+  }));
+  if (!isQcDashboard(result, runId)) throw new ApiError("The QC dashboard was incomplete. Refresh and retry.", 502);
+  return result;
+}
+
+export async function getQcTargets(): Promise<QcTarget[]> {
+  const result = await unwrap(await client.GET("/api/v3/qc/targets"));
+  if (!Array.isArray(result.targets) || !result.targets.every(isQcTarget)) {
+    throw new ApiError("The QC targets were incomplete. Refresh and retry.", 502);
+  }
+  return result.targets;
+}
+
+export async function recordQcLot(request: QcLotRequest): Promise<QcRecordResult> {
+  const result = await unwrap(await client.POST("/api/v3/qc/lots", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  return confirmQcRecord(result, request.runId);
+}
+
+export async function recordQcWeightCheck(request: QcWeightCheckRequest): Promise<QcRecordResult> {
+  const result = await unwrap(await client.POST("/api/v3/qc/weight-checks", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  return confirmQcRecord(result, request.runId);
+}
+
+export async function recordQcBrixCheck(request: QcBrixCheckRequest): Promise<QcRecordResult> {
+  const result = await unwrap(await client.POST("/api/v3/qc/brix-checks", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  return confirmQcRecord(result, request.runId);
+}
+
+export async function saveQcTarget(request: QcTargetSaveRequest): Promise<QcTargetSaveOutcome> {
+  const result = await client.POST("/api/v3/qc/targets", {
+    params: { header: mutationHeaders() }, body: request,
+  });
+  const possibleConflict: unknown = result.error;
+  if (result.response.status === 409 && object(possibleConflict) && possibleConflict.outcome === "conflict"
+    && Array.isArray(possibleConflict.targets) && possibleConflict.targets.every(isQcTarget)
+    && typeof possibleConflict.replayed === "boolean") {
+    return {
+      outcome: "conflict", replayed: possibleConflict.replayed, targets: possibleConflict.targets, conflict: true,
+    };
+  }
+  const accepted: unknown = await unwrap(result);
+  if (!object(accepted) || accepted.outcome !== "accepted" || typeof accepted.replayed !== "boolean"
+    || !isQcTarget(accepted.target) || !Array.isArray(accepted.targets) || !accepted.targets.every(isQcTarget)
+    || accepted.target.targetKey !== request.targetKey
+    || accepted.target.revision !== request.expectedRevision + 1) {
+    throw new ApiError("The server did not confirm the QC target. Retry the same request.", 502);
+  }
+  return {
+    outcome: "accepted", replayed: accepted.replayed, targets: accepted.targets,
+    target: accepted.target, conflict: false,
+  };
 }
 
 export async function getSession(): Promise<AuthSession | null> {

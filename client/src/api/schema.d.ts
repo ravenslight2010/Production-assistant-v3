@@ -1467,6 +1467,95 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/qc/runs/{runId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read immutable QC evidence for one facility-owned run */
+        get: operations["getQcRunDashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/qc/lots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Append a separate component lot record to a run */
+        post: operations["recordQcLot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/qc/weight-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Append a pre-run or 30-minute weight observation */
+        post: operations["recordQcWeightCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/qc/brix-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Append a Brix observation */
+        post: operations["recordQcBrixCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/qc/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List current reviewed weight and Brix targets */
+        get: operations["getQcTargets"];
+        put?: never;
+        /**
+         * Create or revise a reviewed target with a revision fence
+         * @description QC manager only. Existing observations retain their original target snapshot.
+         */
+        post: operations["saveQcTarget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3651,6 +3740,152 @@ export interface components {
             date?: string;
             reason: string;
         };
+        QcTargetKey: string;
+        /** @description Non-negative decimal represented as a string to preserve precision. */
+        QcDecimal: string;
+        /** @description Positive decimal observation represented as a string. */
+        QcMeasurementValue: string;
+        /** @enum {string} */
+        QcWeightUnit: "g" | "kg" | "oz" | "lb";
+        /** @enum {string} */
+        QcNotEvaluatedReason: "no-reviewed-target" | "target-unavailable" | "target-kind-mismatch" | "target-inactive" | "unit-mismatch";
+        QcTarget: {
+            targetKey: components["schemas"]["QcTargetKey"];
+            /** @enum {string} */
+            kind: "weight" | "brix";
+            /** @enum {string} */
+            unit: "g" | "kg" | "oz" | "lb" | "brix";
+            minimum: string | null;
+            maximum: string | null;
+            active: boolean;
+            revision: number;
+            /** Format: uuid */
+            updatedBy: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        QcTargets: {
+            targets: components["schemas"]["QcTarget"][];
+        };
+        QcLotInput: {
+            productCode: string;
+            lotNumber: string;
+            notes: string;
+        };
+        QcWeightCheckInput: {
+            /** @enum {string} */
+            phase: "pre-run" | "30-minute";
+            value: components["schemas"]["QcMeasurementValue"];
+            unit: components["schemas"]["QcWeightUnit"];
+            targetKey: string | null;
+            notes: string;
+        };
+        QcBrixCheckInput: {
+            phase: null;
+            value: components["schemas"]["QcMeasurementValue"];
+            /** @constant */
+            unit: "brix";
+            targetKey: string | null;
+            notes: string;
+        };
+        QcLotRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            runId: string;
+            details: components["schemas"]["QcLotInput"];
+        };
+        QcWeightCheckRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            runId: string;
+            details: components["schemas"]["QcWeightCheckInput"];
+        };
+        QcBrixCheckRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            runId: string;
+            details: components["schemas"]["QcBrixCheckInput"];
+        };
+        QcTargetInput: {
+            /** @enum {string} */
+            kind: "weight" | "brix";
+            /** @enum {string} */
+            unit: "g" | "kg" | "oz" | "lb" | "brix";
+            minimum: string | null;
+            maximum: string | null;
+            active: boolean;
+        };
+        QcTargetSaveRequest: {
+            /** Format: uuid */
+            requestId: string;
+            targetKey: components["schemas"]["QcTargetKey"];
+            expectedRevision: number;
+            details: components["schemas"]["QcTargetInput"];
+        };
+        QcRecordBase: {
+            /** Format: uuid */
+            recordId: string;
+            /** @description Immutable facility QC sequence, serialized as a decimal string. */
+            sequence: string;
+            /** Format: uuid */
+            runId: string;
+            /** Format: uuid */
+            actorId: string;
+            relatedRecordId: null;
+            /** Format: date-time */
+            recordedAt: string;
+        };
+        QcEvaluation: {
+            target: components["schemas"]["QcTarget"] | null;
+            /** @enum {string} */
+            outcome: "pass" | "fail" | "not-evaluated";
+            notEvaluatedReason: components["schemas"]["QcNotEvaluatedReason"] | null;
+        };
+        QcLotRecord: components["schemas"]["QcRecordBase"] & {
+            /** @constant */
+            kind: "lot";
+            details: components["schemas"]["QcLotInput"];
+        };
+        QcWeightCheckRecord: components["schemas"]["QcRecordBase"] & {
+            /** @constant */
+            kind: "weight-check";
+            details: components["schemas"]["QcWeightCheckInput"] & components["schemas"]["QcEvaluation"];
+        };
+        QcBrixCheckRecord: components["schemas"]["QcRecordBase"] & {
+            /** @constant */
+            kind: "brix-check";
+            details: components["schemas"]["QcBrixCheckInput"] & components["schemas"]["QcEvaluation"];
+        };
+        QcRunRecord: components["schemas"]["QcLotRecord"] | components["schemas"]["QcWeightCheckRecord"] | components["schemas"]["QcBrixCheckRecord"];
+        QcDashboard: {
+            run: components["schemas"]["Run"];
+            /** @description Highest confirmed run QC sequence; zero means no QC evidence. */
+            highWaterMark: string;
+            records: components["schemas"]["QcRunRecord"][];
+        };
+        QcRecordResult: components["schemas"]["QcDashboard"] & {
+            /** @constant */
+            outcome: "accepted";
+            replayed: boolean;
+            record: components["schemas"]["QcRunRecord"];
+        };
+        QcTargetSaveAccepted: {
+            /** @constant */
+            outcome: "accepted";
+            replayed: boolean;
+            target: components["schemas"]["QcTarget"];
+            targets: components["schemas"]["QcTarget"][];
+        };
+        QcTargetConflict: {
+            /** @constant */
+            outcome: "conflict";
+            replayed: boolean;
+            targets: components["schemas"]["QcTarget"][];
+        };
+        QcTargetSaveResult: components["schemas"]["QcTargetSaveAccepted"] | components["schemas"]["QcTargetConflict"] | components["schemas"]["Error"];
         Error: {
             error: string;
             /** @description Stable caller-safe account failure code, when available. */
@@ -6786,6 +7021,239 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    getQcRunDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run context, confirmed QC high-water mark, and ordered evidence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcDashboard"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    recordQcLot: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QcLotRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact retry confirmed without duplicating evidence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            /** @description Lot evidence appended */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    recordQcWeightCheck: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QcWeightCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact retry confirmed without duplicating evidence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            /** @description Weight evidence appended with its exact target snapshot */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    recordQcBrixCheck: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QcBrixCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact retry confirmed without duplicating evidence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            /** @description Brix evidence appended with its exact target snapshot */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    getQcTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Facility-scoped current targets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcTargets"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    saveQcTarget: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QcTargetSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description Target accepted or confirmed by exact retry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcTargetSaveAccepted"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            /** @description Canonical current targets for stale-revision or request-ID review */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcTargetSaveResult"];
+                };
+            };
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
         };
     };
 }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { createServer as createTcpServer, connect as connectTcp } from "node:net";
 import * as XLSX from "xlsx";
 import { Pool } from "pg";
 import { buildAllowlistedCutoverBatch } from "../core/cutover-transform.mjs";
@@ -88,6 +89,30 @@ async function bootstrap(baseUrl, bootstrapCode) {
     }),
   });
   return response;
+}
+
+async function loseCommittedResponse(baseUrl, path, options) {
+  const upstreamUrl = new URL(baseUrl);
+  const proxy = createTcpServer((client) => {
+    const upstream = connectTcp({ host: upstreamUrl.hostname, port: Number(upstreamUrl.port) });
+    client.pipe(upstream);
+    upstream.once("data", () => {
+      client.destroy();
+      upstream.destroy();
+    });
+    client.once("error", () => upstream.destroy());
+    upstream.once("error", () => client.destroy());
+  });
+  await new Promise((resolve, reject) => {
+    proxy.once("error", reject);
+    proxy.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = proxy.address();
+    await assert.rejects(fetch(`http://127.0.0.1:${address.port}${path}`, options));
+  } finally {
+    await new Promise((resolve) => proxy.close(resolve));
+  }
 }
 
 async function main() {
@@ -1039,6 +1064,139 @@ async function main() {
     });
     assert.equal(staleTarget.status, 409);
     assert.equal((await jsonResponse(staleTarget)).currentRun.revision, 1);
+
+    const qcRunId = plannedTarget.run.id;
+    const qcTargetRequest = {
+      requestId: "73000000-0000-4000-8000-000000000240",
+      targetKey: "integration-dough-weight",
+      expectedRevision: 0,
+      details: { kind: "weight", unit: "g", minimum: "250", maximum: "260", active: true },
+    };
+    const qcTargetResponse = await managerPost("/api/v3/qc/targets", qcTargetRequest);
+    assert.equal(qcTargetResponse.status, 200, await qcTargetResponse.clone().text());
+    const qcTargetBody = await jsonResponse(qcTargetResponse);
+    assert.equal(qcTargetBody.target.revision, 1);
+    assert.equal((await jsonResponse(await managerPost("/api/v3/qc/targets", qcTargetRequest))).replayed, true);
+    const qcTargetsResponse = await fetch(`${baseUrl}/api/v3/qc/targets`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    });
+    assert.equal(qcTargetsResponse.status, 200);
+    assert.equal((await jsonResponse(qcTargetsResponse)).targets[0].targetKey, "integration-dough-weight");
+
+    const qcLotRequest = {
+      requestId: "73000000-0000-4000-8000-000000000241",
+      runId: qcRunId,
+      details: { productCode: "CORN", lotNumber: "INTEGRATION-LOT-A", notes: "Synthetic QC response-loss fixture" },
+    };
+    await loseCommittedResponse(baseUrl, "/api/v3/qc/lots", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: manager.cookieHeader,
+        "X-CSRF-Token": manager.csrfToken,
+      },
+      body: JSON.stringify(qcLotRequest),
+    });
+    const committedLot = await adminPool.query(
+      "SELECT record_id::text AS id FROM v3.qc_records WHERE run_id = $1 AND details->>'lotNumber' = $2",
+      [qcRunId, "INTEGRATION-LOT-A"],
+    );
+    assert.equal(committedLot.rowCount, 1, "the lot commit must survive the lost HTTP response");
+    const qcLotReplay = await managerPost("/api/v3/qc/lots", qcLotRequest);
+    assert.equal(qcLotReplay.status, 200, await qcLotReplay.clone().text());
+    const qcLotBody = await jsonResponse(qcLotReplay);
+    assert.equal(qcLotBody.replayed, true);
+    assert.equal(qcLotBody.record.recordId, committedLot.rows[0].id);
+    const qcLotConflict = await managerPost("/api/v3/qc/lots", {
+      ...qcLotRequest,
+      details: { ...qcLotRequest.details, lotNumber: "DIFFERENT-LOT" },
+    });
+    assert.equal(qcLotConflict.status, 409, "a request ID cannot be reused for different lot evidence");
+
+    const qcWeightRequest = {
+      requestId: "73000000-0000-4000-8000-000000000242",
+      runId: qcRunId,
+      details: {
+        phase: "pre-run", value: "255", unit: "g", targetKey: "integration-dough-weight", notes: "",
+      },
+    };
+    const qcWeightRace = await Promise.all([
+      managerPost("/api/v3/qc/weight-checks", qcWeightRequest),
+      managerPost("/api/v3/qc/weight-checks", qcWeightRequest),
+    ]);
+    assert.deepEqual(qcWeightRace.map((response) => response.status).sort(), [200, 201]);
+    const qcWeightBodies = await Promise.all(qcWeightRace.map(jsonResponse));
+    assert.equal(qcWeightBodies.filter((body) => body.replayed).length, 1);
+    assert.equal(new Set(qcWeightBodies.map((body) => body.record.recordId)).size, 1);
+    assert.equal(qcWeightBodies[0].record.details.outcome, "pass");
+    assert.equal(qcWeightBodies[0].record.details.target.revision, 1);
+
+    const qcBrixResponse = await managerPost("/api/v3/qc/brix-checks", {
+      requestId: "73000000-0000-4000-8000-000000000243",
+      runId: qcRunId,
+      details: { phase: null, value: "5.5", unit: "brix", targetKey: null, notes: "" },
+    });
+    assert.equal(qcBrixResponse.status, 201, await qcBrixResponse.clone().text());
+    const qcBrixBody = await jsonResponse(qcBrixResponse);
+    assert.equal(qcBrixBody.record.details.outcome, "not-evaluated");
+    assert.equal(qcBrixBody.record.details.notEvaluatedReason, "no-reviewed-target");
+
+    const revisedQcTarget = await managerPost("/api/v3/qc/targets", {
+      requestId: "73000000-0000-4000-8000-000000000244",
+      targetKey: "integration-dough-weight",
+      expectedRevision: 1,
+      details: { kind: "weight", unit: "g", minimum: "251", maximum: "260", active: true },
+    });
+    assert.equal(revisedQcTarget.status, 200);
+    assert.equal((await jsonResponse(revisedQcTarget)).target.revision, 2);
+    const historicalQcDashboard = await jsonResponse(await fetch(`${baseUrl}/api/v3/qc/runs/${qcRunId}`, {
+      headers: { Cookie: manager.cookieHeader, Accept: "application/json" },
+    }));
+    assert.equal(historicalQcDashboard.records.length, 3);
+    assert.equal(historicalQcDashboard.highWaterMark, historicalQcDashboard.records.at(-1).sequence);
+    assert.equal(historicalQcDashboard.records.find((record) => record.kind === "weight-check").details.target.revision, 1,
+      "later target edits must not rewrite a stored measurement snapshot");
+
+    const qcTargetRaceRequests = ["245", "246"].map((suffix, index) => ({
+      requestId: `73000000-0000-4000-8000-000000000${suffix}`,
+      targetKey: "integration-dough-weight",
+      expectedRevision: 2,
+      details: {
+        kind: "weight", unit: "g", minimum: index === 0 ? "252" : "253", maximum: "260", active: true,
+      },
+    }));
+    const qcTargetRace = await Promise.all(qcTargetRaceRequests.map((request) => managerPost("/api/v3/qc/targets", request)));
+    assert.deepEqual(qcTargetRace.map((response) => response.status).sort(), [200, 409]);
+    const qcTargetRaceBodies = await Promise.all(qcTargetRace.map(jsonResponse));
+    const acceptedQcTarget = qcTargetRaceBodies.find((body) => body.outcome === "accepted");
+    const conflictedQcTarget = qcTargetRaceBodies.find((body) => body.outcome === "conflict");
+    assert.equal(acceptedQcTarget.target.revision, 3);
+    assert.equal(conflictedQcTarget.targets.find((target) => target.targetKey === "integration-dough-weight").revision, 3);
+
+    const operatorQcRead = await fetch(`${baseUrl}/api/v3/qc/runs/${qcRunId}`, {
+      headers: { Cookie: operator.cookieHeader, Accept: "application/json" },
+    });
+    assert.equal(operatorQcRead.status, 403);
+    assert.equal((await sessionPost(operator, "/api/v3/qc/lots", {
+      ...qcLotRequest, requestId: "73000000-0000-4000-8000-000000000247",
+    })).status, 403);
+    assert.equal((await sessionPost(operator, "/api/v3/qc/targets", {
+      ...qcTargetRequest, requestId: "73000000-0000-4000-8000-000000000248",
+    })).status, 403);
+
+    const qcPersistence = await adminPool.query(
+      `SELECT
+        (SELECT count(*)::integer FROM v3.qc_records WHERE run_id = $1) AS run_records,
+        (SELECT count(*)::integer FROM v3.qc_records
+          WHERE run_id IS NULL AND details->>'targetKey' = 'integration-dough-weight') AS target_records,
+        (SELECT count(*)::integer FROM v3.qc_outbox_events
+          WHERE payload->>'runId' = $1::text OR payload->>'targetKey' = 'integration-dough-weight') AS outbox_records`,
+      [qcRunId],
+    );
+    assert.deepEqual(qcPersistence.rows[0], { run_records: 3, target_records: 3, outbox_records: 6 });
+    for (const value of ["Synthetic QC response-loss fixture", "INTEGRATION-LOT-A", "DIFFERENT-LOT"]) {
+      assert.equal(JSON.stringify(logs).includes(value), false, "QC operational details must not enter request logs");
+    }
 
     const movementsBeforeSurplus = await adminPool.query("SELECT count(*)::integer AS count FROM v3.inventory_movements");
     const operatorSurplusRead = await fetch(`${baseUrl}/api/v3/inventory/freezer-surplus`, {

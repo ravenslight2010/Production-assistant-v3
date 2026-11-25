@@ -383,7 +383,7 @@ test("React schedule confirms commands, exact retry, conflicts, import review, a
   await page.getByTestId("canonical-schedule-import").waitFor();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: `Undo unchanged created runs for ${DATE}` }).click();
-  await page.getByText(`Undo confirmed for ${DATE}.`, { exact: false }).waitFor();
+  await page.getByText(`Undo confirmed for ${DATE}. Only unchanged created runs were removed.`, { exact: true }).waitFor();
   assert.equal(api.getSchedule(DATE).runs.length, 2);
   await page.getByRole("article", { name: "Planned run 1", exact: true })
     .getByText("Setup review recommended", { exact: true }).waitFor();

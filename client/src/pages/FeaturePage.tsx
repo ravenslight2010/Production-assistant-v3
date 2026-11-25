@@ -1,4 +1,4 @@
-export type FeatureKey = "inventory" | "warehouse" | "qc" | "reports";
+export type FeatureKey = "inventory" | "warehouse" | "reports";
 
 const features: Record<FeatureKey, {
   title: string;
@@ -20,13 +20,6 @@ const features: Record<FeatureKey, {
     status: "Multi-warehouse API ported · interface pending",
     description: "Warehouse and freezer workflows will share the same facility stock ledger as runs and inventory.",
     scope: ["Warehouse assignment and stock on hand", "Transfers and append-only movements", "V1 freezer-pull and surplus workflows ported in a later tested wave"],
-  },
-  qc: {
-    title: "Quality control",
-    eyebrow: "Quality and floor events",
-    status: "Role foundation ported · V1 workflows pending",
-    description: "V1’s QC and operational evidence screens remain in the approved non-AI target; no quality result is inferred by AI.",
-    scope: ["QC checks, photos, review status, and allergens", "Stoppages and production exceptions", "Role-checked recording and review"],
   },
   reports: {
     title: "Reports and history",

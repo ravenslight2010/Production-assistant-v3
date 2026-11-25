@@ -8,6 +8,7 @@ import { SchedulePage } from "../pages/SchedulePage";
 import { SetupPage } from "../pages/SetupPage";
 import { InventoryPage } from "../pages/InventoryPage";
 import { MixPlanPage } from "../pages/MixPlanPage";
+import { QcPage } from "../pages/QcPage";
 import { ChangePasswordDialog } from "./ChangePasswordDialog";
 
 type View = "run" | "schedule" | "mix" | "setup" | "inventory" | "warehouse" | "qc" | "reports" | "staff";
@@ -160,8 +161,9 @@ export function AppShell({ session, onSessionChange, onSignOut }: {
         {activeView === "mix" ? <MixPlanPage session={session} online={online} /> : null}
         {activeView === "setup" ? <SetupPage session={session} online={online} /> : null}
         {activeView === "inventory" ? <InventoryPage session={session} online={online} /> : null}
+        {activeView === "qc" ? <QcPage session={session} online={online} /> : null}
         {activeView === "staff" && canAccessStaff ? <StaffPage session={session} online={online} /> : null}
-        {!["run", "schedule", "mix", "setup", "inventory", "staff"].includes(activeView) ? <FeaturePage feature={activeView as FeatureKey} online={online} /> : null}
+        {!["run", "schedule", "mix", "setup", "inventory", "qc", "staff"].includes(activeView) ? <FeaturePage feature={activeView as FeatureKey} online={online} /> : null}
       </main>
 
       {changePasswordOpen ? <ChangePasswordDialog online={online} onClose={() => setChangePasswordOpen(false)} onChanged={(next) => { onSessionChange(next); setAccountNotice("Password changed. Other sessions were revoked and this device has a fresh session."); }} /> : null}

@@ -5,6 +5,7 @@ import { createAccountService } from "./account-service.mjs";
 import { createAuthApi } from "./auth-api.mjs";
 import { createInventoryApi } from "./inventory-api.mjs";
 import { createMixApi } from "./mix-api.mjs";
+import { createQcApi } from "./qc-api.mjs";
 import { createRunApiForDatabase } from "./run-api.mjs";
 import { createScheduleApi } from "./schedule-api.mjs";
 
@@ -123,6 +124,9 @@ function safeRouteName(url) {
   if (url.pathname === "/api/v3/mix-recipes/commands") return "mix.recipe_command";
   if (url.pathname === "/api/v3/mix-surplus") return "mix.surplus";
   if (url.pathname === "/api/v3/mix-surplus/commands") return "mix.surplus_command";
+  if (url.pathname === "/api/v3/qc/targets") return "qc.targets";
+  if (["/api/v3/qc/lots", "/api/v3/qc/weight-checks", "/api/v3/qc/brix-checks"].includes(url.pathname)) return "qc.record";
+  if (/^\/api\/v3\/qc\/runs\/[0-9a-f-]{36}$/i.test(url.pathname)) return "qc.dashboard";
   if (url.pathname === "/api/v3/imports") return "imports.collection";
   if (url.pathname === "/api/v3/imports/records") return "imports.records";
   if (url.pathname === "/api/v3/imports/edits") return "imports.edits";
@@ -209,6 +213,12 @@ export function createV3Api({
     verifyCsrf: (request, auth) => authAdapter.verifyCsrf(request, auth),
     logger,
   });
+  const qcApi = createQcApi({
+    pool,
+    authenticate: (request) => authAdapter.authenticate(request),
+    verifyCsrf: (request, auth) => authAdapter.verifyCsrf(request, auth),
+    logger,
+  });
 
   return async function handleV3Api(request, response) {
     const requestId = randomUUID();
@@ -276,6 +286,7 @@ export function createV3Api({
       if (await inventoryApi(request, response)) return;
       if (await scheduleApi(request, response)) return;
       if (await mixApi(request, response)) return;
+      if (await qcApi(request, response)) return;
       await runApi(request, response);
     } catch (error) {
       logger({

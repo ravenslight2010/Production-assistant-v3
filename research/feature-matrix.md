@@ -108,7 +108,7 @@ Status labels describe this checkout: `ported` means the underlying V2 behavior 
 
 | Feature | V1 behavior | V2 behavior | V3 disposition | Current status |
 |---|---|---|---|---|
-| QC workflow | Planning, recipe review, labels/date codes, verification | Later-phase candidate | `defer`: rebuild against server-owned V3 data | `pending` |
+| QC workflow | Planning, recipe review, labels/date codes, verification | Later-phase candidate | `defer`: rebuild against server-owned V3 data | `vertical-slice`: Slice 1 lots, pre-run/30-minute weights, Brix, reviewed targets, and current-run evidence ported; planning, recipe/label/date verification, sign-off, and history remain pending |
 | Quality history | V1 history and retention views | Later-phase candidate | `defer` | `pending` |
 | Incident reporting and patterns | V1 issue reports and incident panels | Review-incident capability foundation | `defer` | `pending` |
 | Operational reports | V1 reports, insights, handoff digest | Run/inventory/server history foundation | `combine` | `pending` |
@@ -162,3 +162,15 @@ Setup-3 and the deterministic importer implementation are closed for the current
 - Production build, strict TypeScript, server/static syntax, generated OpenAPI schema parity, dependency audit, no-AI guard, and research-safety guard: **PASS**.
 - WebKit/Safari: **BLOCKED** because the pinned browser executable is not available in this environment. No Safari pass is claimed.
 - No deployment, production database operation, production access, or V1 data access occurred. Deferred QC/reporting and other feature-matrix rows remain separate approved work, not silently removed scope.
+
+## QC Slice 1 verification snapshot — 2026-11-25
+
+Verified in an isolated checkout with synthetic accounts/data and disposable PostgreSQL 15:
+
+- Append-only QC evidence, command receipts, audit/outbox parity, separate lots, weight/Brix target snapshots, exact replay, stale-target conflicts, capability authorization, and restricted function-only runtime access: **PASS** through migration `0024`.
+- Public synthetic suite: **279 PASS, 0 FAIL, 6 SKIPPED**. All six skips require the private source corpus, which was not provisioned for this run; this is not new private-workbook fidelity evidence.
+- React Chromium suite: **33 PASS, 0 FAIL**, including two QC journeys covering record/reload readback, committed-response-loss exact retry, two-session canonical conflicts, immutable target snapshots, role denial without QC reads, keyboard forms, offline lockout, and phone/tablet/desktop layouts.
+- Real authenticated Chromium/React/PostgreSQL QC journey: **PASS**, including one persisted lot after post-commit response loss and exact retry, pre-run/30-minute weight outcomes, Brix `not-evaluated`, two-page readback/conflict review, operator denial, offline write lockout, and clean browser/server logs.
+- Production build, strict TypeScript, server syntax, generated OpenAPI client byte parity, production dependency audit, no-AI guard, research-safety guard, and diff whitespace check: **PASS**.
+- WebKit/Safari: **BLOCKED** because the pinned browser executable is unavailable. No Safari or physical-device pass is claimed. A specialist accessibility audit remains unrun.
+- Slice 1 only is implemented. Slices 2–7, photo storage, label/date authority, enforcement/cross-contact behavior, report grouping/signing, and owner-gated navigation changes remain pending. No deployment, production database operation, production access, or V1 data access occurred.
