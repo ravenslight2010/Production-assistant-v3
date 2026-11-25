@@ -54,7 +54,8 @@ async function openBrowser(t) {
   const browserPath = process.env.CHROMIUM_PATH
     || execFileSync("which", ["chromium"], { encoding: "utf8" }).trim();
   const browserType = { webkit, firefox }[process.env.BROWSER] || chromium;
-  const browser = await browserType.launch({ headless: true, args: ["--no-sandbox"] });
+  const args = browserType === chromium ? ["--no-sandbox"] : [];
+  const browser = await browserType.launch({ headless: true, args });
   t.after(() => browser.close());
   return browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: "block" });
 }
