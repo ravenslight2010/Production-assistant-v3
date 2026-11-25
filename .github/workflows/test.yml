@@ -56,6 +56,12 @@ jobs:
       - name: Research check
         run: pnpm check:research
 
+      - name: Install PostgreSQL
+        run: sudo apt-get update && sudo apt-get install -y postgresql postgresql-contrib
+
+      - name: Database tests
+        run: pnpm test:db
+
       - name: Security audit
         run: pnpm audit:prod
         continue-on-error: true
