@@ -36,13 +36,16 @@ jobs:
         run: pnpm test
 
       - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install --with-deps chromium webkit
 
       - name: Build for browser tests
         run: pnpm build
 
-      - name: Browser tests
+      - name: Browser tests (Chromium)
         run: pnpm test:browser
+
+      - name: Browser tests (WebKit)
+        run: BROWSER=webkit pnpm test:browser
 
       - name: No AI check
         run: pnpm check:no-ai
