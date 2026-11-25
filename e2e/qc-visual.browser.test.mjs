@@ -146,7 +146,7 @@ async function compareSnapshot(name, actual) {
 
 async function captureQc(t, { name, workspace, viewport }) {
   const baseUrl = await serveDist(t);
-  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
+  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox", "--font-render-hinting=none"] });
   t.after(() => browser.close());
   const context = await browser.newContext({
     viewport, locale: "en-US", timezoneId: "UTC", reducedMotion: "reduce", serviceWorkers: "block",
