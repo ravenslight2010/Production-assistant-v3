@@ -21,6 +21,9 @@ const VISUAL_FONT = await readFile(new URL("./qc-visual-inter-latin.woff2", impo
 // Chromium can round native-select text one CSS pixel vertically between fresh
 // launches. Cap the allowance at one-tenth of one percent of the full image.
 const MAX_MISMATCH_RATIO = 0.001;
+// Unhinted Inter retains small FreeType shade differences across Linux runner
+// images. Filter that per-pixel noise while keeping the whole-image cap strict.
+const PIXEL_COLOR_THRESHOLD = 0.6;
 const PUBLIC_FILES = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
@@ -131,7 +134,7 @@ async function compareSnapshot(name, actual) {
   assert.equal(observed.width, expected.width, `${name}: viewport width changed`);
   assert.equal(observed.height, expected.height, `${name}: full-page height changed`);
   const diff = new PNG({ width: expected.width, height: expected.height });
-  const mismatchedPixels = pixelmatch(expected.data, observed.data, diff.data, expected.width, expected.height, { threshold: 0.1 });
+  const mismatchedPixels = pixelmatch(expected.data, observed.data, diff.data, expected.width, expected.height, { threshold: PIXEL_COLOR_THRESHOLD });
   const mismatchRatio = mismatchedPixels / (expected.width * expected.height);
   if (mismatchRatio > MAX_MISMATCH_RATIO) {
     await mkdir(OUTPUT, { recursive: true });
