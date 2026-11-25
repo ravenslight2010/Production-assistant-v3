@@ -1,0 +1,35 @@
+name: Repair
+
+on:
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Try rebase and re-run
+        run: |
+          git config user.email "repair@local"
+          git config user.name "Repair Bot"
+          git fetch origin main
+          if git rebase origin/main; then
+            git push --force-with-lease
+            echo "Rebased. Checks will re-run."
+          else
+            echo "Rebase failed. Manual fix needed."
+            git rebase --abort || true
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
