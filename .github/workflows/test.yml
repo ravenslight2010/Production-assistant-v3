@@ -60,7 +60,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y postgresql postgresql-contrib
 
       - name: Database tests
-        run: pnpm test:db
+        run: |
+          export PATH="/usr/lib/postgresql/16/bin:$PATH"
+          pnpm test:db
 
       - name: Security audit
         run: pnpm audit:prod
