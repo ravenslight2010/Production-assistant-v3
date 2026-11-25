@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { chromium, webkit } from "playwright";
+import { chromium, webkit, firefox } from "playwright";
 import { applyScheduleCommand, emptySchedule } from "../core/schedule-planning.mjs";
 
 const CSRF_TOKEN = "b".repeat(43);
@@ -56,7 +56,7 @@ async function serveDist(t) {
 async function openBrowser(t) {
   const browserPath = process.env.CHROMIUM_PATH
     || execFileSync("which", ["chromium"], { encoding: "utf8" }).trim();
-  const browserType = process.env.BROWSER === "webkit" ? webkit : chromium;
+  const browserType = { webkit, firefox }[process.env.BROWSER] || chromium;
   const browser = await browserType.launch({ headless: true, args: ["--no-sandbox"] });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: "block" });
