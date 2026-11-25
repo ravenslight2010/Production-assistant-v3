@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { chromium, expect, webkit } from "playwright/test";
+import { chromium, expect, firefox, webkit } from "playwright/test";
 
 const CSRF_TOKEN = "a".repeat(43);
 const MANAGER_ID = "72000000-0000-4000-8000-000000000001";
@@ -46,8 +46,8 @@ async function serveDist(t) {
 
 async function openBrowser(t, viewport) {
   const engineName = process.env.BROWSER_ENGINE ?? "chromium";
-  assert.ok(["chromium", "webkit"].includes(engineName), `Unsupported browser engine: ${engineName}`);
-  const engine = engineName === "webkit" ? webkit : chromium;
+  assert.ok(["chromium", "webkit", "firefox"].includes(engineName), `Unsupported browser engine: ${engineName}`);
+  const engine = { chromium, webkit, firefox }[engineName];
   const executablePath = engineName === "chromium"
     ? process.env.CHROMIUM_PATH || execFileSync("which", ["chromium"], { encoding: "utf8" }).trim()
     : undefined;
@@ -389,6 +389,6 @@ test("reset-only approvers stay scoped and unauthorized staff hashes fall back t
   const deniedPage = await denied.context.newPage();
   await deniedPage.goto(`${baseUrl}/#staff`);
   await deniedPage.getByRole("heading", { name: "Run control" }).waitFor();
-  assert.equal(new URL(deniedPage.url()).hash, "#run");
-  assert.equal(await deniedPage.getByRole("button", { name: "Staff", exact: true }).count(), 0);
+  await expect.poll(() => new URL(deniedPage.url()).hash).toBe("#run");
+  await expect(deniedPage.getByRole("button", { name: "Staff", exact: true })).toHaveCount(0);
 });

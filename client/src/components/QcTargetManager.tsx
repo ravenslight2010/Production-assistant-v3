@@ -106,7 +106,7 @@ export function QcTargetManager({ targets, canManage, disabled, onSave }: {
         {targets.length === 0 ? (
           <div className="mt-5 rounded-lg border border-dashed border-border p-5 text-sm text-muted-foreground">No reviewed weight or Brix targets are available.</div>
         ) : (
-          <div className="relative mt-5 overflow-x-auto">
+          <div className="relative mt-5 overflow-x-auto" role="region" aria-label="Reviewed QC targets; scroll horizontally for all columns" tabIndex={0}>
             <table className="w-full min-w-[44rem] border-collapse text-left text-xs">
               <caption className="sr-only">Current reviewed QC targets</caption>
               <thead><tr className="border-b border-border text-muted-foreground"><th className="py-2 pr-3 font-medium">Target</th><th className="py-2 pr-3 font-medium">Bounds</th><th className="py-2 pr-3 font-medium">Revision</th><th className="py-2 pr-3 font-medium">Status</th>{canManage ? <th className="py-2 font-medium"><span className="sr-only">Action</span></th> : null}</tr></thead>

@@ -555,7 +555,8 @@ test("source workbook review gates edits, preserves source summaries on exact re
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`${baseUrl}/#setup`);
   await page.getByRole("heading", { name: "Setup and master data", exact: true }).waitFor();
-  const family = page.getByLabel("Source workbook family", { exact: true });
+  // Firefox 1572 crashes when this native select is driven through getByLabel.
+  const family = page.getByRole("combobox", { name: "Source workbook family", exact: true });
   assert.deepEqual(await family.locator("option").allTextContents(), ["Spec sheets", "Premix sheets", "Cheese mix specs", "Shipping guides", "Sauce guides", "Dough guides"]);
   await family.selectOption("sauce-guides");
   assert.equal(await page.getByLabel("Source workbook file", { exact: true }).getAttribute("accept"), ".xlsx,.docx");

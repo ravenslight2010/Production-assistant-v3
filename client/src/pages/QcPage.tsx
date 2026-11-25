@@ -395,7 +395,7 @@ export function QcPage({ session, online }: { session: AuthSession; online: bool
                 {dashboard.records.length === 0 ? (
                   <div className="mt-5 rounded-lg border border-dashed border-border p-5"><p className="text-sm font-medium">No QC checks recorded for this run.</p><p className="mt-2 text-xs leading-5 text-muted-foreground">Record a lot, weight, or Brix observation using the adjacent form. Missing evidence is not evaluated as compliant.</p></div>
                 ) : (
-                  <div className="mt-5 overflow-x-auto">
+                  <div className="mt-5 overflow-x-auto" role="region" aria-label="QC evidence records; scroll horizontally for all columns" tabIndex={0}>
                     <table className="w-full min-w-[46rem] border-collapse text-left text-xs">
                       <caption className="sr-only">QC records for {dashboard.run.setupSnapshot.label}, ordered by facility QC sequence</caption>
                       <thead><tr className="border-b border-border text-muted-foreground"><th className="py-2 pr-3 font-medium">Sequence</th><th className="py-2 pr-3 font-medium">Evidence</th><th className="py-2 pr-3 font-medium">Observation</th><th className="py-2 pr-3 font-medium">Evaluation</th><th className="py-2 font-medium">Recorded</th></tr></thead>

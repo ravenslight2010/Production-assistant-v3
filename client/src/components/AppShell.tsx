@@ -109,7 +109,7 @@ export function AppShell({ session, onSessionChange, onSignOut }: {
     <div className="min-h-dvh bg-background text-foreground">
       <header className="border-b border-border/60 bg-card/80">
         <div className="app-shell flex min-h-20 flex-wrap items-center gap-3 py-3">
-          <button type="button" className="flex min-h-11 items-center gap-3 text-left" onClick={() => navigate("run")} aria-label="Production Assistant live run">
+          <button type="button" className="flex min-h-11 items-center gap-3 text-left" onClick={() => navigate("run")}>
             <img src="/logo.svg" alt="" className="h-10 w-10 rounded-xl" />
             <span>
               <span className="block text-sm font-bold tracking-tight">Production Assistant</span>

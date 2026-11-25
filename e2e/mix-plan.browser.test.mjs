@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { chromium, expect, webkit } from "playwright/test";
+import { chromium, expect, firefox, webkit } from "playwright/test";
 import { buildMixPlan } from "../core/mix-planning.mjs";
 
 const CSRF_TOKEN = "d".repeat(43);
@@ -116,8 +116,8 @@ async function serveDist(t) {
 
 async function openBrowser(t) {
   const engineName = process.env.BROWSER_ENGINE ?? "chromium";
-  assert.ok(["chromium", "webkit"].includes(engineName), `Unsupported browser engine: ${engineName}`);
-  const engine = engineName === "webkit" ? webkit : chromium;
+  assert.ok(["chromium", "webkit", "firefox"].includes(engineName), `Unsupported browser engine: ${engineName}`);
+  const engine = { chromium, webkit, firefox }[engineName];
   const executablePath = engineName === "chromium"
     ? process.env.CHROMIUM_PATH || execFileSync("which", ["chromium"], { encoding: "utf8" }).trim()
     : undefined;
