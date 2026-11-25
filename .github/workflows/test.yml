@@ -35,6 +35,12 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build for browser tests
+        run: pnpm build
+
       - name: Browser tests
         run: pnpm test:browser
 
@@ -48,5 +54,3 @@ jobs:
         run: pnpm audit:prod
         continue-on-error: true
 
-      - name: Build
-        run: pnpm build
