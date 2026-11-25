@@ -61,7 +61,9 @@ jobs:
 
       - name: Database tests
         run: |
+          sudo apt-get install -y postgresql-16
           export PATH="/usr/lib/postgresql/16/bin:$PATH"
+          which initdb
           pnpm test:db
 
       - name: Security audit
