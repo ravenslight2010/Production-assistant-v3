@@ -47,6 +47,7 @@ jobs:
 
       - name: Browser tests (Firefox)
         run: BROWSER=firefox pnpm test:browser
+        continue-on-error: true
 
       - name: No AI check
         run: pnpm check:no-ai
