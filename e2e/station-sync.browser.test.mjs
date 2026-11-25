@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { chromium, webkit, firefox } from "playwright";
+import { chromium, expect, firefox, webkit } from "playwright/test";
 
 const CSRF_TOKEN = "a".repeat(43);
 const STAFF_ID = "72000000-0000-4000-8000-000000000001";
@@ -395,7 +395,7 @@ test("operational journal preserves exact retries, conflicts, pause policy, and 
   await staleOperations.getByLabel("Run notes", { exact: true }).fill("Stale overwrite");
   await staleOperations.getByRole("button", { name: "Save run notes", exact: true }).click();
   await stalePage.getByRole("status").filter({ hasText: "Stale operational change discarded; the latest server state is now displayed." }).waitFor();
-  assert.equal(await staleOperations.getByLabel("Run notes", { exact: true }).inputValue(), "Canonical night shift handoff");
+  await expect(staleOperations.getByLabel("Run notes", { exact: true })).toHaveValue("Canonical night shift handoff");
   await stalePage.close();
 
   await operations.getByRole("button", { name: "Edit stop reasons", exact: true }).click();

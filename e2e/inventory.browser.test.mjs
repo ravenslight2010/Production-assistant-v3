@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { chromium, webkit, firefox } from "playwright";
+import { chromium, expect, firefox, webkit } from "playwright/test";
 import { parseOpeningCountCsv } from "../core/import-csv.mjs";
 
 const CSRF_TOKEN = "b".repeat(43);
@@ -615,8 +615,12 @@ test("React inventory creates a warehouse, retries opening counts exactly, appli
   assert.equal(await page.getByRole("button", { name: "Stage opening count", exact: true }).isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Create warehouse", exact: true }).isDisabled(), true);
   assert.equal(api.writes.length, writesBeforeOffline, "offline inventory mode must not issue writes");
+  const guidanceReloaded = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === "/api/v3/inventory/warehouse-guidance"
+    && response.request().method() === "GET");
   await context.setOffline(false);
-  await page.getByText("Canonical facility inventory · manage-inventory", { exact: true }).waitFor();
+  await guidanceReloaded;
+  await expect(page.getByRole("button", { name: "Refresh inventory", exact: true })).toBeEnabled();
 
   await page.reload();
   await page.getByRole("region", { name: "Confirmed quantities", exact: true }).getByRole("cell", { name: "12.5", exact: true }).waitFor();

@@ -25,9 +25,4 @@ jobs:
       - name: Build
         run: pnpm build
       - name: Mobile viewport tests
-        run: |
-          pnpm start &
-          npx wait-on http://localhost:3000 --timeout 60000
-          pnpm exec playwright test --project=chromium-mobile || true
-        env:
-          BASE_URL: http://localhost:3000
+        run: BROWSER=chromium BROWSER_ENGINE=chromium pnpm test:browser

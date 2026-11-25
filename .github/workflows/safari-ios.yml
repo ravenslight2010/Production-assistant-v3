@@ -25,9 +25,4 @@ jobs:
       - name: Build
         run: pnpm build
       - name: Safari viewport tests
-        run: |
-          pnpm start &
-          npx wait-on http://localhost:3000 --timeout 60000
-          BROWSER=webkit pnpm test:browser
-        env:
-          BASE_URL: http://localhost:3000
+        run: BROWSER=webkit BROWSER_ENGINE=webkit pnpm test:browser
