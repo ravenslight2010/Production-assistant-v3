@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { chromium } from "playwright";
+import { chromium, webkit, firefox } from "playwright";
 
 const STAFF_ID = "77000000-0000-4000-8000-000000000001";
 const RUN_ID = "77000000-0000-4000-8000-000000000002";
@@ -58,7 +58,9 @@ async function serveDist(t) {
 async function openBrowser(t) {
   const browserPath = process.env.CHROMIUM_PATH
     || execFileSync("which", ["chromium"], { encoding: "utf8" }).trim();
-  const browser = await chromium.launch({ headless: true, executablePath: browserPath, args: ["--no-sandbox"] });
+  const browserType = { webkit, firefox }[process.env.BROWSER] || chromium;
+  const args = browserType === chromium ? ["--no-sandbox"] : [];
+  const browser = await browserType.launch({ headless: true, args });
   t.after(() => browser.close());
   return browser;
 }

@@ -43,11 +43,10 @@ jobs:
         run: pnpm test:browser
 
       - name: Browser tests (WebKit)
-        run: BROWSER=webkit pnpm test:browser
-        continue-on-error: true
+        run: BROWSER=webkit BROWSER_ENGINE=webkit pnpm test:browser
 
       - name: Browser tests (Firefox)
-        run: BROWSER=firefox pnpm test:browser
+        run: BROWSER=firefox BROWSER_ENGINE=firefox pnpm test:browser
         continue-on-error: true
 
       - name: No AI check
