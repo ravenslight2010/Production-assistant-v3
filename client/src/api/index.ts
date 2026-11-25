@@ -266,7 +266,7 @@ export async function recordQcWeightCheck(request: QcWeightCheckRequest): Promis
 
 export async function recordQcBrixCheck(request: QcBrixCheckRequest): Promise<QcRecordResult> {
   const result = await unwrap(await client.POST("/api/v3/qc/brix-checks", {
-    params: { header: mutationHeaders() }, body: request,
+    params: { header: mutationHeaders() }, body: request as never,
   }));
   return confirmQcRecord(result, request.runId);
 }
