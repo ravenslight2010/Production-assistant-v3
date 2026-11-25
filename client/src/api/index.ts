@@ -1,4 +1,4 @@
-import createClient from "openapi-fetch";
+import createClient from "openapi-typesafe-fetch";
 import type { components, paths } from "./schema";
 
 const client = createClient<paths>({ baseUrl: "/" });
@@ -266,7 +266,7 @@ export async function recordQcWeightCheck(request: QcWeightCheckRequest): Promis
 
 export async function recordQcBrixCheck(request: QcBrixCheckRequest): Promise<QcRecordResult> {
   const result = await unwrap(await client.POST("/api/v3/qc/brix-checks", {
-    params: { header: mutationHeaders() }, body: request as never,
+    params: { header: mutationHeaders() }, body: request,
   }));
   return confirmQcRecord(result, request.runId);
 }
