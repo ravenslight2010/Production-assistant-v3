@@ -61,8 +61,14 @@ jobs:
 
       - name: Database tests
         run: |
-          sudo apt-get install -y postgresql
+          sudo apt-get update
+          sudo apt-get install -y postgresql postgresql-contrib
           PG_BIN=$(dirname $(find /usr/lib/postgresql -name initdb | head -1))
+          if [ -z "$PG_BIN" ] || [ ! -x "$PG_BIN/initdb" ]; then
+            echo "initdb not found"
+            find /usr -name initdb 2>/dev/null || true
+            exit 1
+          fi
           export PATH="$PG_BIN:$PATH"
           which initdb
           pnpm test:db

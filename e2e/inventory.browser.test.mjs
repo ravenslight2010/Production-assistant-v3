@@ -935,6 +935,7 @@ test("React staff guidance marks counts with exact retry while stock and configu
 
   const writes = api.writes.length;
   await context.setOffline(true);
+  await page.getByText("Read-only offline").waitFor();
   assert.equal(await page.getByRole("button", { name: "Confirm count", exact: true }).isDisabled(), true);
   assert.equal(api.writes.length, writes);
   await context.setOffline(false);
