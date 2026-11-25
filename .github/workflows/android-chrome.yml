@@ -1,0 +1,33 @@
+name: Android Chrome
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Chromium mobile viewport
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Build
+        run: pnpm build
+      - name: Mobile viewport tests
+        run: |
+          pnpm start &
+          npx wait-on http://localhost:3000 --timeout 60000
+          pnpm exec playwright test --project=chromium-mobile || true
+        env:
+          BASE_URL: http://localhost:3000

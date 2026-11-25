@@ -1,0 +1,40 @@
+name: PWA checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Manifest and service worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm build
+      - name: Check manifest
+        run: |
+          if [ -f dist/manifest.webmanifest ] || [ -f dist/manifest.json ]; then
+            echo "Manifest found"
+          else
+            echo "No manifest found"
+            exit 1
+          fi
+      - name: Check service worker
+        run: |
+          if ls dist/sw.js dist/service-worker.js 2>/dev/null; then
+            echo "Service worker found"
+          else
+            echo "No service worker found"
+            exit 1
+          fi

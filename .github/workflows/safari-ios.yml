@@ -1,0 +1,33 @@
+name: Safari iOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: WebKit iPhone and iPad viewports
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright WebKit
+        run: pnpm exec playwright install --with-deps webkit
+      - name: Build
+        run: pnpm build
+      - name: Safari viewport tests
+        run: |
+          pnpm start &
+          npx wait-on http://localhost:3000 --timeout 60000
+          BROWSER=webkit pnpm test:browser
+        env:
+          BASE_URL: http://localhost:3000

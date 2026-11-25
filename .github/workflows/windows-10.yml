@@ -1,0 +1,33 @@
+name: Windows 10
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: App and server on Windows 10
+    runs-on: [self-hosted, windows-10]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm build
+      - name: Start server
+        run: |
+          pnpm start &
+          npx wait-on http://localhost:3000 --timeout 60000
+        shell: bash
+      - name: Browser tests
+        run: pnpm test:browser
+        env:
+          BASE_URL: http://localhost:3000
