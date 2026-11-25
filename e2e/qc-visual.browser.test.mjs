@@ -17,6 +17,7 @@ const OUTPUT = resolve("test-results/qc-visual");
 // UPDATE_QC_VISUAL_BASELINES=1 node --test e2e/qc-visual.browser.test.mjs
 const UPDATE_BASELINES = process.env.UPDATE_QC_VISUAL_BASELINES === "1";
 const CHROMIUM_ONLY = (process.env.BROWSER ?? "chromium") === "chromium";
+const VISUAL_FONT = await readFile(new URL("./qc-visual-inter-latin.woff2", import.meta.url));
 // Chromium can round native-select text one CSS pixel vertically between fresh
 // launches. Cap the allowance at one-tenth of one percent of the full image.
 const MAX_MISMATCH_RATIO = 0.001;
@@ -165,7 +166,20 @@ async function captureQc(t, { name, workspace, viewport }) {
     await page.getByText("103", { exact: true }).waitFor();
     await page.getByText("separate lots", { exact: true }).waitFor();
   }
+  // The app requests Inter without bundling it. Pin the same licensed font in
+  // visual fixtures so host system-font resolution cannot change every baseline.
+  await page.addStyleTag({ content: `
+    @font-face {
+      font-family: "QC Visual Inter";
+      src: url("data:font/woff2;base64,${VISUAL_FONT.toString("base64")}") format("woff2");
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: block;
+    }
+    body, body * { font-family: "QC Visual Inter" !important; }
+  ` });
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  assert.ok(await page.evaluate(() => document.fonts.check('16px "QC Visual Inter"')), "Visual fixture font must load");
   const actual = await page.screenshot({ fullPage: true, animations: "disabled" });
   await compareSnapshot(name, actual);
 }
