@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -53,8 +52,6 @@ test("V3 React shell installs for offline reading without clearing unrelated bro
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => new Promise((resolve) => server.close(resolve)));
 
-  const browserPath = process.env.CHROMIUM_PATH
-    || execFileSync("which", ["chromium"], { encoding: "utf8" }).trim();
   const browserType = { webkit, firefox }[process.env.BROWSER] || chromium;
   const args = browserType === chromium ? ["--no-sandbox"] : [];
   const browser = await browserType.launch({ headless: true, args });

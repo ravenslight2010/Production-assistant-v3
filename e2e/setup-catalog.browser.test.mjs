@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { chromium, webkit, firefox } from "playwright";
+import { chromium, expect, firefox, webkit } from "playwright/test";
 import { parseSetupCatalogCsv, parseSetupCatalogRecord } from "../core/setup-catalog-csv.mjs";
 import { parseSetupMasterRecord } from "../core/setup-master-records.mjs";
 
@@ -51,8 +50,6 @@ async function serveDist(t) {
 }
 
 async function openBrowser(t) {
-  const browserPath = process.env.CHROMIUM_PATH
-    || execFileSync("which", ["chromium"], { encoding: "utf8" }).trim();
   const browserType = { webkit, firefox }[process.env.BROWSER] || chromium;
   const args = browserType === chromium ? ["--no-sandbox"] : [];
   const browser = await browserType.launch({ headless: true, args });
@@ -638,7 +635,9 @@ test("mixed workbooks queue independently and leave only after confirmed staging
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`${baseUrl}/#setup`);
   await page.getByRole("heading", { name: "Setup and master data", exact: true }).waitFor();
-  await page.getByLabel("Source workbook file", { exact: true }).setInputFiles([
+  const workbookInput = page.getByLabel("Source workbook file", { exact: true });
+  await expect(workbookInput).toBeEnabled();
+  await workbookInput.setInputFiles([
     { name: "first.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from("synthetic workbook bytes") },
     { name: "second.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: Buffer.from("synthetic workbook bytes") },
   ]);
