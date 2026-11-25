@@ -23,8 +23,30 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Test
-        run: pnpm test
+      - name: Check server syntax
+        run: pnpm check:server
+
+      - name: Check API generated
+        run: pnpm check:api-generated
 
       - name: Typecheck
         run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Browser tests
+        run: pnpm test:browser
+
+      - name: No AI check
+        run: pnpm check:no-ai
+
+      - name: Research check
+        run: pnpm check:research
+
+      - name: Security audit
+        run: pnpm audit:prod
+        continue-on-error: true
+
+      - name: Build
+        run: pnpm build
