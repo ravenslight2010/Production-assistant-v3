@@ -32,7 +32,7 @@ jobs:
           fi
       - name: Check service worker
         run: |
-          if ls dist/sw.js dist/service-worker.js 2>/dev/null; then
+          if [ -f dist/sw.js ] || [ -f dist/service-worker.js ]; then
             echo "Service worker found"
           else
             echo "No service worker found"
