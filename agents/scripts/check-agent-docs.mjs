@@ -24,6 +24,22 @@ export function credentialFindings(markdown) {
   return SECRET_PATTERNS.filter(({ pattern }) => pattern.test(markdown)).map(({ name }) => name);
 }
 
+// Backticked repo-relative paths such as `scripts/smoke.mjs`. Literal paths
+// only: globs (`web/*.mjs`), placeholders (`db/NNNN-x.sql`), and template
+// slots (`server/<api>.test.mjs`) are intentionally not matched. Resolution
+// order: the file's directory, then the agents root, then the repo root —
+// docs reference both agents-local paths (`memory/gotchas.md`) and real
+// repo paths (`scripts/start-v3.sh`).
+const BACKTICKED_REPO_PATH = /`((?:[A-Za-z0-9_-]+\/)+[A-Za-z0-9_.-]+\.(?:mjs|mts|js|ts|tsx|sql|md|sh|yaml|yml|json))`/gu;
+
+export function backtickedRepoPaths(markdown) {
+  const paths = [];
+  for (const match of markdown.matchAll(BACKTICKED_REPO_PATH)) {
+    if (!match[1].includes("NNNN")) paths.push(match[1]);
+  }
+  return paths;
+}
+
 async function markdownFiles(agentsDir) {
   const files = [];
   async function walk(directory) {
@@ -63,6 +79,7 @@ export async function checkAgentDocs(agentsDir) {
 
   const files = await markdownFiles(agentsDir);
   const indexedTargets = new Set(markdownLinkTargets(index).map((target) => target.split("#")[0]));
+  const repoRoot = resolve(agentsDir, "..");
 
   for (const file of files) {
     const relativePath = portablePath(relative(agentsDir, file));
@@ -95,6 +112,17 @@ export async function checkAgentDocs(agentsDir) {
     const topDirectory = relativePath.split("/")[0];
     if (INDEXED_DIRECTORIES.has(topDirectory) && !indexedTargets.has(relativePath)) {
       errors.push(`${relativePath}: not indexed by ${INDEX_NAME}`);
+    }
+
+    for (const repoPath of backtickedRepoPaths(markdown)) {
+      const candidates = [
+        resolve(dirname(file), repoPath),
+        resolve(agentsDir, repoPath),
+        resolve(repoRoot, repoPath),
+      ];
+      if (!(await Promise.all(candidates.map(pathExists))).some(Boolean)) {
+        errors.push(`${relativePath}: backticked repo path not found: ${repoPath}`);
+      }
     }
   }
 

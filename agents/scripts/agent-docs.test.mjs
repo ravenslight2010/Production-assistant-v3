@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { checkAgentDocs, credentialFindings, markdownLinkTargets } from "./check-agent-docs.mjs";
+import { checkAgentDocs, backtickedRepoPaths, credentialFindings, markdownLinkTargets } from "./check-agent-docs.mjs";
 
 async function fixture(t, files) {
   const directory = await mkdtemp(resolve(tmpdir(), "v3-agent-docs-"));
@@ -61,6 +61,32 @@ test("checker rejects non-portable absolute local links", async (t) => {
   const errors = await checkAgentDocs(directory);
   assert.equal(errors.length, 1);
   assert.match(errors[0], /absolute local link is not portable/u);
+});
+
+test("backticked repo path scan keeps literals and skips placeholders and globs", () => {
+  assert.deepEqual(
+    backtickedRepoPaths("Run `scripts/smoke.mjs`, edit `db/NNNN-x.sql`, glob `e2e/*.test.mjs`, slot `server/<api>.test.mjs`."),
+    ["scripts/smoke.mjs"],
+  );
+});
+
+test("checker rejects a backticked repo path that does not exist", async (t) => {
+  const directory = await fixture(t, {
+    "AGENTS.md": "# Agents\nSmoke lives at `scripts/smoke.mjs`.\n",
+  });
+  const errors = await checkAgentDocs(directory);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /backticked repo path not found: scripts\/smoke\.mjs/u);
+});
+
+test("checker accepts backticked repo paths resolved from the file, agents root, or repo root", async (t) => {
+  const directory = await fixture(t, {
+    "repo/agents/AGENTS.md": "# Agents\n[State](memory/state.md)\n[Skill](skills/do-work.md)\nSee `scripts/start.sh`.\n",
+    "repo/agents/memory/state.md": "# State\nSee `skills/do-work.md`.\n",
+    "repo/agents/skills/do-work.md": "# Do work\n",
+    "repo/scripts/start.sh": "#!/bin/sh\n",
+  });
+  assert.deepEqual(await checkAgentDocs(resolve(directory, "repo/agents")), []);
 });
 
 test("credential scanner detects a token-shaped value without storing a real token", () => {
