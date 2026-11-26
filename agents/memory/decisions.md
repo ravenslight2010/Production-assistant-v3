@@ -1,5 +1,17 @@
 # Decisions (ADRs, newest first)
 
+## ADR-2026-11-25-1 — openapi-typesafe for TypeScript 7
+**Status:** accepted. `openapi-typescript` does not support TypeScript 7
+(`ts.factory` / `ts.SyntaxKind` removed). The repo uses `openapi-typesafe`
+and `openapi-typesafe-fetch` (1.0.0-rc.16) with TypeScript 7.0.2.
+**Why:** TypeScript 7 was required; the original OpenAPI toolchain broke
+`generate:api`. `openapi-typesafe` is a maintained fork that works with TS 7
+and OpenAPI 3.2.
+**Consequence:** `pnpm generate:api` writes `client/src/api/schema.d.ts`.
+Do not reintroduce `openapi-typescript` or `openapi-fetch` without a TS 7
+compatibility check. `check:api-generated` fails the build if the generated
+file drifts.
+
 ## ADR-2026-11-27-3 — Run page lists all runs (scope=all), not active-only
 **Status:** accepted. `scope=active` exists in the API (from `5fe69ae`) but
 the Run page calls `listRuns()` with no scope.

@@ -139,6 +139,7 @@ Read [Browser and CI memory](memory/browser-and-ci.md) and
 - [Run the stress rig](skills/run-the-stress-rig.md) — disposable live-rig environment, restart procedure, acceptance bar.
 - [Use Kimi Claw](skills/use-kimi-claw.md) — group setup, safe task routing, isolation, and evidence handoff.
 - [Maintain agent docs](skills/maintain-agent-docs.md) — where project knowledge belongs and how to validate it.
+- [Self-hosted runners](skills/self-hosted-runners.md) — install and use the Windows 10/11 runners that run the app and server.
 
 ## Memory
 
