@@ -24,7 +24,18 @@ function makeWorkbook(sheets) {
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 }
 
-test("parses named dough rows and preserves displayed yield and source cells", () => {
+function makeDoughWorkbookWithYieldCell(yieldCell) {
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ["Customer", "OZ", "LBS", "YIELD", "PER TRAY"],
+    ["North Shop", 7.7, 310.5, "", 84],
+  ]);
+  sheet.D2 = yieldCell;
+  XLSX.utils.book_append_sheet(workbook, sheet, "Procedure");
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+}
+
+test("parses literal numeric dough yields and preserves source-cell provenance", () => {
   const buffer = makeWorkbook([["Procedure", [
     ["Dough mixing procedure"],
     [],
@@ -37,6 +48,28 @@ test("parses named dough rows and preserves displayed yield and source cells", (
   assert.equal(parsed.rows[0].doughballYield, 645.19);
   assert.equal(parsed.rows[0].source.yieldCell, "Procedure!D4");
   assert.equal(parsed.rows[0].source.displayedYield, "645.19");
+});
+
+test("leaves formula-backed yields unresolved when a cached display value exists", () => {
+  const buffer = makeDoughWorkbookWithYieldCell({ t: "n", f: "600+45.19", v: 645.19 });
+  const parsed = parseDoughCapacityWorkbook(buffer, "procedure.xlsx");
+
+  assert.equal(parsed.rows.length, 1);
+  assert.equal(parsed.rows[0].doughballYield, null);
+  assert.equal(parsed.rows[0].source.yieldCell, "Procedure!D2");
+  assert.equal(parsed.rows[0].source.displayedYield, null);
+  assert.equal(parsed.rows[0].source.yieldIsFormula, true);
+});
+
+test("leaves formula-backed yields unresolved when no cached value exists", () => {
+  const buffer = makeDoughWorkbookWithYieldCell({ t: "n", f: "600+45.19" });
+  const parsed = parseDoughCapacityWorkbook(buffer, "procedure.xlsx");
+
+  assert.equal(parsed.rows.length, 1);
+  assert.equal(parsed.rows[0].doughballYield, null);
+  assert.equal(parsed.rows[0].source.yieldCell, "Procedure!D2");
+  assert.equal(parsed.rows[0].source.displayedYield, null);
+  assert.equal(parsed.rows[0].source.yieldIsFormula, true);
 });
 
 test("keeps missing yield cells unavailable instead of deriving a replacement", () => {
