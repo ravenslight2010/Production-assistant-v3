@@ -140,6 +140,9 @@ Read [Browser and CI memory](memory/browser-and-ci.md) and
 - [Use Kimi Claw](skills/use-kimi-claw.md) — group setup, safe task routing, isolation, and evidence handoff.
 - [Maintain agent docs](skills/maintain-agent-docs.md) — where project knowledge belongs and how to validate it.
 - [Self-hosted runners](skills/self-hosted-runners.md) — install and use the Windows 10/11 runners that run the app and server.
+- [Local development](skills/local-development.md) — start API, worker, and web with the pinned Node and a disposable database.
+- [OpenAPI client](skills/openapi-client.md) — regenerate and check the typesafe client after API changes.
+- [Database tests](skills/database-tests.md) — run the real-Postgres harness that unit tests do not replace.
 
 ## Memory
 
@@ -148,6 +151,7 @@ Read [Browser and CI memory](memory/browser-and-ci.md) and
 - [Gotchas](memory/gotchas.md) — bugs already made and the tests their fixes require.
 - [Browser and CI](memory/browser-and-ci.md) — current test topology, hosted lanes, and repair history.
 - [QC roadmap](memory/qc-roadmap.md) — approved slice sequence, owner gates, and migration-number caution.
+- [Local hosting](memory/local-hosting.md) — running the API and worker on a local machine, pool defaults, and what is not CI.
 
 ## Documentation and smoke tooling
 

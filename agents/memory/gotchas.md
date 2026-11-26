@@ -123,3 +123,17 @@ The plan describes intent, not the current allocation.
 **Rule:** fetch `main`, inventory `db/NNNN-*.sql`, and allocate the next actually
 available paired filename immediately before implementation. Never overwrite or
 renumber an existing migration to match a plan. See `memory/qc-roadmap.md`.
+
+## 12. Background workers and pool pressure (2026-11)
+
+**What happened:** connection delays and wake failures appeared even when
+nobody was using the app. Outbox polling (5 s), auto-track ticks (15 s),
+and capacity telemetry (1 min) kept the API process busy. The default pool
+was 10 connections with a short checkout timeout.
+
+**Rule:** keep API and worker pools small on shared or low-core hosts
+(`start-v3.sh` uses 3 and 2). Do not raise pool size to hide a slow query.
+Measure which worker holds connections before changing intervals.
+
+**Detection:** health shows a healthy database but a `backgroundWorkers`
+warning, or checkout timeouts in logs while the app is idle.
