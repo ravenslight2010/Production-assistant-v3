@@ -1,7 +1,7 @@
 # V3 importer test map
 
 Use this map alongside [V1 importer lessons](v1-importer-lessons.md) and
-[Work on V3 importers](../SKILL.md). Paths were checked against the current
+[Work on V3 importers](../skills/work-on-importers.md). Paths were checked against the current
 V3 repository tree when this transfer was prepared; inspect current `main`
 before relying on them.
 
