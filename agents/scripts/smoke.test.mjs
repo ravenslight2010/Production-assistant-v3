@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   cookieHeader,
   csrfHeaderValue,
+  isHealthyBody,
   isRunListEtag,
   parseSetCookie,
   summarizeChecks,
@@ -48,6 +49,16 @@ test("isRunListEtag matches the version-limit-scope format only", () => {
   assert.ok(!isRunListEtag('"57837-25-everything"'));
   assert.ok(!isRunListEtag(null));
   assert.ok(!isRunListEtag('""'));
+});
+
+test("isHealthyBody accepts ok with or without a worker report", () => {
+  assert.ok(isHealthyBody({ status: "ok" }));
+  assert.ok(isHealthyBody({ status: "ok", stationWorker: { status: "active" } }));
+  assert.ok(!isHealthyBody({ error: "The service is temporarily unavailable." }));
+  assert.ok(!isHealthyBody({ status: "ok", stationWorker: { status: "degraded" } }));
+  assert.ok(!isHealthyBody({ status: "ok", stationWorker: { status: "stopped" } }));
+  assert.ok(!isHealthyBody(null));
+  assert.ok(!isHealthyBody({}));
 });
 
 test("summarizeChecks reports pass only when every check passed", () => {

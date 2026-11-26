@@ -1,5 +1,8 @@
 // Live smoke test for a v3 rig. Exercises the full client protocol:
-// sign-in (both cookies) → gzipped list → ETag 304 → CSRF'd sign-out.
+// health → sign-in (both cookies) → gzipped list → ETag 304 → CSRF'd sign-out.
+// The health check runs first on purpose: the API can serve every later step
+// while the background worker is down, so a green smoke without it can hide a
+// degraded rig (health route 503s when the worker health port is silent).
 //
 // Credentials come from env vars ONLY — never hardcode, never commit:
 //   V3_SMOKE_BASE      default http://127.0.0.1:5000
@@ -33,6 +36,14 @@ export function isRunListEtag(value) {
   return typeof value === "string" && /^"\d+-\d+-(all|active)"$/.test(value);
 }
 
+export function isHealthyBody(body) {
+  if (!body || body.status !== "ok") return false;
+  // Present only when the server runs with a worker health port; when present
+  // it must be active — the health route itself 503s otherwise.
+  if (body.stationWorker && body.stationWorker.status !== "active") return false;
+  return true;
+}
+
 export function summarizeChecks(checks) {
   const failed = checks.filter((c) => c.ok !== true);
   return {
@@ -59,6 +70,13 @@ export async function runSmoke(base = BASE, username = process.env.V3_SMOKE_USER
   }
   const checks = [];
   let cookies = null;
+
+  checks.push(await check("health", async () => {
+    const res = await fetch(`${base}/healthz`);
+    if (res.status !== 200) throw new Error(`status ${res.status}: ${(await res.text()).slice(0, 120)}`);
+    const body = await res.json().catch(() => null);
+    if (!isHealthyBody(body)) throw new Error(`unexpected body ${JSON.stringify(body)?.slice(0, 120)}`);
+  }));
 
   checks.push(await check("sign-in", async () => {
     const res = await fetch(`${base}/api/v3/auth/sign-in`, {

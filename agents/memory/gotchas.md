@@ -137,3 +137,18 @@ Measure which worker holds connections before changing intervals.
 
 **Detection:** health shows a healthy database but a `backgroundWorkers`
 warning, or checkout timeouts in logs while the app is idle.
+
+## 13. Green client protocol on a half-dead rig (2026-11-27)
+
+**What happened:** the rig's API was up and answered sign-in, run lists,
+and ETag 304s normally, but the background worker had died. `/healthz`
+returned 503 (`v3.health.unavailable`, `errorName: "TypeError"` — the
+health route's fetch to the worker health port throws when nothing listens).
+Every client-protocol check looked green; only the health route revealed
+the rig was degraded.
+
+**Rule:** check `GET /healthz` (200 + `stationWorker.status: "active"`) before
+trusting rig state or reporting stress numbers. `agents/scripts/smoke.mjs`
+runs this check first for exactly this reason. See
+[Run the stress rig](../skills/run-the-stress-rig.md) for the worker start
+command and the 503 field-by-field reading.
