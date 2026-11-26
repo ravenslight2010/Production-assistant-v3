@@ -76,6 +76,14 @@ async function withApi(t, overrides = {}, options = {}) {
       calls.push(["list", input]);
       return [RUN];
     },
+    listWithVersion: async (input) => {
+      calls.push(["listWithVersion", input]);
+      return { version: "7", runs: [RUN] };
+    },
+    listVersion: async (input) => {
+      calls.push(["listVersion", input]);
+      return "7";
+    },
     get: async (input) => {
       calls.push(["get", input]);
       return input.runId === RUN_ID ? RUN : null;
@@ -180,12 +188,54 @@ test("serves facility-scoped list and detail reads with no-store JSON responses"
   assert.equal(listResponse.headers.get("cache-control"), "no-store");
   assert.match(listResponse.headers.get("content-type"), /application\/json/);
   assert.deepEqual((await listResponse.json()).runs, [RUN]);
-  assert.deepEqual(calls[0], ["list", { auth: AUTH, limit: 25 }]);
+  assert.equal(listResponse.headers.get("etag"), '"7-25"');
+  assert.deepEqual(calls[0], ["listWithVersion", { auth: AUTH, limit: 25 }]);
 
   const detailResponse = await send(baseUrl, `/api/v3/runs/${RUN_ID}`);
   assert.equal(detailResponse.status, 200);
   assert.deepEqual((await detailResponse.json()).run, RUN);
   assert.deepEqual(calls[1], ["get", { auth: AUTH, runId: RUN_ID }]);
+});
+
+test("answers conditional run-list polls with 304 while the outbox position is unchanged", async (t) => {
+  const { baseUrl, calls } = await withApi(t);
+  const first = await send(baseUrl, "/api/v3/runs?limit=25");
+  assert.equal(first.status, 200);
+  const etag = first.headers.get("etag");
+  assert.equal(etag, '"7-25"');
+  assert.deepEqual(calls.map(([name]) => name), ["listWithVersion"]);
+
+  const fresh = await send(baseUrl, "/api/v3/runs?limit=25", { headers: { "If-None-Match": etag } });
+  assert.equal(fresh.status, 304);
+  assert.equal(fresh.headers.get("etag"), etag);
+  assert.equal(await fresh.text(), "");
+  assert.deepEqual(calls.map(([name]) => name), ["listWithVersion", "listWithVersion"]);
+
+  const stale = await send(baseUrl, "/api/v3/runs?limit=25", { headers: { "If-None-Match": '"6-25"' } });
+  assert.equal(stale.status, 200);
+  assert.deepEqual((await stale.json()).runs, [RUN]);
+
+  const otherLimit = await send(baseUrl, "/api/v3/runs?limit=10", { headers: { "If-None-Match": etag } });
+  assert.equal(otherLimit.status, 200);
+  assert.equal(otherLimit.headers.get("etag"), '"7-10"');
+
+  const star = await send(baseUrl, "/api/v3/runs?limit=25", { headers: { "If-None-Match": "*" } });
+  assert.equal(star.status, 200);
+});
+
+test("surfaces run-list storage failures as safe 5xx responses", async (t) => {
+  const { baseUrl } = await withApi(t, {
+    runs: {
+      listWithVersion: async () => {
+        throw Object.assign(new Error("private storage details"), { code: "P2001" });
+      },
+    },
+  });
+  const response = await send(baseUrl, "/api/v3/runs?limit=25");
+  assert.equal(response.status, 500);
+  const body = await response.json();
+  assert.match(body.error, /could not be completed/i);
+  assert.ok(!JSON.stringify(body).includes("private storage details"));
 });
 
 test("accepts validated station commands and returns canonical run state", async (t) => {
@@ -349,7 +399,7 @@ test("uses safe JSON errors for missing runs and unexpected service failures", a
   assert.equal(missingResponse.status, 404);
   assert.deepEqual(await missingResponse.json(), { error: "Run not found." });
 
-  const failing = await withApi(t, { runs: { list: async () => { throw new Error("database password leaked"); } } });
+  const failing = await withApi(t, { runs: { listWithVersion: async () => { throw new Error("database password leaked"); } } });
   const failureResponse = await send(failing.baseUrl, "/api/v3/runs");
   assert.equal(failureResponse.status, 500);
   assert.deepEqual(await failureResponse.json(), { error: "The run request could not be completed. Refresh and try again." });
@@ -362,7 +412,7 @@ test("composes the HTTP API with server services and a parameterized PostgreSQL 
     pool: {
       query: async (sql, params) => {
         queries.push({ sql, params });
-        if (sql.includes("v3.list_runs")) return { rows: [{ result: [RUN] }] };
+        if (sql.includes("v3.list_runs")) return { rows: [{ version: "7", result: [RUN] }] };
         if (sql.includes("v3.list_run_products")) return { rows: [{ result: {
           productionWarehouse: null,
           products: [{

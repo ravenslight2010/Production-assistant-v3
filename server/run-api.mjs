@@ -27,6 +27,15 @@ function sendJson(response, status, body, headers = {}) {
   response.end(JSON.stringify(body));
 }
 
+function sendNotModified(response, etag) {
+  response.writeHead(304, {
+    "Cache-Control": "no-store",
+    "ETag": etag,
+    "X-Content-Type-Options": "nosniff",
+  });
+  response.end();
+}
+
 async function readJsonBody(request, maxBytes) {
   const contentType = request.headers["content-type"];
   if (typeof contentType !== "string" || !/^application\/json(?:\s*;|$)/i.test(contentType)) {
@@ -185,8 +194,20 @@ export function createRunApi({
       }
 
       if (url.pathname === API_PREFIX && request.method === "GET") {
-        const listedRuns = await runs.list({ auth, limit: parseLimit(url) });
-        sendJson(response, 200, { runs: listedRuns });
+        const limit = parseLimit(url);
+        // ETag = outbox position. Every committed run mutation appends an
+        // outbox event in the same transaction, so this changes exactly when
+        // the run list could differ. The version travels in the same query
+        // as the list, so a conditional poll costs one pool checkout either
+        // way; on a match we skip hydrating/serializing the body entirely.
+        // The limit is baked into the tag because the body depends on it.
+        const { version, runs: listedRuns } = await runs.listWithVersion({ auth, limit });
+        const etag = `"${version}-${limit}"`;
+        if (request.headers["if-none-match"] === etag) {
+          sendNotModified(response, etag);
+          return;
+        }
+        sendJson(response, 200, { runs: listedRuns }, { ETag: etag });
         return;
       }
 

@@ -1,15 +1,15 @@
 {
-  "name": "Fieldline Production Floor",
-  "short_name": "Fieldline",
-  "description": "Shared production run and station control.",
+  "name": "Production Assistant",
+  "short_name": "Production",
+  "description": "Server-owned production planning, floor control, and inventory.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#13171F",
+  "background_color": "#171b24",
   "theme_color": "#FF9500",
   "icons": [
     {
-      "src": "/favicon.ico",
+      "src": "/logo.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"

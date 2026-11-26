@@ -12,6 +12,13 @@ const MAX_RUN_LIST_LIMIT = 100;
 const CREATE_SQL = `SELECT v3.create_planned_run($1::uuid, $2::uuid, $3::text, $4::text, $5::date, $6::jsonb) AS result`;
 const GET_SQL = `SELECT v3.get_run($1::uuid, $2::uuid) AS result`;
 const LIST_SQL = `SELECT v3.list_runs($1::uuid, $2::integer) AS result`;
+const LIST_VERSION_SQL = `SELECT COALESCE(MAX(sequence), 0)::text AS result FROM v3.outbox_events WHERE facility_id = $1::uuid`;
+// One round trip for the polling path: the outbox position travels with the
+// list, so a conditional poll costs a single pool checkout whether or not the
+// tag matches. The MAX subquery is ~0.2 ms against the outbox index.
+const LIST_WITH_VERSION_SQL = `SELECT
+  (SELECT COALESCE(MAX(sequence), 0)::text FROM v3.outbox_events WHERE facility_id = $1::uuid) AS version,
+  v3.list_runs($1::uuid, $2::integer) AS result`;
 const LIST_PRODUCTS_SQL = `SELECT v3.list_run_products($1::uuid) AS result`;
 
 export class RunServiceError extends Error {
@@ -380,6 +387,50 @@ export function createRunService({ query, authorize: authorizeAction }) {
       }
       const runs = requireResult(result, Array.isArray, "Run list returned an unexpected result.");
       return runs.map(validateRun);
+    },
+
+    // Cheap monotonic fingerprint for the run list. Every function that writes
+    // run state appends an outbox event in the same transaction, so this value
+    // changes exactly when any run snapshot could differ. It lets the API answer
+    // conditional polls with 304 instead of re-hydrating the full list.
+    async listVersion({ auth }) {
+      const identity = normalizeAuth(auth);
+      await authorize(authorizeAction, auth, "run.read");
+      let result;
+      try {
+        result = await query(LIST_VERSION_SQL, [identity.facilityId]);
+      } catch (error) {
+        throwSafeStorageError(error);
+      }
+      return requireResult(
+        result,
+        (value) => typeof value === "string" && /^[0-9]+$/.test(value),
+        "Run list version returned an unexpected result.",
+      );
+    },
+
+    // Polling path: list + outbox position in ONE query. The API compares
+    // "version-limit" against If-None-Match and answers 304 without
+    // re-serializing when nothing changed.
+    async listWithVersion({ auth, limit = 50 }) {
+      const identity = normalizeAuth(auth);
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_RUN_LIST_LIMIT) {
+        throw invalidRequest(`limit must be an integer from 1 to ${MAX_RUN_LIST_LIMIT}.`);
+      }
+      await authorize(authorizeAction, auth, "run.read");
+      let result;
+      try {
+        result = await query(LIST_WITH_VERSION_SQL, [identity.facilityId, limit]);
+      } catch (error) {
+        throwSafeStorageError(error);
+      }
+      const row = result?.rows?.[0];
+      const version = row?.version;
+      if (typeof version !== "string" || !/^[0-9]+$/.test(version)) {
+        throw new RunServiceError("INVALID_STORAGE_RESPONSE", "Run list version returned an unexpected result.", 502);
+      }
+      const runs = requireResult({ rows: [row] }, Array.isArray, "Run list returned an unexpected result.");
+      return { version, runs: runs.map(validateRun) };
     },
 
     async listProducts({ auth }) {

@@ -802,9 +802,23 @@ paths:
             minimum: 1
             maximum: 100
             default: 50
+        - in: header
+          name: If-None-Match
+          required: false
+          schema:
+            type: string
+          description: >
+            Strong ETag from a prior listRuns response. When the run list is
+            unchanged the server answers 304 with an empty body. Weak tags
+            (W/"...") are rejected with 412.
       responses:
         "200":
           description: Facility-scoped run list
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Outbox-position tag; send as If-None-Match to poll cheaply.
           content:
             application/json:
               schema:
@@ -815,6 +829,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Run"
+        "304":
+          description: Not modified — the run list has not changed since the tagged version.
+          headers:
+            ETag:
+              schema:
+                type: string
         "400":
           $ref: "#/components/responses/Error"
         "401":

@@ -4638,7 +4638,10 @@ export interface operations {
             query?: {
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                /** @description Strong ETag from a prior listRuns response. When the run list is unchanged the server answers 304 with an empty body. Weak tags (W/"...") are rejected with 412. */
+                "If-None-Match"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -4647,6 +4650,8 @@ export interface operations {
             /** @description Facility-scoped run list */
             200: {
                 headers: {
+                    /** @description Outbox-position tag; send as If-None-Match to poll cheaply. */
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -4654,6 +4659,14 @@ export interface operations {
                         runs: components["schemas"]["Run"][];
                     };
                 };
+            };
+            /** @description Not modified — the run list has not changed since the tagged version. */
+            304: {
+                headers: {
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];

@@ -322,13 +322,25 @@ export async function bootstrapManager(
 }
 
 export async function signOut(): Promise<void> {
+  runsListCache = null;
   const result = await client.POST("/api/v3/auth/sign-out", { params: { header: mutationHeaders() } });
   if (!result.response.ok) throw new ApiError("Sign-out could not be confirmed.", result.response.status);
 }
 
+let runsListCache: { etag: string; runs: Run[] } | null = null;
+
 export async function listRuns(limit = 50): Promise<Run[]> {
-  const result = await unwrap(await client.GET("/api/v3/runs", { params: { query: { limit } } }));
-  return result.runs;
+  const headers: { "If-None-Match"?: string } = {};
+  if (runsListCache) headers["If-None-Match"] = runsListCache.etag;
+  const result = await client.GET("/api/v3/runs", { params: { query: { limit }, header: headers } });
+  if (result.response.status === 304) {
+    if (runsListCache) return runsListCache.runs;
+    throw new ApiError("Run list could not be confirmed.", 304);
+  }
+  const data = await unwrap(result);
+  const etag = result.response.headers.get("etag");
+  if (typeof etag === "string" && etag.length > 0) runsListCache = { etag, runs: data.runs };
+  return data.runs;
 }
 
 export async function listRunProducts(): Promise<RunProduct[]> {

@@ -256,6 +256,64 @@ test("reads runs only in the authenticated facility scope and enforces bounded l
   assert.equal(calls.length, 2);
 });
 
+test("reads a monotonic run-list version from the outbox position", async () => {
+  const calls = [];
+  const service = makeService({
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      return { rows: [{ result: "42" }] };
+    },
+  });
+
+  assert.equal(await service.listVersion({ auth: AUTH }), "42");
+  assert.deepEqual(calls[0].params, [FACILITY_ID]);
+  assert.match(calls[0].sql, /MAX\(sequence\)/);
+  assert.match(calls[0].sql, /facility_id = \$1/);
+
+  await assert.rejects(
+    makeService({ query: async () => ({ rows: [{ result: 42 }] }) }).listVersion({ auth: AUTH }),
+    (error) => error.status === 502 && error.code === "INVALID_STORAGE_RESPONSE",
+  );
+  await assert.rejects(
+    makeService({ query: async () => ({ rows: [{ result: null }] }) }).listVersion({ auth: AUTH }),
+    (error) => error.status === 502 && error.code === "INVALID_STORAGE_RESPONSE",
+  );
+  await assert.rejects(
+    makeService().listVersion({ auth: { verified: false } }),
+    (error) => error.status === 401,
+  );
+});
+
+test("lists runs with their outbox version in one query for conditional polls", async () => {
+  const calls = [];
+  const service = makeService({
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      return { rows: [{ version: "3112", result: [RUN] }] };
+    },
+  });
+
+  const listed = await service.listWithVersion({ auth: AUTH, limit: 50 });
+  assert.deepEqual(listed, { version: "3112", runs: [RUN] });
+  assert.equal(calls.length, 1, "version and list must share one round trip");
+  assert.deepEqual(calls[0].params, [AUTH.facilityId, 50]);
+  assert.match(calls[0].sql, /MAX\(sequence\)/);
+  assert.match(calls[0].sql, /list_runs/);
+
+  await assert.rejects(
+    makeService({ query: async () => ({ rows: [{ version: "3112" }] }) }).listWithVersion({ auth: AUTH }),
+    (error) => error.status === 502 && error.code === "INVALID_STORAGE_RESPONSE",
+  );
+  await assert.rejects(
+    makeService({ query: async () => ({ rows: [{ version: "nope", result: [] }] }) }).listWithVersion({ auth: AUTH }),
+    (error) => error.status === 502 && error.code === "INVALID_STORAGE_RESPONSE",
+  );
+  await assert.rejects(
+    makeService().listWithVersion({ auth: { verified: false } }),
+    (error) => error.status === 401,
+  );
+});
+
 test("fails explicitly on malformed canonical storage results", async () => {
   for (const malformed of [
     { ...RUN, createdAt: "2026-11-10T12:00:00+00:00" },

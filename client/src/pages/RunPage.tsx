@@ -37,11 +37,24 @@ export function RunPage({ session, online }: { session: AuthSession; online: boo
   }, [online]);
 
   useEffect(() => {
+    let cancelled = false;
+    let timer = 0;
+    const scheduleNextRefresh = () => {
+      // ±20% jitter keeps floor tablets from polling in lockstep after a
+      // shift-start or reconnect burst; with the runs-list ETag the herd
+      // collapses to one full list read per change.
+      timer = window.setTimeout(() => {
+        if (cancelled) return;
+        if (document.visibilityState === "visible") void refresh(true);
+        scheduleNextRefresh();
+      }, 12_000 + Math.floor(Math.random() * 6_000));
+    };
     void refresh();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void refresh(true);
-    }, 15_000);
-    return () => window.clearInterval(timer);
+    scheduleNextRefresh();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [refresh]);
 
   function updated(run: Run, message?: string) {

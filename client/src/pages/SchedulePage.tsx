@@ -175,15 +175,27 @@ export function SchedulePage({ session, online }: { session: AuthSession; online
 
   useEffect(() => {
     if (!online || !canManage) return;
+    let cancelled = false;
+    let timer = 0;
     const refresh = () => {
       if (document.visibilityState === "visible" && !isDirty && !saving && !loading && !importPending) {
         void loadCanonical(date, true);
       }
     };
-    const timer = window.setInterval(refresh, 10_000);
+    const scheduleNextRefresh = () => {
+      // ±20% jitter desynchronizes tablets so their schedule polls never
+      // arrive in lockstep (same herd-defense as the runs-list poll).
+      timer = window.setTimeout(() => {
+        if (cancelled) return;
+        refresh();
+        scheduleNextRefresh();
+      }, 8_000 + Math.floor(Math.random() * 4_000));
+    };
     document.addEventListener("visibilitychange", refresh);
+    scheduleNextRefresh();
     return () => {
-      window.clearInterval(timer);
+      cancelled = true;
+      window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [online, canManage, date, isDirty, saving, loading, catalog, schedule, pending, importPending]);
