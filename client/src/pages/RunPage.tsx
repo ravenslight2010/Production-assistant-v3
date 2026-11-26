@@ -21,7 +21,7 @@ export function RunPage({ session, online }: { session: AuthSession; online: boo
     }
     if (!quiet) setLoading(true);
     try {
-      const [nextRuns, nextProducts] = await Promise.all([listRuns(), listRunProducts()]);
+      const [nextRuns, nextProducts] = await Promise.all([listRuns(50, { scope: "active" }), listRunProducts()]);
       setRuns(nextRuns);
       setProducts(nextProducts);
       setSelectedId((current) => nextRuns.some((run) => run.id === current)

@@ -12,13 +12,13 @@ const MAX_RUN_LIST_LIMIT = 100;
 const CREATE_SQL = `SELECT v3.create_planned_run($1::uuid, $2::uuid, $3::text, $4::text, $5::date, $6::jsonb) AS result`;
 const GET_SQL = `SELECT v3.get_run($1::uuid, $2::uuid) AS result`;
 const LIST_SQL = `SELECT v3.list_runs($1::uuid, $2::integer) AS result`;
-const LIST_VERSION_SQL = `SELECT COALESCE(MAX(sequence), 0)::text AS result FROM v3.outbox_events WHERE facility_id = $1::uuid`;
+const LIST_VERSION_SQL = `SELECT v3.run_list_version($1::uuid)::text AS result`;
 // One round trip for the polling path: the outbox position travels with the
-// list, so a conditional poll costs a single pool checkout whether or not the
-// tag matches. The MAX subquery is ~0.2 ms against the outbox index.
-const LIST_WITH_VERSION_SQL = `SELECT
-  (SELECT COALESCE(MAX(sequence), 0)::text FROM v3.outbox_events WHERE facility_id = $1::uuid) AS version,
-  v3.list_runs($1::uuid, $2::integer) AS result`;
+// list inside one security-definer function (the API role has no direct table
+// access), so a conditional poll costs a single pool checkout whether or not
+// the tag matches. The MAX subquery is ~0.2 ms against the outbox index.
+const LIST_WITH_VERSION_SQL = `SELECT version::text AS version, result FROM v3.list_runs_with_version($1::uuid, $2::integer)`;
+const LIST_ACTIVE_WITH_VERSION_SQL = `SELECT version::text AS version, result FROM v3.list_active_runs_with_version($1::uuid, $2::integer)`;
 const LIST_PRODUCTS_SQL = `SELECT v3.list_run_products($1::uuid) AS result`;
 
 export class RunServiceError extends Error {
@@ -421,6 +421,31 @@ export function createRunService({ query, authorize: authorizeAction }) {
       let result;
       try {
         result = await query(LIST_WITH_VERSION_SQL, [identity.facilityId, limit]);
+      } catch (error) {
+        throwSafeStorageError(error);
+      }
+      const row = result?.rows?.[0];
+      const version = row?.version;
+      if (typeof version !== "string" || !/^[0-9]+$/.test(version)) {
+        throw new RunServiceError("INVALID_STORAGE_RESPONSE", "Run list version returned an unexpected result.", 502);
+      }
+      const runs = requireResult({ rows: [row] }, Array.isArray, "Run list returned an unexpected result.");
+      return { version, runs: runs.map(validateRun) };
+    },
+
+    // Active-only polling path for the floor tablet: excludes completed runs
+    // so the payload stays small when the archive grows. Same 304 semantics
+    // as listWithVersion; the version is still facility-wide because any
+    // write (including archival/completion) must invalidate cached copies.
+    async listActiveWithVersion({ auth, limit = 50 }) {
+      const identity = normalizeAuth(auth);
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_RUN_LIST_LIMIT) {
+        throw invalidRequest(`limit must be an integer from 1 to ${MAX_RUN_LIST_LIMIT}.`);
+      }
+      await authorize(authorizeAction, auth, "run.read");
+      let result;
+      try {
+        result = await query(LIST_ACTIVE_WITH_VERSION_SQL, [identity.facilityId, limit]);
       } catch (error) {
         throwSafeStorageError(error);
       }

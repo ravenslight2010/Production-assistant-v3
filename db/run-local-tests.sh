@@ -725,6 +725,14 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0022-combined-setup-review.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0023-schedule-import-history.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0024-qc-evidence-foundation.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0025-active-runs-and-auto-track-debounce.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0025-active-runs-and-auto-track-debounce.test.sql"
+"${PSQL[@]}" -c "
+  GRANT EXECUTE ON FUNCTION v3.list_active_runs(uuid, integer) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.run_list_version(uuid) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.list_runs_with_version(uuid, integer) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.list_active_runs_with_version(uuid, integer) TO v3_api_test;
+" >/dev/null
 "${PSQL[@]}" -c "
   GRANT EXECUTE ON FUNCTION v3.list_staff_accounts(uuid) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.list_staff_roles(uuid) TO v3_api_test;

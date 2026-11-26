@@ -267,8 +267,8 @@ test("reads a monotonic run-list version from the outbox position", async () => 
 
   assert.equal(await service.listVersion({ auth: AUTH }), "42");
   assert.deepEqual(calls[0].params, [FACILITY_ID]);
-  assert.match(calls[0].sql, /MAX\(sequence\)/);
-  assert.match(calls[0].sql, /facility_id = \$1/);
+  assert.match(calls[0].sql, /v3\.run_list_version/);
+  assert.doesNotMatch(calls[0].sql, /outbox_events/, "the API role has no direct table access");
 
   await assert.rejects(
     makeService({ query: async () => ({ rows: [{ result: 42 }] }) }).listVersion({ auth: AUTH }),
@@ -297,8 +297,8 @@ test("lists runs with their outbox version in one query for conditional polls", 
   assert.deepEqual(listed, { version: "3112", runs: [RUN] });
   assert.equal(calls.length, 1, "version and list must share one round trip");
   assert.deepEqual(calls[0].params, [AUTH.facilityId, 50]);
-  assert.match(calls[0].sql, /MAX\(sequence\)/);
-  assert.match(calls[0].sql, /list_runs/);
+  assert.match(calls[0].sql, /list_runs_with_version/);
+  assert.doesNotMatch(calls[0].sql, /outbox_events/, "the API role has no direct table access");
 
   await assert.rejects(
     makeService({ query: async () => ({ rows: [{ version: "3112" }] }) }).listWithVersion({ auth: AUTH }),
@@ -310,6 +310,36 @@ test("lists runs with their outbox version in one query for conditional polls", 
   );
   await assert.rejects(
     makeService().listWithVersion({ auth: { verified: false } }),
+    (error) => error.status === 401,
+  );
+});
+
+test("lists active runs with the outbox position in one security-definer round trip", async () => {
+  const calls = [];
+  const service = makeService({
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      return { rows: [{ version: "87", result: [RUN] }] };
+    },
+  });
+
+  const listed = await service.listActiveWithVersion({ auth: AUTH, limit: 50 });
+  assert.deepEqual(listed, { version: "87", runs: [RUN] });
+  assert.equal(calls.length, 1, "version and active list must share one round trip");
+  assert.deepEqual(calls[0].params, [AUTH.facilityId, 50]);
+  assert.match(calls[0].sql, /list_active_runs_with_version/);
+  assert.doesNotMatch(calls[0].sql, /outbox_events/, "the API role has no direct table access");
+
+  await assert.rejects(
+    makeService({ query: async () => ({ rows: [{ version: "87" }] }) }).listActiveWithVersion({ auth: AUTH }),
+    (error) => error.status === 502 && error.code === "INVALID_STORAGE_RESPONSE",
+  );
+  await assert.rejects(
+    makeService().listActiveWithVersion({ auth: AUTH, limit: 0 }),
+    (error) => error.status === 400,
+  );
+  await assert.rejects(
+    makeService().listActiveWithVersion({ auth: { verified: false } }),
     (error) => error.status === 401,
   );
 });

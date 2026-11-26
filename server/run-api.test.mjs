@@ -80,6 +80,10 @@ async function withApi(t, overrides = {}, options = {}) {
       calls.push(["listWithVersion", input]);
       return { version: "7", runs: [RUN] };
     },
+    listActiveWithVersion: async (input) => {
+      calls.push(["listActiveWithVersion", input]);
+      return { version: "7", runs: [RUN] };
+    },
     listVersion: async (input) => {
       calls.push(["listVersion", input]);
       return "7";
@@ -188,7 +192,7 @@ test("serves facility-scoped list and detail reads with no-store JSON responses"
   assert.equal(listResponse.headers.get("cache-control"), "no-store");
   assert.match(listResponse.headers.get("content-type"), /application\/json/);
   assert.deepEqual((await listResponse.json()).runs, [RUN]);
-  assert.equal(listResponse.headers.get("etag"), '"7-25"');
+  assert.equal(listResponse.headers.get("etag"), '"7-25-all"');
   assert.deepEqual(calls[0], ["listWithVersion", { auth: AUTH, limit: 25 }]);
 
   const detailResponse = await send(baseUrl, `/api/v3/runs/${RUN_ID}`);
@@ -202,7 +206,7 @@ test("answers conditional run-list polls with 304 while the outbox position is u
   const first = await send(baseUrl, "/api/v3/runs?limit=25");
   assert.equal(first.status, 200);
   const etag = first.headers.get("etag");
-  assert.equal(etag, '"7-25"');
+  assert.equal(etag, '"7-25-all"');
   assert.deepEqual(calls.map(([name]) => name), ["listWithVersion"]);
 
   const fresh = await send(baseUrl, "/api/v3/runs?limit=25", { headers: { "If-None-Match": etag } });
@@ -211,16 +215,37 @@ test("answers conditional run-list polls with 304 while the outbox position is u
   assert.equal(await fresh.text(), "");
   assert.deepEqual(calls.map(([name]) => name), ["listWithVersion", "listWithVersion"]);
 
-  const stale = await send(baseUrl, "/api/v3/runs?limit=25", { headers: { "If-None-Match": '"6-25"' } });
+  const stale = await send(baseUrl, "/api/v3/runs?limit=25", { headers: { "If-None-Match": '"6-25-all"' } });
   assert.equal(stale.status, 200);
   assert.deepEqual((await stale.json()).runs, [RUN]);
 
   const otherLimit = await send(baseUrl, "/api/v3/runs?limit=10", { headers: { "If-None-Match": etag } });
   assert.equal(otherLimit.status, 200);
-  assert.equal(otherLimit.headers.get("etag"), '"7-10"');
+  assert.equal(otherLimit.headers.get("etag"), '"7-10-all"');
 
   const star = await send(baseUrl, "/api/v3/runs?limit=25", { headers: { "If-None-Match": "*" } });
   assert.equal(star.status, 200);
+});
+
+test("routes active-scope run-list polls to the active-only list with scope-scoped etags", async (t) => {
+  const { baseUrl, calls } = await withApi(t);
+  const active = await send(baseUrl, "/api/v3/runs?limit=25&scope=active");
+  assert.equal(active.status, 200);
+  assert.deepEqual((await active.json()).runs, [RUN]);
+  assert.equal(active.headers.get("etag"), '"7-25-active"');
+  assert.deepEqual(calls.map(([name]) => name), ["listActiveWithVersion"]);
+
+  const fresh = await send(baseUrl, "/api/v3/runs?limit=25&scope=active", { headers: { "If-None-Match": '"7-25-active"' } });
+  assert.equal(fresh.status, 304);
+
+  const crossScope = await send(baseUrl, "/api/v3/runs?limit=25&scope=active", { headers: { "If-None-Match": '"7-25-all"' } });
+  assert.equal(crossScope.status, 200, "an all-scope tag must not satisfy an active-scope poll");
+
+  const badScope = await send(baseUrl, "/api/v3/runs?scope=recent");
+  assert.equal(badScope.status, 400);
+
+  const duplicateScope = await send(baseUrl, "/api/v3/runs?scope=all&scope=active");
+  assert.equal(duplicateScope.status, 400);
 });
 
 test("surfaces run-list storage failures as safe 5xx responses", async (t) => {

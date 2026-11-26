@@ -102,7 +102,7 @@ function safeMessage(error) {
 
 function parseLimit(url) {
   for (const key of url.searchParams.keys()) {
-    if (key !== "limit") throw new RunApiError(400, "Unsupported run-list query parameter.");
+    if (key !== "limit" && key !== "scope") throw new RunApiError(400, "Unsupported run-list query parameter.");
   }
   const values = url.searchParams.getAll("limit");
   if (values.length > 1) throw new RunApiError(400, "Specify run-list limit once.");
@@ -111,6 +111,16 @@ function parseLimit(url) {
   const limit = Number(values[0]);
   if (!Number.isSafeInteger(limit) || limit > 100) throw new RunApiError(400, "limit must be from 1 to 100.");
   return limit;
+}
+
+function parseScope(url) {
+  const values = url.searchParams.getAll("scope");
+  if (values.length > 1) throw new RunApiError(400, "Specify run-list scope once.");
+  if (values.length === 0) return "all";
+  if (values[0] !== "all" && values[0] !== "active") {
+    throw new RunApiError(400, "scope must be all or active.");
+  }
+  return values[0];
 }
 
 function normalizePathRunId(value) {
@@ -195,14 +205,16 @@ export function createRunApi({
 
       if (url.pathname === API_PREFIX && request.method === "GET") {
         const limit = parseLimit(url);
+        const scope = parseScope(url);
         // ETag = outbox position. Every committed run mutation appends an
         // outbox event in the same transaction, so this changes exactly when
         // the run list could differ. The version travels in the same query
         // as the list, so a conditional poll costs one pool checkout either
         // way; on a match we skip hydrating/serializing the body entirely.
         // The limit is baked into the tag because the body depends on it.
-        const { version, runs: listedRuns } = await runs.listWithVersion({ auth, limit });
-        const etag = `"${version}-${limit}"`;
+        const list = scope === "active" ? runs.listActiveWithVersion : runs.listWithVersion;
+        const { version, runs: listedRuns } = await list({ auth, limit });
+        const etag = `"${version}-${limit}-${scope}"`;
         if (request.headers["if-none-match"] === etag) {
           sendNotModified(response, etag);
           return;
