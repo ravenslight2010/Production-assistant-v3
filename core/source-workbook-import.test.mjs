@@ -256,6 +256,7 @@ test("stages literal sauce LBS, full-drum, and per-row-pound recipe tables", () 
     frontlineRecipe: [{ ingredient: "Water", lbs: 10 }, { ingredient: "Sauce Base", lbs: 50 }],
     sauceBarrelLbs: 60,
   });
+  assert.equal(standard.source, "Standard!B4");
   assert.ok(standard.sourceDetails.procedure.some((entry) => /Mix until combined/u.test(entry.text)));
   const drum = parsed.records.find((entry) => entry.record.data.values.frontlineRecipeName === "Drum Sauce");
   assert.deepEqual(drum.record.data.values.frontlineRecipe, [

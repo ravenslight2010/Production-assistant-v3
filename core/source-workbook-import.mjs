@@ -1168,7 +1168,7 @@ function sauceProcedureRows(result, sheet) {
   }
   const values = { frontlineRecipeName: recipeName, frontlineRecipe: components };
   if (table.total !== undefined) values.sauceBarrelLbs = table.total;
-  const source = cellRef(sheet.name, Math.max(0, table.headerRow), table.labelColumn);
+  const source = cellRef(sheet.name, table.startRow, table.labelColumn);
   outputRecord(result, "sauce-guides", sheet.name, Math.max(0, table.headerRow), recipeName,
     `${FAMILY_LABELS["sauce-guides"]}: ${recipeName}`, "", "", values, source,
     { layout: table.layout, reviewOnly, procedure });
