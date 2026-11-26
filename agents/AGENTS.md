@@ -128,8 +128,13 @@ Windows workflows are manual-only and require suitable self-hosted runners.
 Read [Browser and CI memory](memory/browser-and-ci.md) and
 [Repair hosted CI](skills/repair-hosted-ci.md) before changing these lanes.
 
+## Workbook importer boundary
+
+V3 workbook imports are deterministic, source-versioned, staged, and explicitly applied. Exact unique links may be deterministic; near matches remain review-only. Missing rows do not delete setup, and formula/cache ambiguity fails closed. Start with [Work on V3 importers](skills/work-on-importers.md) and keep V1 history subordinate to the approved V3 import design.
+
 ## Skills
 
+- [Work on V3 importers](skills/work-on-importers.md) — deterministic parsing, staged Apply, V1 lessons, and verification gates.
 - [API client protocol](skills/api-client-protocol.md) — sessions, CSRF, exact body shapes per endpoint. Read before writing any API client.
 - [Add a run API endpoint](skills/add-run-api-endpoint.md) — route, handler, service, OpenAPI, and test recipe.
 - [Add a migration](skills/add-migration.md) — paired idempotent SQL and real-Postgres verification.
@@ -146,6 +151,8 @@ Read [Browser and CI memory](memory/browser-and-ci.md) and
 
 ## Memory
 
+- [V1 importer lessons](memory/v1-importer-lessons.md) — source-family semantics and the boundaries that must not be carried into V3.
+- [Importer test map](memory/importer-test-map.md) — current V3 parser, browser, and database test locations.
 - [Architecture](memory/architecture.md) — how runs, versions, and polling fit together.
 - [Decisions](memory/decisions.md) — ADRs with dates and rationale.
 - [Gotchas](memory/gotchas.md) — bugs already made and the tests their fixes require.

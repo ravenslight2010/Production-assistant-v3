@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,37 @@ async function fixture(t, files) {
 test("repository agent documentation passes the handoff checker", async () => {
   const agentsDir = fileURLToPath(new URL("../", import.meta.url));
   assert.deepEqual(await checkAgentDocs(agentsDir), []);
+});
+
+
+test("V3 importer guidance is indexed and maps to current regression tests", async () => {
+  const agentsDir = fileURLToPath(new URL("../", import.meta.url));
+  const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+  const [index, lessons, skill, testMap] = await Promise.all([
+    readFile(resolve(agentsDir, "AGENTS.md"), "utf8"),
+    readFile(resolve(agentsDir, "memory/v1-importer-lessons.md"), "utf8"),
+    readFile(resolve(agentsDir, "skills/work-on-importers.md"), "utf8"),
+    readFile(resolve(agentsDir, "memory/importer-test-map.md"), "utf8"),
+  ]);
+  assert.match(index, /\[V1 importer lessons\]\(memory\/v1-importer-lessons\.md\)/u);
+  assert.match(index, /\[Importer test map\]\(memory\/importer-test-map\.md\)/u);
+  assert.match(index, /\[Work on V3 importers\]\(skills\/work-on-importers\.md\)/u);
+  for (const path of [
+    "core/source-workbook-import.test.mjs",
+    "core/setup-catalog-csv.test.mjs",
+    "core/import-csv.test.mjs",
+    "core/schedule-workbook-import.test.mjs",
+    "core/workbook-capacity-import.test.mjs",
+    "core/private-source-corpus.test.mjs",
+    "core/source-workbook-corpus.test.mjs",
+    "e2e/setup-catalog.browser.test.mjs",
+    "e2e/schedule.browser.test.mjs",
+  ]) {
+    assert.ok(testMap.includes(path), "test map should include a verified importer test");
+    await readFile(resolve(repoRoot, path), "utf8");
+  }
+  assert.match(skill, /no-AI/u);
+  assert.deepEqual(credentialFindings([index, lessons, skill, testMap].join("\n")), []);
 });
 
 test("link parser accepts external links and ignores images", () => {
