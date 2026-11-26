@@ -12,8 +12,8 @@ duplicated, mislinked, or incorrectly applied imported data.
 ## Start with the right authority
 
 1. Read the local references
-   [`v1-importer-lessons.md`](references/v1-importer-lessons.md) and
-   [`importer-test-map.md`](references/importer-test-map.md), then read the
+   [`v1-importer-lessons.md`](../memory/v1-importer-lessons.md) and
+   [`importer-test-map.md`](../memory/importer-test-map.md), then read the
    current `agents/AGENTS.md` and `research/decisions/import-completion-design.md`
    in the V3 repository.
 2. Check `research/source-index.md` and the approved import design before
