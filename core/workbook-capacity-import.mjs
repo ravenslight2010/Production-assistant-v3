@@ -309,7 +309,12 @@ function doughRowsFromWorkbook(workbook, fileName) {
       const doughballOz = numberFromCell(row[header.ozColumn]);
       if (!label || doughballOz === null) continue;
       if (label.length > 120) fail("A dough recipe name is longer than the V3 120-character limit.");
-      const rawYield = normalizedText(row[header.yieldColumn]);
+      const yieldCell = workbook.Sheets[sheetName][XLSX.utils.encode_cell({
+        r: rowIndex,
+        c: header.yieldColumn,
+      })];
+      const yieldIsFormula = typeof yieldCell?.f === "string" && yieldCell.f.length > 0;
+      const rawYield = yieldIsFormula ? "" : normalizedText(row[header.yieldColumn]);
       const yieldDoughballsPerBatch = numberFromCell(rawYield);
       const occurrenceKey = `${normalizedMatchKey(sheetName)}\u0000${normalizedMatchKey(label)}`;
       const occurrence = occurrences.get(occurrenceKey) ?? 0;
@@ -338,6 +343,7 @@ function doughRowsFromWorkbook(workbook, fileName) {
           yieldCell: sourceCell(sheetName, rowIndex, header.yieldColumn),
           traysCell: sourceCell(sheetName, rowIndex, header.trayColumn),
           displayedYield: rawYield || null,
+          ...(yieldIsFormula ? { yieldIsFormula: true } : {}),
         },
       });
       if (output.length > MAX_ROWS) fail("The workbook contains more than 2,000 dough recipe rows.");
