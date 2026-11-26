@@ -83,3 +83,43 @@ node (24.16.0) fails the start-script tests. Always
 Run snapshots embed wall-clock `serverNow`, so two calls 3 ms apart are
 never byte-equal. Tests compare element-wise with `serverNow` stripped.
 Don't "fix" this by freezing time in more places.
+
+## 9. Dead Chromium discovery prevented WebKit from launching (2026-11-27)
+
+**What happened:** six multi-engine harnesses unconditionally ran
+`which chromium` on macOS and stored an unused `browserPath`. The Safari hosted
+lane failed before WebKit launched when that executable was absent.
+
+**Fix + invariant:** delete the unused lookup and import. Only Chromium-only
+harnesses need a conditional `CHROMIUM_PATH`/`which chromium` fallback. Never
+run engine-specific discovery before selecting the requested engine.
+
+**Rule:** reproduce hosted launch failures with the same `BROWSER` and
+`BROWSER_ENGINE` values. Do not add page-error filtering or skip WebKit to hide
+a launcher defect.
+
+## 10. A visible control was not ready for input (2026-11-27)
+
+**What happened:** the mixed-workbook scenario timed out waiting for its second
+queued workbook. The heading was visible, but canonical loading still disabled
+the file input; `setInputFiles()` did not establish the enabled prerequisite,
+and the application's queue handler correctly returned while disabled.
+
+**Fix + invariant:** add a retrying `await expect(workbookInput).toBeEnabled()`
+before setting files. Application source already proved disabled controls were
+intentional, so no application change was needed. Preserve every queue,
+rejection, retry, staging, and no-Apply assertion.
+
+**Rule:** visibility is not actionability. Wait for the specific prerequisite
+and keep the original outcome assertions; do not add a broad sleep or weaken
+the expected result.
+
+## 11. Approved-plan migration numbers go stale
+
+The QC plan provisionally named Slice 2 `0025-qc-run-verification.sql`, but
+active-run work later occupied `0025-active-runs-and-auto-track-debounce.sql`.
+The plan describes intent, not the current allocation.
+
+**Rule:** fetch `main`, inventory `db/NNNN-*.sql`, and allocate the next actually
+available paired filename immediately before implementation. Never overwrite or
+renumber an existing migration to match a plan. See `memory/qc-roadmap.md`.

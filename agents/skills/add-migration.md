@@ -6,6 +6,12 @@
 - `db/NNNN-short-name.test.sql` — psql assertions, same number/name.
   Both must re-run cleanly (idempotent). The harness runs every pair.
 
+Fetch `main` and inventory `db/NNNN-*.sql` immediately before allocating the
+number. A filename in an older plan is provisional, not a reservation: for
+example, `0025-active-runs-and-auto-track-debounce.sql` now occupies the number
+once proposed for QC Slice 2. Never overwrite or renumber an existing migration
+to match a stale plan.
+
 ## Rules that are easy to break
 
 1. **Tables are owned by the `postgres` OS-level role** on the rig, not the

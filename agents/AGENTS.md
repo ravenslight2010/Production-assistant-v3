@@ -4,7 +4,9 @@ Orientation for coding agents (and humans driving them). Read this first,
 then the skill recipe that matches your task. The runtime has a hard
 **no-AI policy** (`scripts/check-no-ai.mjs`): never add AI provider markers,
 SDKs, or prompt plumbing to `api/`, `client/src`, `core/`, `db/`, or
-`server/`. This folder is documentation and test tooling only.
+`server/`. This folder contains documentation and test tooling only; it must
+not contain credentials, private workbooks, production rows, or operational
+captures.
 
 ## What this app is
 
@@ -13,6 +15,18 @@ facility. Multi-user, facility-scoped, event-sourced-ish: run state lives in
 PostgreSQL, mutations go through versioned commands, clients poll JSON APIs.
 Roles: manager (staff/inventory/factory settings, run create/read), operator
 (floor lifecycle commands).
+
+## Start every task
+
+1. Fetch `origin/main`, compare it with `HEAD`, and inspect the working tree.
+   Never overwrite another task's work or assume a remembered commit is current.
+2. Read the relevant memory and skill below before editing. Approved project
+   plans describe intent; current source and migrations describe reality.
+3. Keep the change minimal and preserve its tests. No force-push to `main`, no
+   bypassed checks, and no production deployment or database operation without
+   separate explicit authorization.
+4. Record only verified outcomes. Emulation, local tests, and CI are not
+   physical-device or production qualification.
 
 ## Repo map
 
@@ -23,19 +37,22 @@ Roles: manager (staff/inventory/factory settings, run create/read), operator
 | `client/` | React/TS SPA, view-state navigation (no URL routing) |
 | `web/` | Shared pure logic (`*.mjs`) + hand-written `*.d.mts` for TS import |
 | `db/` | Numbered migrations `NNNN-name.sql` + paired `NNNN-name.test.sql` |
-| `e2e/` | Playwright browser suites |
+| `e2e/` | Node-test Playwright harnesses serving `dist/` with mocked APIs |
 | `scripts/` | Guard scripts (`check-no-ai.mjs`, `check-research.mjs`) |
-| `agents/` | This folder: skills, memory, smoke tooling |
+| `agents/` | Orientation, reusable skills, durable memory, documentation checks, live smoke tooling |
 
 ## Golden commands
 
 Everything assumes **pinned Node 24.22.3**. On the shared test rig it lives
-at `/opt/node24/bin`; put it first on PATH or start-script tests fail.
+at `/opt/node24/bin`; put it first on PATH or start-script tests fail. Use the
+pinned `pnpm` from `package.json` when installing or running CI-equivalent
+commands.
 
 ```sh
-PATH=/opt/node24/bin:$PATH npm test        # node --test suite + typecheck + build
-npm run typecheck                          # tsc on client/
-npm run build                              # vite build
+PATH=/opt/node24/bin:$PATH pnpm test   # node --test suites, including agents/scripts/*.test.mjs
+pnpm run typecheck                     # tsc on client/
+pnpm run build                         # generated API parity, typecheck, Vite, server syntax
+node agents/scripts/check-agent-docs.mjs
 ```
 
 The DB harness (as the non-root `v3test` user, Postgres 16 on PATH):
@@ -43,6 +60,19 @@ The DB harness (as the non-root `v3test` user, Postgres 16 on PATH):
 ```sh
 su v3test -c "export PATH=/opt/node24/bin:/usr/lib/postgresql/16/bin:\$PATH; bash db/run-local-tests.sh"
 ```
+
+Browser tests require a build and installed Playwright engines, but not a live
+application server:
+
+```sh
+pnpm exec playwright install --with-deps chromium webkit firefox
+pnpm run build
+pnpm test:browser
+BROWSER=webkit BROWSER_ENGINE=webkit pnpm test:browser
+BROWSER=firefox BROWSER_ENGINE=firefox pnpm test:browser
+```
+
+See [Run browser tests](skills/run-browser-tests.md) before changing a harness.
 
 ## Hard invariants — breaking these is a bug, not a style issue
 
@@ -64,7 +94,8 @@ su v3test -c "export PATH=/opt/node24/bin:/usr/lib/postgresql/16/bin:\$PATH; bas
    `v3.*` functions and nothing on tables. New queries must be wrapped in
    `SECURITY DEFINER` functions with grants — never table grants.
 8. **Migrations are idempotent and paired**: `db/NNNN-x.sql` always ships with
-   `db/NNNN-x.test.sql`, and both re-run cleanly.
+   `db/NNNN-x.test.sql`, and both re-run cleanly. Re-inventory `db/` before
+   choosing a number; filenames in older plans may already be occupied.
 9. **SQL-language functions validate at CREATE time** — a function that calls
    another must be declared after its dependency in the same migration.
 
@@ -75,33 +106,57 @@ su v3test -c "export PATH=/opt/node24/bin:/usr/lib/postgresql/16/bin:\$PATH; bas
   `*.d.mts` next to it.
 - API tests mock at the service boundary (`server/*-api.test.mjs`); the
   compose test fakes the pg pool and asserts the SQL actually issued.
-- `npm test` mocks queries — **the DB harness is the source of truth for
-  SQL**. A change can pass `npm test` and still 500 against the real
-  database (see `agents/memory/gotchas.md`, the 42501 incident).
-- Browser suites run against a live server; the SPA is view-state only, so
-  tests `goto("/")`, sign in, and click nav (`e2e/` has the patterns).
+- `pnpm test` mocks queries — **the DB harness is the source of truth for
+  SQL**. A change can pass unit tests and still 500 against the real database
+  (see [gotchas](memory/gotchas.md), the 42501 incident).
+- Browser files are `e2e/*.browser.test.mjs`, executed by Node's test runner,
+  not a Playwright project runner. Each harness serves the production `dist/`
+  over loopback HTTP and intercepts API calls with deterministic route mocks.
+  The SPA is view-state only; `/run` is not a client route.
+- Chromium visual snapshots are intentionally Chromium-only. WebKit and Firefox
+  retain behavioral coverage while skipping only those image comparisons.
+- Live smoke/stress work is a separate boundary with explicit environment
+  configuration; never point it at production by default.
 
-## The test rig (shared box, treat as fragile)
+## Hosted checks and evidence limits
 
-2 cores — server, client load, and Postgres compete. Measure server-side
-latency from logs, not client-side wall time. Full notes and the stress
-bar live in `agents/skills/run-the-stress-rig.md`.
+`Test` runs syntax, generated-client parity, typecheck, unit tests, all three
+browser engines, database tests, and repository guards. Separate automatic
+workflows cover emulated WebKit mobile viewports, Chromium mobile viewports,
+PWA files, and CodeQL. `Repair` is expected to skip on successful `Test` runs.
+Windows workflows are manual-only and require suitable self-hosted runners.
+Read [Browser and CI memory](memory/browser-and-ci.md) and
+[Repair hosted CI](skills/repair-hosted-ci.md) before changing these lanes.
 
 ## Skills
 
-- `skills/api-client-protocol.md` — sessions, CSRF, exact body shapes per endpoint. Read before writing any API client.
-- `skills/add-run-api-endpoint.md` — route/handler/test recipe.
-- `skills/add-migration.md` — SQL migration + harness recipe.
-- `skills/run-the-stress-rig.md` — env, restart procedure, acceptance bar.
+- [API client protocol](skills/api-client-protocol.md) — sessions, CSRF, exact body shapes per endpoint. Read before writing any API client.
+- [Add a run API endpoint](skills/add-run-api-endpoint.md) — route, handler, service, OpenAPI, and test recipe.
+- [Add a migration](skills/add-migration.md) — paired idempotent SQL and real-Postgres verification.
+- [Run browser tests](skills/run-browser-tests.md) — harness architecture, engine matrix, visual and accessibility rules.
+- [Repair hosted CI](skills/repair-hosted-ci.md) — reproduce, isolate, make the smallest repair, and watch actual runs.
+- [Verify and publish](skills/verify-and-publish.md) — clean verification, non-forced publication, and hosted-check handoff.
+- [Run the stress rig](skills/run-the-stress-rig.md) — disposable live-rig environment, restart procedure, acceptance bar.
+- [Use Kimi Claw](skills/use-kimi-claw.md) — group setup, safe task routing, isolation, and evidence handoff.
+- [Maintain agent docs](skills/maintain-agent-docs.md) — where project knowledge belongs and how to validate it.
 
 ## Memory
 
-- `memory/architecture.md` — how runs, versions, and polling fit together.
-- `memory/decisions.md` — ADRs with dates and rationale.
-- `memory/gotchas.md` — production-class bugs we already made, so you don't.
+- [Architecture](memory/architecture.md) — how runs, versions, and polling fit together.
+- [Decisions](memory/decisions.md) — ADRs with dates and rationale.
+- [Gotchas](memory/gotchas.md) — bugs already made and the tests their fixes require.
+- [Browser and CI](memory/browser-and-ci.md) — current test topology, hosted lanes, and repair history.
+- [QC roadmap](memory/qc-roadmap.md) — approved slice sequence, owner gates, and migration-number caution.
 
-## Smoke tooling
+## Documentation and smoke tooling
 
-`scripts/smoke.mjs` hits a live rig end-to-end (sign-in → list → ETag 304 →
-gzip → CSRF'd sign-out). Credentials come from env vars only — never commit
-them. See the file header.
+`node agents/scripts/check-agent-docs.mjs` checks the agent index, relative
+links, and common credential patterns. Its tests run automatically with
+`pnpm test`; update both documentation and checker tests when conventions
+change.
+
+`scripts/smoke.mjs` hits an explicitly configured live rig end-to-end
+(sign-in → list → ETag 304 → gzip → CSRF'd sign-out). Credentials come from
+environment variables only — never commit them. See the file header. A smoke
+failure is not proof of a product regression until the client protocol and
+disposable environment have been checked.
