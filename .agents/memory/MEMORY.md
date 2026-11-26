@@ -1,0 +1,1 @@
+- [Imported package-manager setup](package-manager-setup.md) — native pnpm bootstrapping can fail if its install lifecycle has not run.
