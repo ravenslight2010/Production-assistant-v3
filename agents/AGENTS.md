@@ -160,7 +160,7 @@ links, and common credential patterns. Its tests run automatically with
 `pnpm test`; update both documentation and checker tests when conventions
 change.
 
-`scripts/smoke.mjs` hits an explicitly configured live rig end-to-end
+`agents/scripts/smoke.mjs` hits an explicitly configured live rig end-to-end
 (sign-in → list → ETag 304 → gzip → CSRF'd sign-out). Credentials come from
 environment variables only — never commit them. See the file header. A smoke
 failure is not proof of a product regression until the client protocol and
