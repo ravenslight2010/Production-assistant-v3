@@ -60,7 +60,10 @@ Private-corpus skips are not workbook-fidelity evidence. Never describe
 emulation or synthetic fixtures as real workbook or physical-device
 qualification.
 
-For a V1 import bug in this current workspace, use the existing
-`import-bug-investigation` and `spec-import-guard` skills. Add
-`customer-import-audit` for a new-customer post-import audit, and
-`data-heal-playbook` only when incorrect values are already persisted.
+For a V1 import bug, those playbooks live in the V1
+(Production-run-calculator) workspace: its `import-bug-investigation` and
+`spec-import-guard` skills, plus `customer-import-audit` for a new-customer
+post-import audit and `data-heal-playbook` only when incorrect values are
+already persisted. They are not part of this repository — do not look for
+them here. For importer work in this repository, follow the investigation
+order above and the test map's regression chain.
