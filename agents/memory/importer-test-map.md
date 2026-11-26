@@ -60,6 +60,22 @@ Use only synthetic workbooks generated in tests (for example with the existing X
 
 Keep parser assertions in the smallest relevant `core/*.test.mjs` suite. Use browser tests for review/Apply behavior and SQL tests for persisted state or revision fencing. Update the status column when a regression is added; never promote a gap to covered based only on parser preview output.
 
+## Schedule importer scenario matrix
+
+Use synthetic workbook bytes only. Schedule imports are separate from setup-catalog imports and from live run creation.
+
+| Scenario | Synthetic input/change | Expected V3 behavior | Existing test evidence and remaining gap |
+| --- | --- | --- | --- |
+| Flat workbook date | Import a flat schedule with no date column, then review it without choosing a date. | Do not guess a date. Keep the rows unstageable until a manager selects a production date. | Covered by `core/schedule-workbook-import.test.mjs` flat-sheet test and the date control in `client/src/components/ScheduleImport.tsx`. |
+| Multi-day blocks and formulas | Use explicit Excel date blocks, a formula-derived date header, a formula-backed target, a past date, and subtotal rows. | Preserve each valid row's date and source cells; formula values remain unresolved, past dates and subtotals are skipped with reasons. | Covered by day-block, formula-date, formula-value, and unsupported-target tests in `core/schedule-workbook-import.test.mjs`. |
+| Product/setup/template mapping | Use one exact catalog match, an ambiguous product, and a row with an unavailable setup or template. | Only a unique supported match may prefill. Ambiguous or unavailable mappings stay unassigned and visible until review; invalid rows cannot be staged. | The review flow is covered by `e2e/schedule.browser.test.mjs`. **Partial:** keep an explicit ambiguity/unavailable-link assertion when changing the mapping UI. |
+| Stage, reopen, and exact retry | Stage a reviewed multi-day import twice with the same request, then reopen canonical history. | Staging does not change any schedule; source hash, parser version, and row citations are retained; the exact retry returns the existing import. | Covered by `db/0023-schedule-import-history.test.sql` canonical staging, source pins, no-mutation, history, and retry assertions. |
+| Per-date Apply and partial completion | Apply date A from a two-date import, leave date B staged, then apply B independently. | Each date has its own status and receipt; the first date can remain applied while the second is still staged. Do not claim an all-dates transaction. | Covered by `db/0023-schedule-import-history.test.sql` per-date Apply and counts. |
+| Revision conflict | Change the confirmed schedule after review but before applying an imported date. | Reject stale Apply as a conflict; keep the current schedule and require refresh/review before retry. | Revision fencing is asserted in `db/0023-schedule-import-history.test.sql`; the browser schedule test also covers stale schedule edits. |
+| Guarded Undo and live-run boundary | Apply rows that create new planned runs and update an existing planned run; change or remove one created run before Undo. | Undo removes only unchanged created rows. A changed/missing created row blocks partial removal; an updated pre-existing row is not reverted. Schedule import Apply/Undo must leave live runs unchanged. | Covered by `db/0023-schedule-import-history.test.sql`, including the live-run-count assertion. |
+
+Use `core/schedule-workbook-import.test.mjs` for parsing/date semantics, `e2e/schedule.browser.test.mjs` for manager review behavior, and `db/0023-schedule-import-history.test.sql` for persisted revision, per-date, retry, and Undo invariants.
+
 ## Recommended regression chain
 
 For a parser or importer behavior change, assert as much of this chain as

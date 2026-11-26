@@ -153,6 +153,7 @@ V3 workbook imports are deterministic, source-versioned, staged, and explicitly 
 
 - [V1 importer lessons](memory/v1-importer-lessons.md) — source-family semantics and the boundaries that must not be carried into V3.
 - [Importer test map](memory/importer-test-map.md) — current V3 parser, browser, and database test locations.
+- [V1 profile to V3 runs](memory/v1-profile-to-v3-runs.md) — how reviewed catalog imports feed the V1-style setup concept, schedule plan, and live run snapshot.
 - [Architecture](memory/architecture.md) — how runs, versions, and polling fit together.
 - [Decisions](memory/decisions.md) — ADRs with dates and rationale.
 - [Gotchas](memory/gotchas.md) — bugs already made and the tests their fixes require.

@@ -13,7 +13,8 @@ duplicated, mislinked, or incorrectly applied imported data.
 
 1. Read the local references
    [`v1-importer-lessons.md`](../memory/v1-importer-lessons.md) and
-   [`importer-test-map.md`](../memory/importer-test-map.md), then read the
+   [`importer-test-map.md`](../memory/importer-test-map.md), and
+   [`v1-profile-to-v3-runs.md`](../memory/v1-profile-to-v3-runs.md), then read the
    current `agents/AGENTS.md` and `research/decisions/import-completion-design.md`
    in the V3 repository.
 2. Check `research/source-index.md` and the approved import design before
@@ -22,6 +23,10 @@ duplicated, mislinked, or incorrectly applied imported data.
 3. Keep V3's deterministic no-AI rule. Never add prompts, provider SDKs,
    credentials, private workbooks, parser expectations, or production rows to
    the V3 runtime or agent docs.
+
+## Connect imports to profiles and runs
+
+Use [V1 profile to V3 runs](../memory/v1-profile-to-v3-runs.md) to distinguish reviewed setup catalogs, separate schedule plans, and server-created live-run snapshots. A V1 profile is a conceptual crosswalk, not a V3 table.
 
 ## Diagnose source-to-landed differences
 
