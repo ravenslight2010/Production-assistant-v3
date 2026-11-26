@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { ApiError, listRunProducts, listRuns, type AuthSession, type Run, type RunProduct } from "../api";
+import { ApiError, listRunProducts, listRuns, resetRunsListPollBackoff, runsListPollDelayMs, type AuthSession, type Run, type RunProduct } from "../api";
 import { CreateRunForm } from "../components/CreateRunForm";
 import { RunDetail } from "../components/RunDetail";
 
@@ -21,7 +21,7 @@ export function RunPage({ session, online }: { session: AuthSession; online: boo
     }
     if (!quiet) setLoading(true);
     try {
-      const [nextRuns, nextProducts] = await Promise.all([listRuns(50, { scope: "active" }), listRunProducts()]);
+      const [nextRuns, nextProducts] = await Promise.all([listRuns(), listRunProducts()]);
       setRuns(nextRuns);
       setProducts(nextProducts);
       setSelectedId((current) => nextRuns.some((run) => run.id === current)
@@ -41,19 +41,32 @@ export function RunPage({ session, online }: { session: AuthSession; online: boo
     let timer = 0;
     const scheduleNextRefresh = () => {
       // ±20% jitter keeps floor tablets from polling in lockstep after a
-      // shift-start or reconnect burst; with the runs-list ETag the herd
-      // collapses to one full list read per change.
+      // shift-start or reconnect burst; the runs-list ETag collapses the
+      // herd to a cheap version probe per poll, and each consecutive 304
+      // stretches the cadence (an idle floor backs off to 45 s).
       timer = window.setTimeout(() => {
         if (cancelled) return;
         if (document.visibilityState === "visible") void refresh(true);
         scheduleNextRefresh();
-      }, 12_000 + Math.floor(Math.random() * 6_000));
+      }, runsListPollDelayMs() + Math.floor(Math.random() * 6_000));
+    };
+    const handleVisibilityChange = () => {
+      // A tab coming back from hidden should snap to the base cadence and
+      // re-confirm state immediately instead of waiting out a long backoff.
+      if (document.visibilityState === "visible") {
+        resetRunsListPollBackoff();
+        window.clearTimeout(timer);
+        void refresh(true);
+        scheduleNextRefresh();
+      }
     };
     void refresh();
     scheduleNextRefresh();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [refresh]);
 

@@ -193,12 +193,14 @@ test("serves facility-scoped list and detail reads with no-store JSON responses"
   assert.match(listResponse.headers.get("content-type"), /application\/json/);
   assert.deepEqual((await listResponse.json()).runs, [RUN]);
   assert.equal(listResponse.headers.get("etag"), '"7-25-all"');
-  assert.deepEqual(calls[0], ["listWithVersion", { auth: AUTH, limit: 25 }]);
+  // Version-first: the cheap outbox probe runs before the snapshot build.
+  assert.deepEqual(calls.map(([name]) => name), ["listVersion", "listWithVersion"]);
+  assert.deepEqual(calls[1], ["listWithVersion", { auth: AUTH, limit: 25 }]);
 
   const detailResponse = await send(baseUrl, `/api/v3/runs/${RUN_ID}`);
   assert.equal(detailResponse.status, 200);
   assert.deepEqual((await detailResponse.json()).run, RUN);
-  assert.deepEqual(calls[1], ["get", { auth: AUTH, runId: RUN_ID }]);
+  assert.deepEqual(calls[2], ["get", { auth: AUTH, runId: RUN_ID }]);
 });
 
 test("answers conditional run-list polls with 304 while the outbox position is unchanged", async (t) => {
@@ -207,13 +209,14 @@ test("answers conditional run-list polls with 304 while the outbox position is u
   assert.equal(first.status, 200);
   const etag = first.headers.get("etag");
   assert.equal(etag, '"7-25-all"');
-  assert.deepEqual(calls.map(([name]) => name), ["listWithVersion"]);
+  assert.deepEqual(calls.map(([name]) => name), ["listVersion", "listWithVersion"]);
 
   const fresh = await send(baseUrl, "/api/v3/runs?limit=25", { headers: { "If-None-Match": etag } });
   assert.equal(fresh.status, 304);
   assert.equal(fresh.headers.get("etag"), etag);
   assert.equal(await fresh.text(), "");
-  assert.deepEqual(calls.map(([name]) => name), ["listWithVersion", "listWithVersion"]);
+  // A matching poll stops at the cheap probe and never builds the snapshot.
+  assert.deepEqual(calls.map(([name]) => name), ["listVersion", "listWithVersion", "listVersion"]);
 
   const stale = await send(baseUrl, "/api/v3/runs?limit=25", { headers: { "If-None-Match": '"6-25-all"' } });
   assert.equal(stale.status, 200);
@@ -227,13 +230,41 @@ test("answers conditional run-list polls with 304 while the outbox position is u
   assert.equal(star.status, 200);
 });
 
+test("compresses large run-list bodies with gzip when the client accepts it", async (t) => {
+  // Real floor payloads run ~3.4 KB per run; pad the mocked run past the
+  // 1 KB compression floor so the test exercises the actual gzip branch.
+  const bigRun = {
+    ...RUN,
+    stoppages: Array.from({ length: 24 }, (_, index) => ({
+      id: `stop-${index}`,
+      reason: "belt_jam",
+      startedAt: "2026-11-10T12:00:00.000Z",
+      endedAt: null,
+    })),
+  };
+  const { baseUrl } = await withApi(t, {
+    runs: { listWithVersion: async () => ({ version: "7", runs: [bigRun] }) },
+  });
+  // undici advertises gzip by default; identity keeps the plain branch honest.
+  const plain = await send(baseUrl, "/api/v3/runs?limit=25", { headers: { "Accept-Encoding": "identity" } });
+  assert.equal(plain.headers.get("content-encoding"), null);
+
+  const zipped = await send(baseUrl, "/api/v3/runs?limit=25", { headers: { "Accept-Encoding": "gzip" } });
+  assert.equal(zipped.status, 200);
+  assert.equal(zipped.headers.get("content-encoding"), "gzip");
+  assert.match(zipped.headers.get("vary") ?? "", /Accept-Encoding/);
+  assert.deepEqual((await zipped.json()).runs, [bigRun]);
+  const compressedBytes = Number(zipped.headers.get("content-length"));
+  assert.ok(compressedBytes < 1500, `gzip should shrink the padded body (got ${compressedBytes} bytes)`);
+});
+
 test("routes active-scope run-list polls to the active-only list with scope-scoped etags", async (t) => {
   const { baseUrl, calls } = await withApi(t);
   const active = await send(baseUrl, "/api/v3/runs?limit=25&scope=active");
   assert.equal(active.status, 200);
   assert.deepEqual((await active.json()).runs, [RUN]);
   assert.equal(active.headers.get("etag"), '"7-25-active"');
-  assert.deepEqual(calls.map(([name]) => name), ["listActiveWithVersion"]);
+  assert.deepEqual(calls.map(([name]) => name), ["listVersion", "listActiveWithVersion"]);
 
   const fresh = await send(baseUrl, "/api/v3/runs?limit=25&scope=active", { headers: { "If-None-Match": '"7-25-active"' } });
   assert.equal(fresh.status, 304);
@@ -437,6 +468,7 @@ test("composes the HTTP API with server services and a parameterized PostgreSQL 
     pool: {
       query: async (sql, params) => {
         queries.push({ sql, params });
+        if (sql.includes("v3.run_list_version")) return { rows: [{ result: "7" }] };
         if (sql.includes("v3.list_runs")) return { rows: [{ version: "7", result: [RUN] }] };
         if (sql.includes("v3.list_run_products")) return { rows: [{ result: {
           productionWarehouse: null,
@@ -534,11 +566,13 @@ test("composes the HTTP API with server services and a parameterized PostgreSQL 
   assert.equal(runToTimeResponse.status, 200);
   assert.equal((await runToTimeResponse.json()).run.runToTime, "18:45");
 
-  assert.equal(queries.length, 5);
+  // The list read now costs two queries: the cheap version probe plus the
+  // snapshot build that only runs when the position moved.
+  assert.equal(queries.length, 6);
   assert.ok(queries.every(({ sql, params }) => sql.includes("$1") && Array.isArray(params)));
-  assert.deepEqual(authorizations.map(({ action }) => action), ["run.read", "run.read", "run.create", "run.lifecycle.command", "run.lifecycle.command"]);
-  assert.equal(authorizations[3].commandType, "start");
-  assert.equal(authorizations[4].commandType, "run_to_time");
+  assert.deepEqual(authorizations.map(({ action }) => action), ["run.read", "run.read", "run.read", "run.create", "run.lifecycle.command", "run.lifecycle.command"]);
+  assert.equal(authorizations[4].commandType, "start");
+  assert.equal(authorizations[5].commandType, "run_to_time");
   assert.ok(authorizations.every(({ auth }) => auth === AUTH));
 });
 

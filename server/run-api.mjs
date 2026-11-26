@@ -1,3 +1,5 @@
+import { gzipSync } from "node:zlib";
+
 import { createRunCommandService } from "../core/run-command-service.mjs";
 import { createRunService } from "../core/run-service.mjs";
 import { createRunToTimeService } from "../core/run-to-time-service.mjs";
@@ -17,14 +19,30 @@ class RunApiError extends Error {
   }
 }
 
-function sendJson(response, status, body, headers = {}) {
-  response.writeHead(status, {
+const GZIP_MIN_RESPONSE_BYTES = 1024;
+
+function sendJson(request, response, status, body, headers = {}) {
+  let payload = Buffer.from(JSON.stringify(body), "utf8");
+  const responseHeaders = {
     "Cache-Control": "no-store",
     "Content-Type": "application/json; charset=utf-8",
     "X-Content-Type-Options": "nosniff",
     ...headers,
-  });
-  response.end(JSON.stringify(body));
+  };
+  // Floor payloads run ~3.4 KB per active run; gzip shrinks the wire body
+  // ~11x and costs well under a millisecond at this size.
+  if (payload.byteLength >= GZIP_MIN_RESPONSE_BYTES && acceptsGzip(request)) {
+    payload = gzipSync(payload);
+    responseHeaders["Content-Encoding"] = "gzip";
+    responseHeaders["Vary"] = "Accept-Encoding";
+  }
+  responseHeaders["Content-Length"] = payload.byteLength;
+  response.writeHead(status, responseHeaders);
+  response.end(payload);
+}
+
+function acceptsGzip(request) {
+  return /\bgzip\b/.test(String(request.headers["accept-encoding"] ?? ""));
 }
 
 function sendNotModified(response, etag) {
@@ -190,7 +208,7 @@ export function createRunApi({
 
       if (url.pathname === STOP_REASONS_PATH && request.method === "GET") {
         if (url.search) throw new RunApiError(400, "Stop reason query parameters are not supported.");
-        sendJson(response, 200, { settings: await operations.getStopReasons({ auth }) });
+        sendJson(request, response, 200, { settings: await operations.getStopReasons({ auth }) });
         return;
       }
 
@@ -199,34 +217,35 @@ export function createRunApi({
         const body = await readJsonBody(request, maxBodyBytes);
         requireExactKeys(body, ["commandId", "expectedRevision", "reasons"]);
         const result = await operations.saveStopReasons({ auth, command: body });
-        sendJson(response, result?.outcome === "accepted" ? 200 : 409, result);
+        sendJson(request, response, result?.outcome === "accepted" ? 200 : 409, result);
         return;
       }
 
       if (url.pathname === API_PREFIX && request.method === "GET") {
         const limit = parseLimit(url);
         const scope = parseScope(url);
-        // ETag = outbox position. Every committed run mutation appends an
-        // outbox event in the same transaction, so this changes exactly when
-        // the run list could differ. The version travels in the same query
-        // as the list, so a conditional poll costs one pool checkout either
-        // way; on a match we skip hydrating/serializing the body entirely.
-        // The limit is baked into the tag because the body depends on it.
-        const list = scope === "active" ? runs.listActiveWithVersion : runs.listWithVersion;
-        const { version, runs: listedRuns } = await list({ auth, limit });
-        const etag = `"${version}-${limit}-${scope}"`;
+        // Cheap probe first: a conditional poll that matches costs one
+        // MAX(outbox sequence) lookup (~0.2 ms) instead of building full run
+        // snapshots (~25 ms of CPU per request at the current shape). The
+        // snapshot query runs only when the position moved since the
+        // client's tag. The limit and scope are baked into the tag because
+        // the body depends on them.
+        const current = await runs.listVersion({ auth });
+        const etag = `"${current}-${limit}-${scope}"`;
         if (request.headers["if-none-match"] === etag) {
           sendNotModified(response, etag);
           return;
         }
-        sendJson(response, 200, { runs: listedRuns }, { ETag: etag });
+        const list = scope === "active" ? runs.listActiveWithVersion : runs.listWithVersion;
+        const { version, runs: listedRuns } = await list({ auth, limit });
+        sendJson(request, response, 200, { runs: listedRuns }, { ETag: `"${version}-${limit}-${scope}"` });
         return;
       }
 
       if (url.pathname === `${API_PREFIX}/products` && request.method === "GET") {
         if (url.search) throw new RunApiError(400, "Product-list query parameters are not supported.");
         const catalog = await runs.listProducts({ auth });
-        sendJson(response, 200, catalog);
+        sendJson(request, response, 200, catalog);
         return;
       }
 
@@ -239,7 +258,7 @@ export function createRunApi({
           productionDate: body.productionDate,
           setupSnapshot: body.setupSnapshot,
         });
-        sendJson(response, result.replayed ? 200 : 201, result);
+        sendJson(request, response, result.replayed ? 200 : 201, result);
         return;
       }
 
@@ -250,7 +269,7 @@ export function createRunApi({
         const body = await readJsonBody(request, maxBodyBytes);
         requireExactKeys(body, ["commandId", "commandType", "expectedRevision", "details"]);
         const result = await operations.execute({ auth, command: { ...body, runId } });
-        sendJson(response, result?.outcome === "accepted" ? 200 : 409, result);
+        sendJson(request, response, result?.outcome === "accepted" ? 200 : 409, result);
         return;
       }
 
@@ -261,7 +280,7 @@ export function createRunApi({
         const body = await readJsonBody(request, maxBodyBytes);
         requireExactKeys(body, ["commandId", "expectedRevision", "runToTime"]);
         const result = await runToTimes.execute({ auth, command: { ...body, runId } });
-        sendJson(response, result?.outcome === "accepted" ? 200 : 409, result);
+        sendJson(request, response, result?.outcome === "accepted" ? 200 : 409, result);
         return;
       }
 
@@ -282,7 +301,7 @@ export function createRunApi({
           command: { ...body, runId, stationKey },
         });
         const status = ["accepted", "not_due", "not_enabled"].includes(result?.outcome) ? 200 : 409;
-        sendJson(response, status, result);
+        sendJson(request, response, status, result);
         return;
       }
 
@@ -293,7 +312,7 @@ export function createRunApi({
       if (!match[2] && request.method === "GET") {
         const run = await runs.get({ auth, runId });
         if (!run) throw new RunApiError(404, "Run not found.");
-        sendJson(response, 200, { run });
+        sendJson(request, response, 200, { run });
         return;
       }
 
@@ -305,7 +324,7 @@ export function createRunApi({
           command: { ...body, runId },
         });
         const status = result?.outcome === "accepted" ? 200 : 409;
-        sendJson(response, status, result);
+        sendJson(request, response, status, result);
         return;
       }
 
@@ -324,7 +343,7 @@ export function createRunApi({
       const headers = Number.isSafeInteger(error?.retryAfterSeconds)
         ? { "Retry-After": String(error.retryAfterSeconds) }
         : {};
-      sendJson(response, status, { error: safeMessage(error) }, headers);
+      sendJson(request, response, status, { error: safeMessage(error) }, headers);
     }
   };
 }

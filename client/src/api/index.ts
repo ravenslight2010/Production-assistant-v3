@@ -1,4 +1,5 @@
 import createClient from "openapi-typesafe-fetch";
+import { nextRunsListPollDelayMs } from "../../../web/runs-list-cadence.mjs";
 import type { components, paths } from "./schema";
 
 const client = createClient<paths>({ baseUrl: "/" });
@@ -328,18 +329,31 @@ export async function signOut(): Promise<void> {
 }
 
 const runsListCaches = new Map<string, { etag: string; runs: Run[] }>();
+const runsListNotModifiedStreaks = new Map<string, number>();
 
-export async function listRuns(limit = 50, options?: { scope?: "all" | "active" }): Promise<Run[]> {
+export type RunListScope = "all" | "active";
+
+export function runsListPollDelayMs(scope: RunListScope = "all"): number {
+  return nextRunsListPollDelayMs(runsListNotModifiedStreaks.get(scope) ?? 0);
+}
+
+export function resetRunsListPollBackoff(scope: RunListScope = "all"): void {
+  runsListNotModifiedStreaks.set(scope, 0);
+}
+
+export async function listRuns(limit = 50, options?: { scope?: RunListScope }): Promise<Run[]> {
   const scope = options?.scope ?? "all";
   let cache = runsListCaches.get(scope);
   const headers: { "If-None-Match"?: string } = {};
   if (cache) headers["If-None-Match"] = cache.etag;
   const result = await client.GET("/api/v3/runs", { params: { query: { limit, scope }, header: headers } });
   if (result.response.status === 304) {
+    runsListNotModifiedStreaks.set(scope, (runsListNotModifiedStreaks.get(scope) ?? 0) + 1);
     if (cache) return cache.runs;
     throw new ApiError("Run list could not be confirmed.", 304);
   }
   const data = await unwrap(result);
+  runsListNotModifiedStreaks.set(scope, 0);
   const etag = result.response.headers.get("etag");
   if (typeof etag === "string" && etag.length > 0) runsListCaches.set(scope, { etag, runs: data.runs });
   return data.runs;
