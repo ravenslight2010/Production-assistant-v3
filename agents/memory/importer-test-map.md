@@ -1,7 +1,7 @@
 # V3 importer test map
 
 Use this map alongside [V1 importer lessons](v1-importer-lessons.md) and
-[Work on V3 importers](../skills/work-on-importers.md). Paths were checked against the current
+[Work on V3 importers](../SKILL.md). Paths were checked against the current
 V3 repository tree when this transfer was prepared; inspect current `main`
 before relying on them.
 
@@ -32,6 +32,17 @@ before relying on them.
 
 Choose server/database suites by the code boundary changed; do not point these
 tests at production. See `package.json` for current script definitions.
+
+## Confirmed coverage gap to resolve
+
+A synthetic XLSX check found that a formula-backed dough yield with a cached
+display value is currently returned by `parseDoughCapacityWorkbook` as a
+numeric `doughballYield`. The approved V3 design says formula or cached results
+remain unresolved unless explicitly supported as source text. The capacity
+tests cover literal and missing yields but do not cover a formula with a
+cached result. Treat this as an importer correctness gap, not as covered
+behavior. Keep any code fix and regression test in a separate reviewed change;
+the documentation transfer itself does not alter the runtime.
 
 ## Recommended regression chain
 
