@@ -14,7 +14,7 @@ When a person asks to import or update a profile, first identify which V3 record
 | --- | --- | --- |
 | Source workbooks | Deterministic parsed records, source-cell citations, and unresolved items for the supported spec, recipe, cheese/mix, sauce/dough, and shipping families. | Does not call AI, execute formulas, silently infer missing values, or write setup during preview. |
 | Setup catalog CSV | Strictly shaped, code-keyed setup records such as ingredients, mixes, recipes, production setups, run templates, and other allowlisted setup families. | Does not accept arbitrary fields or live run state. |
-| Capacity workbooks | Typed dough/shipping capacity values with source-cell provenance and strict unsupported-layout handling. | The approved design forbids derivation from cached or guessed values. **Known gap:** the current capacity parser accepts a formula-backed cached dough yield; see the test map. |
+| Capacity workbooks | Typed dough/shipping capacity values with source-cell provenance and strict unsupported-layout handling. | The approved design forbids derivation from cached or guessed values. **Fixed 2026-11-27 (PR #7):** formula-backed cached dough yields now return unresolved with `source.yieldIsFormula` provenance; see the test map. |
 | Schedule workbooks | Reviewed planned-run rows with date, product, production setup, run template, target, and source citations. | Does not create or mutate live production runs. |
 
 Use the [V1 importer lessons](v1-importer-lessons.md) for source-family semantics and the [test map](importer-test-map.md) for exact parser and test locations. The approved default review order for setup completion is product/spec references, dough and sauce, premixes, cheese, then shipping. Schedules are a separate workflow.
@@ -56,7 +56,7 @@ Relevant source locations: `client/src/components/ScheduleImport.tsx`, `client/s
 ## Boundaries to preserve
 
 - V3 imports remain deterministic and no-AI.
-- Formula and cached results remain unresolved under the approved design unless the V3 parser explicitly supports them as source text. Source-workbook and schedule parsers have public fail-closed coverage; the capacity dough-yield case remains the known gap in the test map.
+- Formula and cached results remain unresolved under the approved design unless the V3 parser explicitly supports them as source text. Source-workbook, schedule, and capacity dough-yield parsers have public fail-closed coverage (capacity since 2026-11-27, PR #7).
 - Preview and staging are non-mutating; only explicit Apply writes catalog or schedule state.
 - Keep source hashes, parser versions, stable codes, row/cell citations, and exact retry semantics.
 - A missing row is not a deletion; an ambiguous identity is not an exact link.

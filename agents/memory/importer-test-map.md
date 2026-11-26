@@ -33,16 +33,17 @@ before relying on them.
 Choose server/database suites by the code boundary changed; do not point these
 tests at production. See `package.json` for current script definitions.
 
-## Confirmed coverage gap to resolve
+## Formula-backed dough yield — resolved
 
 A synthetic XLSX check found that a formula-backed dough yield with a cached
-display value is currently returned by `parseDoughCapacityWorkbook` as a
-numeric `doughballYield`. The approved V3 design says formula or cached results
-remain unresolved unless explicitly supported as source text. The capacity
-tests cover literal and missing yields but do not cover a formula with a
-cached result. Treat this as an importer correctness gap, not as covered
-behavior. Keep any code fix and regression test in a separate reviewed change;
-the documentation transfer itself does not alter the runtime.
+display value was returned by `parseDoughCapacityWorkbook` as a numeric
+`doughballYield`. **Resolved 2026-11-27** (merge of
+`fix/formula-backed-dough-yields`, PR #7): the capacity parser now fails
+closed on a formula-backed yield cell — `doughballYield: null`,
+`displayedYield: null`, and `source.yieldIsFormula: true` — with regression
+tests for both cached and uncached formula cells in
+`core/workbook-capacity-import.test.mjs`. Keep any future parser-semantics
+change paired with a regression in that suite.
 
 ## Synthetic importer scenario matrix
 
@@ -50,7 +51,7 @@ Use only synthetic workbooks generated in tests (for example with the existing X
 
 | Scenario | Synthetic input/change | Expected V3 behavior | Existing test evidence and remaining gap |
 | --- | --- | --- | --- |
-| Formula or cached result | Put a formula and cached display value in an otherwise supported source cell; repeat for a dough-capacity yield cell. | Do not treat a formula/cache as a literal. Keep unsupported values unresolved with a visible reason; never calculate a replacement. | `core/source-workbook-import.test.mjs` covers formula/cache rejection for source workbooks. **Gap:** `core/workbook-capacity-import.test.mjs` covers literal and missing yields, but not a formula-backed cached yield. |
+| Formula or cached result | Put a formula and cached display value in an otherwise supported source cell; repeat for a dough-capacity yield cell. | Do not treat a formula/cache as a literal. Keep unsupported values unresolved with a visible reason; never calculate a replacement. | `core/source-workbook-import.test.mjs` covers formula/cache rejection for source workbooks; `core/workbook-capacity-import.test.mjs` covers literal, missing, and formula-backed (cached and uncached) dough yields. |
 | Blank cell vs omitted row | Compare an explicit blank field with a source row removed from a later workbook revision. | Preserve blank/omitted as unresolved or absent; a missing row must not clear or delete previously saved/manual setup. | Premix blank preservation is covered in `core/source-workbook-import.test.mjs`. The no-delete-on-omission rule is in the approved design; **gap:** no explicit import/Apply regression is mapped for it. |
 | Units and decimal precision | Use explicit `lb`/`oz` labels, a decimal quantity such as `0.125`, and one mixed-unit table. | Preserve the source unit and supported decimal value; do not silently convert or round. Keep unsupported/mixed units review-only. | Annotated cheese pounds, mixed-unit sauce, and setup-catalog unit cases are covered by `core/source-workbook-import.test.mjs` and `core/setup-catalog-csv.test.mjs`. **Gap:** no named decimal round-trip boundary case is mapped. |
 | Duplicate or ambiguous identity | Add duplicate source identities, or two catalog candidates with the same normalized name. | Reject duplicate source identity; link only a unique exact match. Leave ambiguous links unresolved for manager review; do not guess. | Covered by duplicate-identity checks in `core/source-workbook-import.test.mjs` and `core/workbook-capacity-import.test.mjs`, and duplicate-key checks in `core/setup-catalog-csv.test.mjs`. |
