@@ -143,6 +143,7 @@ Read [Browser and CI memory](memory/browser-and-ci.md) and
 - [Local development](skills/local-development.md) — start API, worker, and web with the pinned Node and a disposable database.
 - [OpenAPI client](skills/openapi-client.md) — regenerate and check the typesafe client after API changes.
 - [Database tests](skills/database-tests.md) — run the real-Postgres harness that unit tests do not replace.
+- [Work on V3 importers](skills/work-on-importers.md) — preserve deterministic parsing and verify the complete staged import path.
 
 ## Memory
 
@@ -152,6 +153,8 @@ Read [Browser and CI memory](memory/browser-and-ci.md) and
 - [Browser and CI](memory/browser-and-ci.md) — current test topology, hosted lanes, and repair history.
 - [QC roadmap](memory/qc-roadmap.md) — approved slice sequence, owner gates, and migration-number caution.
 - [Local hosting](memory/local-hosting.md) — running the API and worker on a local machine, pool defaults, and what is not CI.
+- [V1 importer lessons](memory/v1-importer-lessons.md) — source-pinned V1 behavior translated under V3's deterministic import contract.
+- [Importer test map](memory/importer-test-map.md) — current parser, browser, database, and private-corpus coverage to verify before changes.
 
 ## Documentation and smoke tooling
 
