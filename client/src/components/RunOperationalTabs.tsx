@@ -13,7 +13,7 @@ import {
 // from the payload and every mutation goes through the command APIs. v1's
 // tab capabilities arrive slice by slice — Run and Dough first, then the
 // remaining stations, then stoppages.
-const TABS = ["run", "dough", "sauce", "frontline", "packaging", "summary"] as const;
+const TABS = ["run", "dough", "sauce", "frontline", "packaging", "stoppages", "summary"] as const;
 type OperationalTab = (typeof TABS)[number];
 
 const tabLabels: Record<OperationalTab, string> = {
@@ -22,6 +22,7 @@ const tabLabels: Record<OperationalTab, string> = {
   sauce: "Sauce",
   frontline: "Frontline",
   packaging: "Packaging",
+  stoppages: "Stoppages",
   summary: "Summary",
 };
 
@@ -342,6 +343,63 @@ function PackagingTab({ run, snapshot, online, onUpdated }: {
   );
 }
 
+function StoppagesTab({ run, snapshot }: { run: Run; snapshot: OperationalSnapshot }) {
+  const { view } = snapshot;
+  const entries = [...(run.stoppages ?? [])].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  const typeLabel = (type: string) => type === "pause" ? "Pause" : type === "manual" ? "Manual" : "Stop";
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <section className="panel">
+        <p className="eyebrow">Downtime summary</p>
+        <dl className="mt-3 space-y-2 text-sm">
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Stoppages</dt><dd className="font-semibold tabular-nums">{view.observed.stoppages.count}</dd></div>
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Downtime</dt><dd className="font-semibold tabular-nums">{formatElapsed(view.observed.stoppages.downtimeSeconds)}</dd></div>
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Elapsed (excl. pauses)</dt><dd className="font-semibold tabular-nums">{formatElapsed(view.observed.elapsedBatchSec)}</dd></div>
+        </dl>
+        <p className="mt-4 text-xs text-muted-foreground">Log a stoppage from the line-stop controls above; entries land here on the next refresh.</p>
+      </section>
+      <section className="panel sm:col-span-2">
+        <p className="eyebrow">Stoppage log</p>
+        {entries.length === 0 ? (
+          <p className="mt-3 text-sm text-muted-foreground">No stoppages recorded for this run.</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground">
+                  <th className="py-1 pr-4 font-medium">Type</th>
+                  <th className="py-1 pr-4 font-medium">Reason</th>
+                  <th className="py-1 pr-4 font-medium">Started</th>
+                  <th className="py-1 pr-4 font-medium">Ended</th>
+                  <th className="py-1 text-right font-medium">Duration</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((entry) => {
+                  const startedMs = Date.parse(entry.startedAt);
+                  const endedMs = entry.endedAt ? Date.parse(entry.endedAt) : null;
+                  return (
+                    <tr key={entry.id} className="border-t border-border/60 align-top">
+                      <td className="py-2 pr-4">{typeLabel(entry.type)}</td>
+                      <td className="py-2 pr-4">
+                        {entry.reason}
+                        {entry.notes ? <span className="block text-xs text-muted-foreground">{entry.notes}</span> : null}
+                      </td>
+                      <td className="py-2 pr-4 tabular-nums">{Number.isFinite(startedMs) ? new Date(startedMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                      <td className="py-2 pr-4 tabular-nums">{endedMs != null && Number.isFinite(endedMs) ? new Date(endedMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Open"}</td>
+                      <td className="py-2 text-right tabular-nums">{endedMs != null && Number.isFinite(endedMs) ? formatElapsed((endedMs - startedMs) / 1000) : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function SummaryTab({ snapshot }: { snapshot: OperationalSnapshot }) {
   const { view, projection } = snapshot;
   const paceLabel = view.pace.paceStatus === "ahead" ? `Ahead ${Math.abs(view.pace.paceDelta).toFixed(1)} cases`
@@ -482,6 +540,7 @@ export function RunOperationalTabs({ run, online, onUpdated }: { run: Run; onlin
           : activeTab === "sauce" ? <SauceTab run={run} snapshot={snapshot} online={online} onUpdated={onUpdated} />
           : activeTab === "frontline" ? <FrontlineTab run={run} snapshot={snapshot} online={online} onUpdated={onUpdated} />
           : activeTab === "packaging" ? <PackagingTab run={run} snapshot={snapshot} online={online} onUpdated={onUpdated} />
+          : activeTab === "stoppages" ? <StoppagesTab run={run} snapshot={snapshot} />
           : <SummaryTab snapshot={snapshot} />
         ) : (
           <p className="py-6 text-sm text-muted-foreground">{online ? "Reading operational state…" : "Operational state refreshes when the connection returns."}</p>
