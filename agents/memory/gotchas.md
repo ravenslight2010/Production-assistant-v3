@@ -139,6 +139,28 @@ Measure which worker holds connections before changing intervals.
 **Detection:** health shows a healthy database but a `backgroundWorkers`
 warning, or checkout timeouts in logs while the app is idle.
 
+## 14. Manual function grants drifted; new endpoints 403'd on live databases (2026-11-27)
+
+**What happened:** the runtime role's `GRANT EXECUTE` list was maintained by a
+manual per-migration ops step, not by migrations. Databases bootstrapped before
+schedule-import, workbook-import, combined-review, and QC-verification slices
+landed were never backfilled: those endpoints returned 403 (PG 42501 surfaced
+through the error mapper) on live deploys while the harness stayed green,
+because the harness grants cover `v3_api_test` only and that role doesn't exist
+in production. An end-to-end importer gauntlet over real HTTP is what caught it.
+
+**Fix + invariant:** `db/0027-api-runtime-function-grants.sql` backfills
+`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA v3 TO v3` once and installs
+`ALTER DEFAULT PRIVILEGES ... GRANT EXECUTE ON FUNCTIONS TO v3`, so the grant
+follows every future function created by the migration runner's role. Reviewed
+restriction still lives in the harness-only `v3_api_test` explicit grant list.
+
+**Rule:** never add a runtime-role grant by hand; add it to a migration (or
+rely on the 0027 default privilege) and let the backfill test
+(`0027-api-runtime-function-grants.test.sql`) prove it. If an endpoint 403s on
+the rig but passes the harness, diff `has_function_privilege('v3', ...)`
+against the same check for `v3_api_test`.
+
 ## 13. Green client protocol on a half-dead rig (2026-11-27)
 
 **What happened:** the rig's API was up and answered sign-in, run lists,

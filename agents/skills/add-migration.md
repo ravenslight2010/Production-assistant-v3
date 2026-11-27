@@ -18,8 +18,12 @@ to match a stale plan.
    `v3` role. Apply with `su postgres -c "psql -d v3 -v ON_ERROR_STOP=1 -f db/NNNN-....sql"`.
 2. **The API role gets EXECUTE on functions only.** New queries surfaced to
    the API must live in `SECURITY DEFINER` functions (usually
-   `SECURITY DEFINER SET search_path = v3, pg_temp`) with
-   `GRANT EXECUTE ... TO v3` (and to `v3_api_test` for the harness).
+   `SECURITY DEFINER SET search_path = v3, pg_temp`). Since
+   `0027-api-runtime-function-grants.sql`, `GRANT EXECUTE ... TO v3` and the
+   default privilege are applied by that migration itself — backfilled for all
+   existing functions and automatic for future ones created by the migration
+   runner's role — so no manual grant step is needed for the runtime role.
+   Keep adding explicit `GRANT EXECUTE ... TO v3_api_test` for the harness.
    Never `GRANT SELECT/INSERT` on tables to API roles.
 3. **SQL-language functions validate at CREATE.** If function B calls
    function A, declare A first in the same migration — or the migration

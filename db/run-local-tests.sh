@@ -122,6 +122,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0005-dough-capacity-sources.test.sql"
 
 "${PSQL[@]}" -c "
+  CREATE ROLE v3 NOLOGIN;
   CREATE ROLE v3_api_test NOLOGIN;
   CREATE ROLE v3_api_login LOGIN;
   GRANT v3_api_test TO v3_api_login;
@@ -743,6 +744,9 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0026-qc-run-verification.sql" >/dev/null
 # Slice 2 migration and transaction test are both safe to re-run.
 "${PSQL[@]}" -f "$ROOT/db/0026-qc-run-verification.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/db/0027-api-runtime-function-grants.sql" >/dev/null
+# Safe to re-run; the grant backfill and default privileges are idempotent.
+"${PSQL[@]}" -f "$ROOT/db/0027-api-runtime-function-grants.sql" >/dev/null
 "${PSQL[@]}" -c "
   GRANT EXECUTE ON FUNCTION v3.list_active_runs(uuid, integer) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.run_list_version(uuid) TO v3_api_test;
@@ -896,6 +900,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0024-qc-evidence-foundation.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0026-qc-run-verification.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0026-qc-run-verification.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0027-api-runtime-function-grants.test.sql"
 ACCOUNT_FUNCTION_PRIVILEGES="$("${PSQL[@]}" -c "
   SET ROLE v3_api_test;
   SELECT has_function_privilege(current_user,
@@ -1125,6 +1130,11 @@ if [[ "$QC26_LOT_OUTCOME" != "accepted" || "$QC26_LOT_SIGNOFF" != "conflict" || 
 fi
 # The disposable database teardown removes these fixtures and their append-only audit.
 
+# Importer gauntlet runs last: it truncates data tables (staff/session/bootstrap
+# fixtures preserved) so its residue-free assertions hold on the shared database.
+V3_TEST_ADMIN_URL="$V3_TEST_ADMIN_URL" V3_DATABASE_URL="$V3_API_URL" NODE_ENV=development \
+  node "$ROOT/server/http-postgres.importers.integration.mjs"
+
 printf 'Run schema and lifecycle checks passed.\n'
 printf 'Concurrent first-manager bootstrap passed: exactly one manager was created.\n'
 printf 'Restricted API role check passed: %s\n' "$API_ROLE_RESULT"
@@ -1147,3 +1157,4 @@ printf 'Synthetic setup family count, identity, replay, rollback, undo, and faci
 printf 'Synthetic V1-to-V3 setup and staff transfer rehearsal passed.\n'
 printf 'Account lifecycle function grants passed: %s\n' "$ACCOUNT_FUNCTION_PRIVILEGES"
 printf 'Concurrent invitation acceptance passed: %s (%s)\n' "$INVITATION_RACE_RESULTS" "$INVITATION_RACE_STATE"
+printf 'Runtime function grants and full importer gauntlet passed.\n'
