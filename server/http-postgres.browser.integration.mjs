@@ -54,6 +54,16 @@ async function waitScheduleSaved(page) {
   await page.getByRole("status").filter({ hasText: "Schedule change saved to the server." }).waitFor();
 }
 
+async function waitPlaceholder(page, label, value) {
+  const field = page.getByLabel(label, { exact: true });
+  await field.waitFor();
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if ((await field.getAttribute("placeholder")) === value) return;
+    await page.waitForTimeout(200);
+  }
+  throw new Error(`Placeholder for ${label} never became ${value}`);
+}
+
 async function main() {
   const databaseUrl = process.env.V3_DATABASE_URL;
   const adminDatabaseUrl = process.env.V3_TEST_ADMIN_URL;
@@ -316,27 +326,27 @@ async function main() {
     assert.equal(startedRun.revision, 2);
     await page.getByText("start confirmed by the server.").waitFor();
 
-    await page.getByLabel("Cases Produced", { exact: true }).fill("2");
-    await page.getByRole("button", { name: "Save station update", exact: true }).click();
-    await page.getByText("Station change confirmed by the server.").waitFor();
+    await page.getByLabel("Cases produced", { exact: true }).fill("2");
+    await page.getByLabel("Cases produced", { exact: true }).press("Enter");
+    await page.getByText("Cases produced confirmed by the server.").waitFor();
 
     const secondPage = await context.newPage();
     observePage(secondPage);
     await secondPage.goto(baseUrl);
     await selectRun(secondPage, createdRun.id, runLabel);
-    assert.equal(await secondPage.getByLabel("Cases Produced", { exact: true }).inputValue(), "2");
+    await waitPlaceholder(secondPage, "Cases produced", "2");
     const targetStalePage = await context.newPage();
     observePage(targetStalePage);
     await targetStalePage.goto(baseUrl);
     await selectRun(targetStalePage, createdRun.id, runLabel);
 
-    await page.getByLabel("Cases Produced", { exact: true }).fill("3");
-    await page.getByRole("button", { name: "Save station update", exact: true }).click();
-    await page.getByText("Station change confirmed by the server.").waitFor();
-    await secondPage.getByLabel("Cases Produced", { exact: true }).fill("1");
-    await secondPage.getByRole("button", { name: "Save station update", exact: true }).click();
-    await secondPage.getByText("Stale station change discarded; the latest server state is now displayed.").waitFor();
-    assert.equal(await secondPage.getByLabel("Cases Produced", { exact: true }).inputValue(), "3");
+    await page.getByLabel("Cases produced", { exact: true }).fill("3");
+    await page.getByLabel("Cases produced", { exact: true }).press("Enter");
+    await page.getByText("Cases produced confirmed by the server.").waitFor();
+    await secondPage.getByLabel("Cases produced", { exact: true }).fill("1");
+    await secondPage.getByLabel("Cases produced", { exact: true }).press("Enter");
+    await secondPage.getByText("Stale change discarded; the latest server state is now displayed.").waitFor();
+    await waitPlaceholder(secondPage, "Cases produced", "3");
 
     const staleRunToTime = targetStalePage.locator('section[aria-labelledby="run-to-time-heading"]');
     const staleTargetInput = staleRunToTime.getByLabel("Target time (Central)", { exact: true });
@@ -499,7 +509,7 @@ async function main() {
     assert.equal(tunnelOverride.response.status(), 200, JSON.stringify(tunnelOverride.body));
     assert.equal(tunnelOverride.body.run.stoppages.find((item) => item.type === "pause" && item.endedAt === null).stopTunnel, false);
     await operations.getByText(/Operator override confirmed: line and packaging automatic progress continue/).waitFor();
-    assert.equal(await page.getByRole("button", { name: "Start run to edit stations", exact: true }).isDisabled(), true);
+    assert.equal(await page.getByLabel("Cases produced", { exact: true }).isDisabled(), true);
 
     for (const stationKey of ["line", "packaging", "dough"]) {
       await adminPool.query(`
@@ -591,8 +601,54 @@ async function main() {
       { width: 1024, height: 768 },
     ]) {
       await page.setViewportSize(viewport);
-      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
-        `the React run cockpit must fit ${viewport.width}x${viewport.height}`);
+      const overflow = await page.evaluate(() => {
+        const vw = window.innerWidth;
+        const wide = [];
+        const walk = (element) => {
+          const rect = element.getBoundingClientRect();
+          if (rect.width > vw + 1 || rect.right > vw + 1) {
+            wide.push(`${element.tagName}.${String(element.className).slice(0, 80)} right=${Math.round(rect.right)}`);
+          }
+          for (const child of element.children) walk(child);
+        };
+        walk(document.body);
+        const blame = [];
+        for (const subtree of ["header", "nav", "main"]) {
+          const element = document.querySelector(subtree);
+          if (!element) continue;
+          const previous = element.style.display;
+          element.style.display = "none";
+          blame.push(`${subtree}:${document.documentElement.scrollWidth}`);
+          element.style.display = previous;
+        }
+        const range = document.createRange();
+        const textWidows = [];
+        const mainWide = [];
+        const walkText = (node) => {
+          if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+            range.selectNodeContents(node);
+            const rect = range.getBoundingClientRect();
+            if (rect.width > vw + 1) {
+              textWidows.push(`${node.parentElement.tagName}.${String(node.parentElement.className).slice(0, 50)} w=${Math.round(rect.width)} text="${node.textContent.trim().slice(0, 60)}"`);
+            }
+          } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName !== "SCRIPT" && node.tagName !== "STYLE") {
+            for (const child of node.childNodes) walkText(child);
+          }
+        };
+        const mainEl = document.querySelector("main");
+        walkText(mainEl ?? document.body);
+        const mainWalk = (element) => {
+          const rect = element.getBoundingClientRect();
+          if (rect.width > vw + 1 || rect.right > vw + 1) {
+            mainWide.push(`${element.tagName}.${String(element.className).slice(0, 70)} w=${Math.round(rect.width)} right=${Math.round(rect.right)}`);
+          }
+          for (const child of element.children) mainWalk(child);
+        };
+        if (mainEl) mainWalk(mainEl);
+        return { scrollWidth: document.documentElement.scrollWidth, vw, blame: blame.join(" "), mainWide: mainWide.slice(0, 8), textWidows: textWidows.slice(0, 6) };
+      });
+      assert.ok(overflow.scrollWidth <= overflow.vw + 1,
+        `the React run cockpit must fit ${viewport.width}x${viewport.height}: ${JSON.stringify(overflow)}`);
     }
 
     await page.getByRole("button", { name: "Schedule", exact: true }).click();
@@ -1388,10 +1444,10 @@ async function main() {
       && response.request().postDataJSON().commandType === "start");
     await page.getByRole("button", { name: "start", exact: true }).click();
     assert.equal((await startInventoryRunResponsePromise).status(), 200);
-    await page.getByRole("tab", { name: "dough", exact: true }).click();
-    await page.getByLabel("Batches Made", { exact: true }).fill("1");
-    await page.getByRole("button", { name: "Save station update", exact: true }).click();
-    await page.getByText("Station change confirmed by the server.").waitFor();
+    await page.getByRole("tab", { name: "Dough", exact: true }).click();
+    await page.getByLabel("Batches made", { exact: true }).fill("1");
+    await page.getByLabel("Batches made", { exact: true }).press("Enter");
+    await page.getByText("Batches made confirmed by the server.").waitFor();
     const completeInventoryRunResponsePromise = page.waitForResponse((response) =>
       new URL(response.url()).pathname === `/api/v3/runs/${inventoryRun.id}/commands`
       && response.request().method() === "POST"

@@ -7,6 +7,7 @@ import {
   resetOperationalPollBackoff,
   type OperationalSnapshot,
   type Run,
+  type StationKey,
 } from "../api";
 
 // Station tabs render the server-owned operational read; every number comes
@@ -46,20 +47,24 @@ function projectedFinishMs(run: Run, calc: OperationalSnapshot["projection"]["ca
 }
 
 /**
- * One editable station input: shows the server-confirmed value, accepts a
- * draft, and commits through the station command API with exact-once
- * replay protection. Conflicts surface as a notice, never a silent loss.
+ * One editable station value (input or progress): shows the server-confirmed
+ * value, accepts a draft, and commits through the station command API with
+ * exact-once replay protection. Conflicts surface as a notice, never a
+ * silent loss. Edits are open only while the run is running, matching the
+ * station-card rule the tabs replace.
  */
-function CommandField({ run, stationKey, fieldKey, label, unit, online, onUpdated }: {
+function CommandField({ run, stationKey, fieldKey, label, unit, kind = "inputs", online, onUpdated }: {
   run: Run;
-  stationKey: "line" | "dough" | "sauce" | "frontline" | "packaging";
+  stationKey: StationKey;
   fieldKey: string;
   label: string;
   unit?: string;
+  kind?: "inputs" | "progress";
   online: boolean;
   onUpdated: (run: Run, notice?: string) => void;
 }) {
-  const confirmed = run.stationProgress[stationKey]?.inputs?.[fieldKey];
+  const confirmed = run.stationProgress[stationKey]?.[kind]?.[fieldKey];
+  const editable = online && run.status === "running";
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,12 +105,12 @@ function CommandField({ run, stationKey, fieldKey, label, unit, online, onUpdate
           <input className="field w-28 text-sm text-foreground" type="number" min={0} step="any" inputMode="decimal"
             placeholder={typeof confirmed === "number" ? String(confirmed) : "0"}
             value={draft}
-            disabled={!online || pending}
+            disabled={!editable || pending}
             onChange={(event) => { commandId.current = null; setDraft(event.target.value); }} />
           {unit ? <span className="text-muted-foreground">{unit}</span> : null}
         </span>
       </label>
-      <button type="submit" className="button-secondary" disabled={!online || pending || draft === ""}>
+      <button type="submit" className="button-secondary" disabled={!editable || pending || draft === ""}>
         {pending ? "Saving…" : "Save"}
       </button>
       {error ? <span className="error-text w-full" role="alert">{error}</span> : null}
@@ -139,7 +144,7 @@ function RunTab({ run, snapshot, online, onUpdated }: {
         <p className="eyebrow">Timing</p>
         <dl className="mt-3 space-y-2 text-sm">
           <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Started</dt><dd className="font-semibold tabular-nums">{formatClock(run.startedAt)}</dd></div>
-          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Projected finish</dt><dd className="font-semibold tabular-nums">{finishMs != null ? new Date(finishMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</dd></div>
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Projected finish</dt><dd className="shrink-0 font-semibold tabular-nums">{finishMs != null ? new Date(finishMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</dd></div>
           <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Planned run time</dt><dd className="font-semibold tabular-nums">{formatElapsed(projection.calc.totalTimeSec ?? 0)}</dd></div>
           <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Adjusted run time</dt><dd className="font-semibold tabular-nums">{formatElapsed(projection.calc.adjustedTimeSec ?? 0)}</dd></div>
           <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Press remaining</dt><dd className="font-semibold tabular-nums">{formatElapsed(projection.timers.pressRemainingSec)}</dd></div>
@@ -154,6 +159,10 @@ function RunTab({ run, snapshot, online, onUpdated }: {
           <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Cases left to press</dt><dd className="font-semibold tabular-nums">{Math.round(projection.counters.pressCasesLeft).toLocaleString()}</dd></div>
           <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Press</dt><dd className="font-semibold">{view.recap.pressDone ? "Done" : "Open"}</dd></div>
         </dl>
+        <div className="mt-4">
+          <CommandField run={run} stationKey="line" fieldKey="casesProduced" kind="progress"
+            label="Cases produced" online={online} onUpdated={onUpdated} />
+        </div>
       </section>
     </div>
   );
@@ -190,9 +199,15 @@ function DoughTab({ run, snapshot, online, onUpdated }: {
       </section>
       <section className="panel">
         <p className="eyebrow">Batch setup</p>
-        <div className="mt-3">
+        <div className="mt-3 space-y-3">
           <CommandField run={run} stationKey="dough" fieldKey="traysPerBatch"
             label="Trays per batch" online={online} onUpdated={onUpdated} />
+          <CommandField run={run} stationKey="dough" fieldKey="traysOnLine" kind="progress"
+            label="Trays on line" online={online} onUpdated={onUpdated} />
+          <CommandField run={run} stationKey="dough" fieldKey="batchesReady" kind="progress"
+            label="Batches ready" online={online} onUpdated={onUpdated} />
+          <CommandField run={run} stationKey="dough" fieldKey="batchesMade" kind="progress"
+            label="Batches made" online={online} onUpdated={onUpdated} />
         </div>
         {shortCases > 0 ? (
           <div className="error-banner mt-4" role="alert">
@@ -242,9 +257,13 @@ function SauceTab({ run, snapshot, online, onUpdated }: {
       </section>
       <section className="panel">
         <p className="eyebrow">Barrel setup</p>
-        <div className="mt-3">
+        <div className="mt-3 space-y-3">
           <CommandField run={run} stationKey="sauce" fieldKey="barrelLbs"
             label="Barrel size" unit="lb" online={online} onUpdated={onUpdated} />
+          <CommandField run={run} stationKey="sauce" fieldKey="barrelsMade" kind="progress"
+            label="Barrels made" online={online} onUpdated={onUpdated} />
+          <CommandField run={run} stationKey="sauce" fieldKey="stockBarrels" kind="progress"
+            label="Stock barrels" online={online} onUpdated={onUpdated} />
         </div>
       </section>
     </div>
@@ -290,12 +309,32 @@ function FrontlineTab({ run, snapshot, online, onUpdated }: {
         </div>
       </section>
       <section className="panel">
+        <p className="eyebrow">Toppings supply</p>
+        {(["cheese", "pepperoni"] as const).map((stationKey) => (
+          <div key={stationKey} className="mt-3 border-t border-border/60 pt-3 first:border-t-0 first:pt-0">
+            <p className="mb-2 text-sm font-semibold capitalize">{stationKey}</p>
+            <div className="space-y-3">
+              <CommandField run={run} stationKey={stationKey} fieldKey="batchesMade" kind="progress"
+                label="Batches made" online={online} onUpdated={onUpdated} />
+              <CommandField run={run} stationKey={stationKey} fieldKey="stockOnLineLbs" kind="progress"
+                label="Stock on line" unit="lb" online={online} onUpdated={onUpdated} />
+              <CommandField run={run} stationKey={stationKey} fieldKey="batchLbs"
+                label="Batch size" unit="lb" online={online} onUpdated={onUpdated} />
+            </div>
+          </div>
+        ))}
+      </section>
+      <section className="panel">
         <p className="eyebrow">Batch setup</p>
         <div className="mt-3 space-y-3">
           <CommandField run={run} stationKey="frontline" fieldKey="batchLbs"
             label="Batch size" unit="lb" online={online} onUpdated={onUpdated} />
           <CommandField run={run} stationKey="frontline" fieldKey="ozPerPizza"
             label="Ounces per pizza" unit="oz" online={online} onUpdated={onUpdated} />
+          <CommandField run={run} stationKey="frontline" fieldKey="batchesMade" kind="progress"
+            label="Batches made" online={online} onUpdated={onUpdated} />
+          <CommandField run={run} stationKey="frontline" fieldKey="stockOnLineLbs" kind="progress"
+            label="Stock on line" unit="lb" online={online} onUpdated={onUpdated} />
         </div>
       </section>
     </div>
@@ -334,9 +373,11 @@ function PackagingTab({ run, snapshot, online, onUpdated }: {
       </section>
       <section className="panel">
         <p className="eyebrow">Skid setup</p>
-        <div className="mt-3">
+        <div className="mt-3 space-y-3">
           <CommandField run={run} stationKey="packaging" fieldKey="casesPerSkid"
             label="Cases per skid" online={online} onUpdated={onUpdated} />
+          <CommandField run={run} stationKey="packaging" fieldKey="casesPacked" kind="progress"
+            label="Cases packed" online={online} onUpdated={onUpdated} />
         </div>
       </section>
     </div>
@@ -512,14 +553,14 @@ export function RunOperationalTabs({ run, online, onUpdated }: { run: Run; onlin
   return (
     <section className="mt-5 min-w-0" aria-label="Operational station read">
       <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border" role="tablist" aria-label="Station tabs">
-        <div className="flex gap-1">
+        <div className="flex flex-wrap gap-1">
           {TABS.map((tab) => (
             <button
               key={tab}
               type="button"
               role="tab"
               aria-selected={activeTab === tab}
-              className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${activeTab === tab ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+              className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium ${activeTab === tab ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
               onClick={() => setActiveTab(tab)}
             >
               {tabLabels[tab]}

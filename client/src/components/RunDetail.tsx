@@ -1,114 +1,16 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ApiError, applyRunCommand, applyStationCommand, type Run, type RunCommand, type StationKey } from "../api";
+import { useRef, useState } from "react";
+import { ApiError, applyRunCommand, type Run, type RunCommand } from "../api";
 import { RunToTimeControl } from "./RunToTimeControl";
 import { RunOperationsPanel } from "./RunOperationsPanel";
 import { EffectiveProductionPlan } from "./EffectiveProductionPlan";
 import { RunOperationalTabs } from "./RunOperationalTabs";
 
-const stationOrder: StationKey[] = ["line", "dough", "cheese", "pepperoni", "sauce", "frontline", "packaging"];
-const stationFields: Record<StationKey, { inputs: string[]; progress: string[] }> = {
-  line: { inputs: ["autoTrackRatePerMinute", "timerDurationSeconds", "casesPerSkid"], progress: ["casesProduced", "casesOnLine", "casesInFreezer"] },
-  dough: { inputs: ["autoTrackRatePerMinute", "timerDurationSeconds", "traysPerBatch"], progress: ["casesProduced", "traysOnLine", "batchesReady", "batchesMade"] },
-  cheese: { inputs: ["autoTrackRatePerMinute", "timerDurationSeconds", "pizzasPerCase", "ozPerPizza", "batchLbs"], progress: ["casesCompleted", "batchesMade", "stockOnLineLbs"] },
-  pepperoni: { inputs: ["autoTrackRatePerMinute", "timerDurationSeconds", "pizzasPerCase", "ozPerPizza", "batchLbs"], progress: ["casesCompleted", "batchesMade", "stockOnLineLbs"] },
-  sauce: { inputs: ["autoTrackRatePerMinute", "timerDurationSeconds", "pizzasPerCase", "ozPerPizza", "barrelLbs"], progress: ["barrelsMade", "stockBarrels"] },
-  frontline: { inputs: ["autoTrackRatePerMinute", "timerDurationSeconds", "pizzasPerCase", "ozPerPizza", "batchLbs"], progress: ["batchesMade", "stockOnLineLbs", "stockConsumedLbs"] },
-  packaging: { inputs: ["autoTrackRatePerMinute", "timerDurationSeconds", "casesPerSkid"], progress: ["casesPacked"] },
-};
 const commands: Record<Run["status"], RunCommand[]> = {
   planned: ["start"],
   running: ["pause", "complete"],
   paused: ["resume", "complete"],
   completed: [],
 };
-
-function fieldLabel(key: string) {
-  return key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (letter) => letter.toUpperCase());
-}
-
-function StationCard({ run, stationKey, online, onUpdated }: {
-  run: Run;
-  stationKey: StationKey;
-  online: boolean;
-  onUpdated: (run: Run, notice?: string) => void;
-}) {
-  const station = run.stationProgress[stationKey] ?? {
-    status: "not_started", revision: 0, inputs: {}, progress: {},
-    startedAt: null, pausedAt: null, completedAt: null, nextDueAt: null, updatedAt: run.updatedAt,
-  };
-  const definition = stationFields[stationKey];
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const commandId = useRef<string | null>(null);
-
-  useEffect(() => {
-    setValues(Object.fromEntries([...definition.inputs, ...definition.progress].map((key) => {
-      const confirmed = station.inputs[key] ?? station.progress[key];
-      const fallback = definition.progress.includes(key) || key === "autoTrackRatePerMinute" ? "0" : "";
-      return [key, typeof confirmed === "number" && Number.isFinite(confirmed) ? String(confirmed) : fallback];
-    })));
-    commandId.current = null;
-  }, [run.id, run.revision, stationKey]);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setError(null);
-    const changes = Object.fromEntries(Object.entries(values)
-      .filter(([, value]) => value !== "")
-      .map(([key, value]) => [key, Number(value)]));
-    if (Object.values(changes).some((value) => !Number.isFinite(value) || value < 0)) {
-      setError("Station values must be non-negative numbers.");
-      return;
-    }
-    if (Object.keys(changes).length === 0) {
-      setError("Enter at least one station value before saving.");
-      return;
-    }
-    commandId.current ??= crypto.randomUUID();
-    setPending(true);
-    try {
-      const result = await applyStationCommand(run, stationKey, changes, commandId.current);
-      commandId.current = null;
-      onUpdated(result.run, result.conflict
-        ? "Stale station change discarded; the latest server state is now displayed."
-        : "Station change confirmed by the server.");
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Station update failed. Refresh before retrying.");
-    } finally {
-      setPending(false);
-    }
-  }
-
-  return (
-    <article className="rounded-xl border border-border/70 bg-background/45 p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="font-semibold capitalize">{stationKey}</h3>
-        <span className="status-pill">{station.status.replace("_", " ")}</span>
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground">station revision {station.revision}</span>
-      </div>
-      <form className="mt-4" onSubmit={submit}>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {Object.entries(values).map(([key, value]) => (
-            <label key={key} className="text-xs font-medium text-muted-foreground">{fieldLabel(key)}
-              <input className="field mt-1.5 text-sm text-foreground" type="number" min={0} step="any" inputMode="decimal" value={value} onChange={(event) => {
-                commandId.current = null;
-                setValues((current) => ({ ...current, [key]: event.target.value }));
-              }} />
-            </label>
-          ))}
-        </div>
-        {Object.keys(values).length === 0 ? <p className="text-xs text-muted-foreground">No manual numeric inputs are defined for this station.</p> : null}
-        {error ? <p className="error-text mt-3" role="alert">{error}</p> : null}
-        {Object.keys(values).length > 0 ? (
-          <button type="submit" className="button-secondary mt-4" disabled={!online || pending || run.status !== "running"}>
-            {pending ? "Confirming…" : run.status === "running" ? "Save station update" : "Start run to edit stations"}
-          </button>
-        ) : null}
-      </form>
-    </article>
-  );
-}
 
 export function RunDetail({ run, online, canManageReasons, onUpdated }: {
   run: Run;
@@ -117,7 +19,6 @@ export function RunDetail({ run, online, canManageReasons, onUpdated }: {
   onUpdated: (run: Run, notice?: string) => void;
 }) {
   const [pending, setPending] = useState<RunCommand | null>(null);
-  const [selectedStation, setSelectedStation] = useState<StationKey>("line");
   const [error, setError] = useState<string | null>(null);
   const commandIds = useRef(new Map<RunCommand, string>());
 
@@ -171,20 +72,6 @@ export function RunDetail({ run, online, canManageReasons, onUpdated }: {
             {pending === command ? `${command} pending…` : command}
           </button>
         ))}
-      </div>
-      <div className="mt-6 space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold">Station progress</h3>
-          <span className="text-xs text-muted-foreground">Manual updates only; the worker owns automatic progress.</span>
-        </div>
-        <div className="flex gap-1 overflow-x-auto pb-1" role="tablist" aria-label="Production stations">
-          {stationOrder.map((stationKey) => (
-            <button key={stationKey} type="button" role="tab" aria-selected={selectedStation === stationKey}
-              className={`nav-tab ${selectedStation === stationKey ? "nav-tab-active" : ""}`}
-              onClick={() => setSelectedStation(stationKey)}>{stationKey}</button>
-          ))}
-        </div>
-        <StationCard key={selectedStation} run={run} stationKey={selectedStation} online={online} onUpdated={onUpdated} />
       </div>
       {run.status !== "planned" ? <RunOperationalTabs run={run} online={online} onUpdated={onUpdated} /> : null}
     </section>
