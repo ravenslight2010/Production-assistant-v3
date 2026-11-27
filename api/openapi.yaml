@@ -3339,6 +3339,254 @@ paths:
           $ref: "#/components/responses/Error"
         "502":
           $ref: "#/components/responses/Error"
+  /api/v3/qc/component-checks:
+    post:
+      operationId: recordQcComponentCheck
+      summary: Record effective-component identity and presence evidence
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QcComponentCheckRequest"
+      responses:
+        "201":
+          description: Component evidence appended with its immutable effective-run snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "200":
+          description: Exact retry confirmed without duplicating evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+  /api/v3/qc/allergen-reviews:
+    post:
+      operationId: recordQcAllergenReview
+      summary: Record allergen-mapping and staging review evidence
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QcAllergenReviewRequest"
+      responses:
+        "201":
+          description: Allergen and staging evidence appended with its immutable mapping snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "200":
+          description: Exact retry confirmed without duplicating evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+  /api/v3/qc/cleaning-records:
+    post:
+      operationId: recordQcCleaning
+      summary: Record cleaning evidence for a run
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QcCleaningRequest"
+      responses:
+        "201":
+          description: Cleaning evidence appended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "200":
+          description: Exact retry confirmed without duplicating evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+  /api/v3/qc/cleaning-records/{recordId}/verification:
+    post:
+      operationId: verifyQcCleaning
+      summary: Independently verify an existing cleaning record
+      description: QC manager only. The recorder cannot verify their own cleaning evidence.
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/QcRecordId"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QcCleaningVerificationRequest"
+      responses:
+        "201":
+          description: Independent cleaning verification appended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "200":
+          description: Exact retry confirmed without duplicating evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+  /api/v3/qc/runs/{runId}/sign-off:
+    post:
+      operationId: signOffQcRun
+      summary: Sign off QC evidence at an exact high-water mark
+      description: Advisory evidence only. Later evidence makes the sign-off historical; this command does not change production or release state.
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QcSignOffRequest"
+      responses:
+        "201":
+          description: QC sign-off appended at the requested evidence boundary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "200":
+          description: Exact retry confirmed with its original stored response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcRecordResult"
+        "409":
+          description: Current canonical dashboard for stale-boundary or request-ID review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QcSignOffResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
   /api/v3/qc/targets:
     get:
       operationId: getQcTargets
@@ -3420,6 +3668,13 @@ components:
     RunId:
       in: path
       name: runId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    QcRecordId:
+      in: path
+      name: recordId
       required: true
       schema:
         type: string
@@ -7633,6 +7888,216 @@ components:
         notes:
           type: string
           maxLength: 1000
+    QcComponentKey:
+      type: string
+      pattern: "^(recipe:(0|[1-9][0-9]{0,5}):ingredient:(0|[1-9][0-9]{0,5})|packaging:(0|[1-9][0-9]{0,5}))$"
+    QcHighWaterMark:
+      type: string
+      pattern: "^(0|[1-9][0-9]{0,15})$"
+      description: QC sequence boundary represented as a decimal string.
+    QcFixedAllergen:
+      type: string
+      enum: [milk, eggs, fish, crustacean shellfish, tree nuts, peanuts, wheat, soybeans, sesame]
+    QcComponentCheckInput:
+      type: object
+      additionalProperties: false
+      required: [componentKey, presence, notes]
+      properties:
+        componentKey:
+          $ref: "#/components/schemas/QcComponentKey"
+        presence:
+          type: string
+          enum: [present, absent, unknown]
+        notes:
+          type: string
+          maxLength: 1000
+    QcAllergenReviewInput:
+      type: object
+      additionalProperties: false
+      required: [componentKey, stagingStatus, notes]
+      properties:
+        componentKey:
+          $ref: "#/components/schemas/QcComponentKey"
+        stagingStatus:
+          type: string
+          enum: [staged, not-staged, unknown]
+        notes:
+          type: string
+          maxLength: 1000
+    QcCleaningInput:
+      type: object
+      additionalProperties: false
+      required: [area, status, notes]
+      properties:
+        area:
+          type: string
+          minLength: 1
+          maxLength: 120
+        status:
+          type: string
+          enum: [cleaned, not-cleaned, unknown]
+        notes:
+          type: string
+          maxLength: 1000
+    QcCleaningVerificationInput:
+      type: object
+      additionalProperties: false
+      required: [status, notes]
+      properties:
+        status:
+          type: string
+          enum: [verified, not-verified]
+        notes:
+          type: string
+          maxLength: 1000
+    QcComponent:
+      type: object
+      additionalProperties: false
+      required: [componentKey, componentType, recipeCode, recipeName, stationKey, productId, productCode, productName, quantity, unit]
+      properties:
+        componentKey:
+          $ref: "#/components/schemas/QcComponentKey"
+        componentType:
+          type: string
+          enum: [ingredient, packaging]
+        recipeCode:
+          type: [string, "null"]
+          maxLength: 200
+        recipeName:
+          type: [string, "null"]
+          maxLength: 200
+        stationKey:
+          type: [string, "null"]
+          maxLength: 100
+        productId:
+          type: [string, "null"]
+          format: uuid
+        productCode:
+          type: [string, "null"]
+          maxLength: 80
+        productName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        quantity:
+          type: [string, "null"]
+          maxLength: 40
+        unit:
+          type: [string, "null"]
+          maxLength: 40
+    QcComponentSnapshot:
+      type: object
+      additionalProperties: false
+      required: [productionDate, source, overlayRevision, planCode, planName]
+      properties:
+        productionDate:
+          type: string
+          format: date
+        source:
+          type: string
+          enum: [effective-plan, completed-run]
+        overlayRevision:
+          type: integer
+          minimum: 0
+        planCode:
+          type: [string, "null"]
+          maxLength: 200
+        planName:
+          type: [string, "null"]
+          maxLength: 200
+    QcAllergenMapping:
+      type: object
+      additionalProperties: false
+      required: [componentKey, productCode, status, allergens]
+      properties:
+        componentKey:
+          $ref: "#/components/schemas/QcComponentKey"
+        productCode:
+          type: [string, "null"]
+          maxLength: 80
+        status:
+          type: string
+          enum: [reviewed, reviewed-empty, unreviewed, unavailable, invalid-mapping]
+        allergens:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/QcFixedAllergen"
+    QcSignOff:
+      type: object
+      additionalProperties: false
+      required: [recordId, actorId, highWaterMark, signedAt]
+      properties:
+        recordId:
+          type: string
+          format: uuid
+        actorId:
+          type: string
+          format: uuid
+        highWaterMark:
+          $ref: "#/components/schemas/QcHighWaterMark"
+        signedAt:
+          type: string
+          format: date-time
+    QcComponentCheckRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, runId, details]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        runId:
+          type: string
+          format: uuid
+        details:
+          $ref: "#/components/schemas/QcComponentCheckInput"
+    QcAllergenReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, runId, details]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        runId:
+          type: string
+          format: uuid
+        details:
+          $ref: "#/components/schemas/QcAllergenReviewInput"
+    QcCleaningRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, runId, details]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        runId:
+          type: string
+          format: uuid
+        details:
+          $ref: "#/components/schemas/QcCleaningInput"
+    QcCleaningVerificationRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, details]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        details:
+          $ref: "#/components/schemas/QcCleaningVerificationInput"
+    QcSignOffRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, expectedHighWaterMark]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        expectedHighWaterMark:
+          $ref: "#/components/schemas/QcHighWaterMark"
     QcLotRequest:
       type: object
       additionalProperties: false
@@ -7724,7 +8189,8 @@ components:
           type: string
           format: uuid
         relatedRecordId:
-          type: "null"
+          type: [string, "null"]
+          format: uuid
         recordedAt:
           type: string
           format: date-time
@@ -7777,26 +8243,123 @@ components:
               allOf:
                 - $ref: "#/components/schemas/QcBrixCheckInput"
                 - $ref: "#/components/schemas/QcEvaluation"
+    QcComponentCheckRecord:
+      allOf:
+        - $ref: "#/components/schemas/QcRecordBase"
+        - type: object
+          required: [kind, details]
+          properties:
+            kind:
+              const: component-check
+            details:
+              allOf:
+                - $ref: "#/components/schemas/QcComponentCheckInput"
+                - type: object
+                  required: [component, componentSnapshot]
+                  properties:
+                    component:
+                      $ref: "#/components/schemas/QcComponent"
+                    componentSnapshot:
+                      $ref: "#/components/schemas/QcComponentSnapshot"
+    QcAllergenReviewRecord:
+      allOf:
+        - $ref: "#/components/schemas/QcRecordBase"
+        - type: object
+          required: [kind, details]
+          properties:
+            kind:
+              const: allergen-review
+            details:
+              allOf:
+                - $ref: "#/components/schemas/QcAllergenReviewInput"
+                - type: object
+                  required: [component, componentSnapshot, allergenMapping]
+                  properties:
+                    component:
+                      $ref: "#/components/schemas/QcComponent"
+                    componentSnapshot:
+                      $ref: "#/components/schemas/QcComponentSnapshot"
+                    allergenMapping:
+                      $ref: "#/components/schemas/QcAllergenMapping"
+    QcCleaningRecord:
+      allOf:
+        - $ref: "#/components/schemas/QcRecordBase"
+        - type: object
+          required: [kind, details]
+          properties:
+            kind:
+              const: cleaning
+            details:
+              $ref: "#/components/schemas/QcCleaningInput"
+    QcCleaningVerificationRecord:
+      allOf:
+        - $ref: "#/components/schemas/QcRecordBase"
+        - type: object
+          required: [kind, details, relatedRecordId]
+          properties:
+            kind:
+              const: cleaning-verification
+            relatedRecordId:
+              type: string
+              format: uuid
+            details:
+              $ref: "#/components/schemas/QcCleaningVerificationInput"
+    QcSignOffRecord:
+      allOf:
+        - $ref: "#/components/schemas/QcRecordBase"
+        - type: object
+          required: [kind, details]
+          properties:
+            kind:
+              const: sign-off
+            details:
+              type: object
+              additionalProperties: false
+              required: [highWaterMark]
+              properties:
+                highWaterMark:
+                  $ref: "#/components/schemas/QcHighWaterMark"
     QcRunRecord:
       oneOf:
         - $ref: "#/components/schemas/QcLotRecord"
         - $ref: "#/components/schemas/QcWeightCheckRecord"
         - $ref: "#/components/schemas/QcBrixCheckRecord"
+        - $ref: "#/components/schemas/QcComponentCheckRecord"
+        - $ref: "#/components/schemas/QcAllergenReviewRecord"
+        - $ref: "#/components/schemas/QcCleaningRecord"
+        - $ref: "#/components/schemas/QcCleaningVerificationRecord"
+        - $ref: "#/components/schemas/QcSignOffRecord"
     QcDashboard:
       type: object
       additionalProperties: false
-      required: [run, highWaterMark, records]
+      required: [run, highWaterMark, records, components, componentSnapshot, allergenMappings, signOff, newEvidenceSinceSignOff]
       properties:
         run:
           $ref: "#/components/schemas/Run"
         highWaterMark:
-          type: string
-          pattern: "^[0-9]+$"
+          $ref: "#/components/schemas/QcHighWaterMark"
           description: Highest confirmed run QC sequence; zero means no QC evidence.
         records:
           type: array
           items:
             $ref: "#/components/schemas/QcRunRecord"
+        components:
+          type: array
+          items:
+            $ref: "#/components/schemas/QcComponent"
+        componentSnapshot:
+          $ref: "#/components/schemas/QcComponentSnapshot"
+        allergenMappings:
+          type: array
+          items:
+            $ref: "#/components/schemas/QcAllergenMapping"
+        signOff:
+          oneOf:
+            - $ref: "#/components/schemas/QcSignOff"
+            - type: "null"
+        newEvidenceSinceSignOff:
+          type: boolean
+          description: Whether non-sign-off evidence exists after the signed boundary.
     QcRecordResult:
       allOf:
         - $ref: "#/components/schemas/QcDashboard"
@@ -7809,6 +8372,23 @@ components:
               type: boolean
             record:
               $ref: "#/components/schemas/QcRunRecord"
+    QcSignOffConflict:
+      allOf:
+        - $ref: "#/components/schemas/QcDashboard"
+        - type: object
+          required: [outcome, replayed, expectedHighWaterMark]
+          properties:
+            outcome:
+              const: conflict
+            replayed:
+              const: false
+            expectedHighWaterMark:
+              $ref: "#/components/schemas/QcHighWaterMark"
+    QcSignOffResult:
+      oneOf:
+        - $ref: "#/components/schemas/QcRecordResult"
+        - $ref: "#/components/schemas/QcSignOffConflict"
+        - $ref: "#/components/schemas/Error"
     QcTargetSaveAccepted:
       type: object
       additionalProperties: false

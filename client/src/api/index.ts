@@ -68,8 +68,17 @@ export type QcWeightUnit = components["schemas"]["QcWeightUnit"];
 export type QcLotRequest = components["schemas"]["QcLotRequest"];
 export type QcWeightCheckRequest = components["schemas"]["QcWeightCheckRequest"];
 export type QcBrixCheckRequest = components["schemas"]["QcBrixCheckRequest"];
+export type QcComponentCheckRequest = components["schemas"]["QcComponentCheckRequest"];
+export type QcAllergenReviewRequest = components["schemas"]["QcAllergenReviewRequest"];
+export type QcCleaningRequest = components["schemas"]["QcCleaningRequest"];
+export type QcCleaningVerificationRequest = components["schemas"]["QcCleaningVerificationRequest"];
+export type QcSignOffRequest = components["schemas"]["QcSignOffRequest"];
 export type QcTargetSaveRequest = components["schemas"]["QcTargetSaveRequest"];
 export type QcRecordResult = components["schemas"]["QcRecordResult"];
+export type QcSignOffConflict = components["schemas"]["QcSignOffConflict"];
+export type QcSignOffOutcome =
+  | (QcRecordResult & { conflict: false })
+  | (QcSignOffConflict & { conflict: true });
 export type QcTargetSaveAccepted = components["schemas"]["QcTargetSaveAccepted"];
 export type QcTargetConflict = components["schemas"]["QcTargetConflict"];
 export type QcTargetSaveOutcome =
@@ -193,17 +202,105 @@ export function isQcTarget(value: unknown): value is QcTarget {
     && (value.minimum !== null || value.maximum !== null);
 }
 
+const QC_COMPONENT_KEY = /^(recipe:(0|[1-9][0-9]{0,5}):ingredient:(0|[1-9][0-9]{0,5})|packaging:(0|[1-9][0-9]{0,5}))$/u;
+const QC_HIGH_WATER_MARK = /^(0|[1-9][0-9]{0,15})$/u;
+const QC_FIXED_ALLERGENS = new Set(["milk", "eggs", "fish", "crustacean shellfish", "tree nuts", "peanuts", "wheat", "soybeans", "sesame"]);
+
+function sameKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function nullableQcText(value: unknown, maximum = 200): boolean {
+  return value === null || (typeof value === "string" && value.length <= maximum
+    && !/[\u0000-\u001f\u007f]/u.test(value));
+}
+
+function isQcHighWaterMark(value: unknown): value is string {
+  return typeof value === "string" && QC_HIGH_WATER_MARK.test(value) && BigInt(value) <= 9007199254740991n;
+}
+
+function isQcComponent(value: unknown): boolean {
+  return object(value) && sameKeys(value, ["componentKey", "componentType", "recipeCode", "recipeName", "stationKey",
+    "productId", "productCode", "productName", "quantity", "unit"])
+    && typeof value.componentKey === "string" && QC_COMPONENT_KEY.test(value.componentKey)
+    && ["ingredient", "packaging"].includes(String(value.componentType))
+    && nullableQcText(value.recipeCode) && nullableQcText(value.recipeName) && nullableQcText(value.stationKey, 100)
+    && (value.productId === null || UUID.test(String(value.productId))) && nullableQcText(value.productCode, 80)
+    && typeof value.productName === "string" && value.productName.length > 0 && value.productName.length <= 200
+    && !/[\u0000-\u001f\u007f]/u.test(value.productName) && nullableQcText(value.quantity, 40) && nullableQcText(value.unit, 40)
+    && (value.componentType === "ingredient" ? value.componentKey.startsWith("recipe:") : value.componentKey.startsWith("packaging:"));
+}
+
+function isQcComponentSnapshot(value: unknown): boolean {
+  return object(value) && sameKeys(value, ["productionDate", "source", "overlayRevision", "planCode", "planName"])
+    && typeof value.productionDate === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(value.productionDate)
+    && ["effective-plan", "completed-run"].includes(String(value.source))
+    && Number.isSafeInteger(value.overlayRevision) && Number(value.overlayRevision) >= 0
+    && nullableQcText(value.planCode) && nullableQcText(value.planName);
+}
+
+function isQcAllergenMapping(value: unknown): boolean {
+  if (!object(value) || !sameKeys(value, ["componentKey", "productCode", "status", "allergens"])
+    || typeof value.componentKey !== "string" || !QC_COMPONENT_KEY.test(value.componentKey)
+    || !nullableQcText(value.productCode, 80)
+    || !["reviewed", "reviewed-empty", "unreviewed", "unavailable", "invalid-mapping"].includes(String(value.status))
+    || !Array.isArray(value.allergens) || value.allergens.some((item) => typeof item !== "string" || !QC_FIXED_ALLERGENS.has(item))
+    || new Set(value.allergens).size !== value.allergens.length) return false;
+  if (value.status === "reviewed") return typeof value.productCode === "string" && value.allergens.length > 0;
+  if (value.status === "reviewed-empty") return typeof value.productCode === "string" && value.allergens.length === 0;
+  return value.allergens.length === 0;
+}
+
+function isQcSignOff(value: unknown): boolean {
+  return value === null || (object(value) && sameKeys(value, ["recordId", "actorId", "highWaterMark", "signedAt"])
+    && UUID.test(String(value.recordId)) && UUID.test(String(value.actorId))
+    && isQcHighWaterMark(value.highWaterMark) && isTimestamp(value.signedAt));
+}
+
 function isQcRecord(value: unknown): value is QcRunRecord {
   if (!object(value) || !UUID.test(String(value.recordId)) || !/^[1-9][0-9]*$/u.test(String(value.sequence))
-    || !UUID.test(String(value.runId)) || !UUID.test(String(value.actorId)) || value.relatedRecordId !== null
+    || !UUID.test(String(value.runId)) || !UUID.test(String(value.actorId))
+    || !(value.relatedRecordId === null || UUID.test(String(value.relatedRecordId)))
     || !isTimestamp(value.recordedAt) || !object(value.details)) return false;
   const details = value.details;
   if (value.kind === "lot") {
-    return typeof details.productCode === "string" && typeof details.lotNumber === "string"
+    return value.relatedRecordId === null && typeof details.productCode === "string"
+      && typeof details.lotNumber === "string" && typeof details.notes === "string";
+  }
+  if (value.kind === "component-check") {
+    return value.relatedRecordId === null && sameKeys(details, ["componentKey", "presence", "notes", "component", "componentSnapshot"])
+      && typeof details.componentKey === "string" && QC_COMPONENT_KEY.test(details.componentKey)
+      && ["present", "absent", "unknown"].includes(String(details.presence)) && typeof details.notes === "string"
+      && isQcComponent(details.component) && isQcComponentSnapshot(details.componentSnapshot)
+      && (details.component as Record<string, unknown>).componentKey === details.componentKey;
+  }
+  if (value.kind === "allergen-review") {
+    return value.relatedRecordId === null && sameKeys(details, ["componentKey", "stagingStatus", "notes", "component", "componentSnapshot", "allergenMapping"])
+      && typeof details.componentKey === "string" && details.componentKey.startsWith("recipe:") && QC_COMPONENT_KEY.test(details.componentKey)
+      && ["staged", "not-staged", "unknown"].includes(String(details.stagingStatus)) && typeof details.notes === "string"
+      && isQcComponent(details.component) && (details.component as Record<string, unknown>).componentType === "ingredient"
+      && (details.component as Record<string, unknown>).componentKey === details.componentKey
+      && isQcComponentSnapshot(details.componentSnapshot) && isQcAllergenMapping(details.allergenMapping)
+      && (details.allergenMapping as Record<string, unknown>).componentKey === details.componentKey;
+  }
+  if (value.kind === "cleaning") {
+    return value.relatedRecordId === null && sameKeys(details, ["area", "status", "notes"])
+      && typeof details.area === "string" && details.area.trim().length > 0 && details.area.length <= 120
+      && ["cleaned", "not-cleaned", "unknown"].includes(String(details.status)) && typeof details.notes === "string";
+  }
+  if (value.kind === "cleaning-verification") {
+    return typeof value.relatedRecordId === "string" && UUID.test(value.relatedRecordId)
+      && sameKeys(details, ["status", "notes"]) && ["verified", "not-verified"].includes(String(details.status))
       && typeof details.notes === "string";
   }
-  if (!["weight-check", "brix-check"].includes(String(value.kind)) || typeof details.value !== "string"
-    || typeof details.unit !== "string" || !(details.targetKey === null || typeof details.targetKey === "string")
+  if (value.kind === "sign-off") {
+    return value.relatedRecordId === null && sameKeys(details, ["highWaterMark"]) && isQcHighWaterMark(details.highWaterMark);
+  }
+  if (value.relatedRecordId !== null || !["weight-check", "brix-check"].includes(String(value.kind))
+    || typeof details.value !== "string" || typeof details.unit !== "string"
+    || !(details.targetKey === null || typeof details.targetKey === "string")
     || typeof details.notes !== "string" || !(details.target === null || isQcTarget(details.target))
     || !["pass", "fail", "not-evaluated"].includes(String(details.outcome))
     || !(details.notEvaluatedReason === null || ["no-reviewed-target", "target-unavailable", "target-kind-mismatch",
@@ -216,20 +313,37 @@ function isQcRecord(value: unknown): value is QcRunRecord {
 
 export function isQcDashboard(value: unknown, runId: string): value is QcDashboard {
   if (!object(value) || !object(value.run) || value.run.id !== runId
-    || !/^[0-9]+$/u.test(String(value.highWaterMark)) || !Array.isArray(value.records)
-    || !value.records.every(isQcRecord)) return false;
+    || !isQcHighWaterMark(value.highWaterMark) || !Array.isArray(value.records) || !value.records.every(isQcRecord)
+    || !Array.isArray(value.components) || !value.components.every(isQcComponent)
+    || !isQcComponentSnapshot(value.componentSnapshot)
+    || !Array.isArray(value.allergenMappings) || !isQcSignOff(value.signOff)
+    || typeof value.newEvidenceSinceSignOff !== "boolean") return false;
+  const components: unknown[] = value.components;
+  if (value.allergenMappings.length !== components.length
+    || !value.allergenMappings.every((mapping, index) => isQcAllergenMapping(mapping)
+      && (mapping as Record<string, unknown>).componentKey === (components[index] as Record<string, unknown>).componentKey)) return false;
   const records: QcRunRecord[] = value.records;
-  return records.every((record, index) => record.runId === runId
-    && (index === 0 || BigInt(record.sequence) > BigInt(records[index - 1]!.sequence)));
+  if (!records.every((record, index) => record.runId === runId
+    && (index === 0 || BigInt(record.sequence) > BigInt(records[index - 1]!.sequence)))
+    || value.highWaterMark !== (records.at(-1)?.sequence ?? "0")) return false;
+  if (value.signOff === null) return value.newEvidenceSinceSignOff === false;
+  const signOff = value.signOff as Record<string, unknown>;
+  const signedRecord = records.find((record) => record.recordId === signOff.recordId);
+  const expectedStale = records.some((record) => record.kind !== "sign-off"
+    && BigInt(record.sequence) > BigInt(String(signOff.highWaterMark)));
+  return signedRecord?.kind === "sign-off" && signedRecord.actorId === signOff.actorId
+    && signedRecord.details.highWaterMark === signOff.highWaterMark && signedRecord.recordedAt === signOff.signedAt
+    && value.newEvidenceSinceSignOff === expectedStale;
 }
 
-function confirmQcRecord(value: unknown, runId: string): QcRecordResult {
+function confirmQcRecord(value: unknown, runId: string, expectedKind?: QcRunRecord["kind"]): QcRecordResult {
   if (!object(value) || value.outcome !== "accepted" || typeof value.replayed !== "boolean"
-    || !isQcRecord(value.record) || !isQcDashboard(value, runId)) {
+    || !isQcRecord(value.record) || (expectedKind !== undefined && value.record.kind !== expectedKind)
+    || !isQcDashboard(value, runId)) {
     throw new ApiError("The server did not confirm the QC record. Retry the same request.", 502);
   }
   const confirmed = value as QcDashboard & { record: QcRunRecord };
-  if (!confirmed.records.some((record) => record.recordId === confirmed.record.recordId)) {
+  if (!confirmed.records.some((record) => JSON.stringify(record) === JSON.stringify(confirmed.record))) {
     throw new ApiError("The server did not confirm the QC record. Retry the same request.", 502);
   }
   return value as QcRecordResult;
@@ -255,21 +369,77 @@ export async function recordQcLot(request: QcLotRequest): Promise<QcRecordResult
   const result = await unwrap(await client.POST("/api/v3/qc/lots", {
     params: { header: mutationHeaders() }, body: request,
   }));
-  return confirmQcRecord(result, request.runId);
+  return confirmQcRecord(result, request.runId, "lot");
 }
 
 export async function recordQcWeightCheck(request: QcWeightCheckRequest): Promise<QcRecordResult> {
   const result = await unwrap(await client.POST("/api/v3/qc/weight-checks", {
     params: { header: mutationHeaders() }, body: request,
   }));
-  return confirmQcRecord(result, request.runId);
+  return confirmQcRecord(result, request.runId, "weight-check");
 }
 
 export async function recordQcBrixCheck(request: QcBrixCheckRequest): Promise<QcRecordResult> {
   const result = await unwrap(await client.POST("/api/v3/qc/brix-checks", {
     params: { header: mutationHeaders() }, body: request,
   }));
-  return confirmQcRecord(result, request.runId);
+  return confirmQcRecord(result, request.runId, "brix-check");
+}
+
+export async function recordQcComponentCheck(request: QcComponentCheckRequest): Promise<QcRecordResult> {
+  const result = await unwrap(await client.POST("/api/v3/qc/component-checks", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  return confirmQcRecord(result, request.runId, "component-check");
+}
+
+export async function recordQcAllergenReview(request: QcAllergenReviewRequest): Promise<QcRecordResult> {
+  const result = await unwrap(await client.POST("/api/v3/qc/allergen-reviews", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  return confirmQcRecord(result, request.runId, "allergen-review");
+}
+
+export async function recordQcCleaning(request: QcCleaningRequest): Promise<QcRecordResult> {
+  const result = await unwrap(await client.POST("/api/v3/qc/cleaning-records", {
+    params: { header: mutationHeaders() }, body: request,
+  }));
+  return confirmQcRecord(result, request.runId, "cleaning");
+}
+
+export async function verifyQcCleaning(
+  recordId: string,
+  request: QcCleaningVerificationRequest,
+): Promise<QcRecordResult> {
+  const result: unknown = await unwrap(await client.POST("/api/v3/qc/cleaning-records/{recordId}/verification", {
+    params: { path: { recordId }, header: mutationHeaders() }, body: request,
+  }));
+  if (!object(result) || !object(result.run) || typeof result.run.id !== "string" || !UUID.test(result.run.id)) {
+    throw new ApiError("The server did not confirm the cleaning verification. Retry the same request.", 502);
+  }
+  const confirmed = confirmQcRecord(result, result.run.id, "cleaning-verification");
+  if (confirmed.record.relatedRecordId !== recordId.toLowerCase()) {
+    throw new ApiError("The server did not confirm the cleaning verification. Retry the same request.", 502);
+  }
+  return confirmed;
+}
+
+export async function signOffQcRun(runId: string, request: QcSignOffRequest): Promise<QcSignOffOutcome> {
+  const result = await client.POST("/api/v3/qc/runs/{runId}/sign-off", {
+    params: { path: { runId }, header: mutationHeaders() }, body: request,
+  });
+  const possibleConflict: unknown = result.error;
+  if (result.response.status === 409 && object(possibleConflict) && possibleConflict.outcome === "conflict"
+    && possibleConflict.replayed === false && possibleConflict.expectedHighWaterMark === request.expectedHighWaterMark
+    && isQcDashboard(possibleConflict, runId)) {
+    return { ...(possibleConflict as QcSignOffConflict), conflict: true };
+  }
+  const accepted: unknown = await unwrap(result);
+  const confirmed = confirmQcRecord(accepted, runId, "sign-off");
+  if (confirmed.signOff?.recordId !== confirmed.record.recordId) {
+    throw new ApiError("The server did not confirm the QC sign-off. Retry the same request.", 502);
+  }
+  return { ...confirmed, conflict: false };
 }
 
 export async function saveQcTarget(request: QcTargetSaveRequest): Promise<QcTargetSaveOutcome> {

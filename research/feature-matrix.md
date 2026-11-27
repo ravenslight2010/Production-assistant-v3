@@ -108,7 +108,7 @@ Status labels describe this checkout: `ported` means the underlying V2 behavior 
 
 | Feature | V1 behavior | V2 behavior | V3 disposition | Current status |
 |---|---|---|---|---|
-| QC workflow | Planning, recipe review, labels/date codes, verification | Later-phase candidate | `defer`: rebuild against server-owned V3 data | `vertical-slice`: Slice 1 lots, pre-run/30-minute weights, Brix, reviewed targets, and current-run evidence ported; planning, recipe/label/date verification, sign-off, and history remain pending |
+| QC workflow | Planning, recipe review, labels/date codes, verification | Later-phase candidate | `defer`: rebuild against server-owned V3 data | `vertical-slice`: Slices 1–2 ported lots, weights, Brix, reviewed targets, effective-component checks, allergen/staging review, cleaning/independent verification, and high-water-mark sign-off; planning, recipe/label/date verification, and history remain pending |
 | Quality history | V1 history and retention views | Later-phase candidate | `defer` | `pending` |
 | Incident reporting and patterns | V1 issue reports and incident panels | Review-incident capability foundation | `defer` | `pending` |
 | Operational reports | V1 reports, insights, handoff digest | Run/inventory/server history foundation | `combine` | `pending` |
@@ -174,3 +174,15 @@ Verified in an isolated checkout with synthetic accounts/data and disposable Pos
 - Production build, strict TypeScript, server syntax, generated OpenAPI client byte parity, production dependency audit, no-AI guard, research-safety guard, and diff whitespace check: **PASS**.
 - WebKit/Safari: **BLOCKED** because the pinned browser executable is unavailable. No Safari or physical-device pass is claimed. A specialist accessibility audit remains unrun.
 - Slice 1 only is implemented. Slices 2–7, photo storage, label/date authority, enforcement/cross-contact behavior, report grouping/signing, and owner-gated navigation changes remain pending. No deployment, production database operation, production access, or V1 data access occurred.
+
+## QC Slice 2 verification snapshot — 2026-11-27
+
+Verified with synthetic accounts/data, pinned Node 24.22.3/pnpm 12.8.1, and disposable PostgreSQL 15.20:
+
+- Migration `0026` and its paired SQL tests: **PASS** on a fresh chain and on idempotent reapplication/repeated tests. Effective-component snapshots/substitutions, explicit unknown states, all allergen-mapping states, independent cleaning verification, immutable sign-off, exact replay, stale high-water-mark conflicts, role/facility denial, audit/outbox parity, restricted function grants, deterministic evidence/sign-off races, and no run/inventory/schedule/shipping authority: **PASS**.
+- Public synthetic suite after rebasing onto `0119327`: **319 PASS, 0 FAIL, 6 SKIPPED** out of 325. The six skips require the unprovisioned private source corpus; no new private-workbook fidelity claim is made.
+- Browser behavior/accessibility suites: Chromium **49 PASS, 0 FAIL**; WebKit **45 PASS, 0 FAIL, 4 SKIPPED**; Firefox **45 PASS, 0 FAIL, 4 SKIPPED**. The four skips in each non-Chromium engine are only the reviewed Chromium-specific image comparisons. The Slice 2 record/review/sign-off journey passed in all three engines. One initial Firefox Mix Plan `page.goto` timeout passed both its isolated rerun and the repeated complete Firefox suite; no application change was made for that transient navigation failure.
+- Reviewed Chromium visual comparisons: **4 PASS, 0 FAIL**. Only the intentional 24-pixel phone-height changes from the longer description and Run verification tab were accepted; desktop baselines were unchanged.
+- Real authenticated Chromium/React/PostgreSQL QC journey: **PASS**, including second-manager creation, real component/allergen/cleaning writes, denied self-verification with no persisted verification, independent review, exact actor/time/high-water-mark sign-off, later-evidence `409`, one accepted sign-off only, all five new controls disabled offline, exactly the intended ten run records, and unchanged run status/revision/events.
+- Production build, strict TypeScript, server syntax, generated OpenAPI client byte parity, production dependency audit, no-AI guard, research-safety guard, agent-documentation checker, and diff whitespace check: **PASS**.
+- Slices 1–2 are implemented; Slices 3–7 and their owner gates remain pending. QC remains advisory evidence only. Manual screen-reader and visual-contrast qualification, physical Android/iOS devices, independent V6 review, deployment, and production readiness: **NOT RUN / NOT ESTABLISHED** as applicable. No production database operation, production access, or V1 data access occurred.

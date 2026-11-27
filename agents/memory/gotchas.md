@@ -118,7 +118,8 @@ the expected result.
 
 The QC plan provisionally named Slice 2 `0025-qc-run-verification.sql`, but
 active-run work later occupied `0025-active-runs-and-auto-track-debounce.sql`.
-The plan describes intent, not the current allocation.
+Slice 2 now uses `0026-qc-run-verification.sql`; later provisional plan numbers
+were shifted accordingly. The plan describes intent, not future allocation.
 
 **Rule:** fetch `main`, inventory `db/NNNN-*.sql`, and allocate the next actually
 available paired filename immediately before implementation. Never overwrite or

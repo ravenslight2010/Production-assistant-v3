@@ -25,10 +25,32 @@ const run = {
   doughCapacity: { source: "reviewed", doughballYield: 600, pizzasPerCase: 12 },
   inventoryConsumption: null, pauseIntervals: [], stationProgress: {},
 };
+const REVIEWER_ID = "77000000-0000-4000-8000-000000000003";
 const initialTarget = {
   targetKey: "browser-dough-weight", kind: "weight", unit: "g", minimum: "400", maximum: "500",
   active: true, revision: 1, updatedBy: STAFF_ID, updatedAt: "2035-05-01T12:00:00.000Z",
 };
+const componentSnapshot = {
+  productionDate: "2035-05-01", source: "effective-plan", overlayRevision: 0,
+  planCode: "PLAN-QC", planName: "QC Browser Plan",
+};
+const components = [
+  ["recipe:0:ingredient:0", "FLOUR-01", "Flour", "reviewed", ["wheat"]],
+  ["recipe:0:ingredient:1", "CHEESE-01", "Cheese", "reviewed-empty", []],
+  ["recipe:0:ingredient:2", "SAUCE-01", "Sauce", "unreviewed", []],
+  ["recipe:0:ingredient:3", "HERB-01", "Herbs", "unavailable", []],
+  ["recipe:0:ingredient:4", "OIL-01", "Oil", "invalid-mapping", []],
+  ["packaging:0", "BOX-01", "Pizza box", "unavailable", []],
+].map(([componentKey, productCode, productName, status, allergens]) => ({
+  component: {
+    componentKey, componentType: componentKey.startsWith("packaging:") ? "packaging" : "ingredient",
+    recipeCode: componentKey.startsWith("packaging:") ? null : "PIZZA",
+    recipeName: componentKey.startsWith("packaging:") ? null : "QC Browser Pizza",
+    stationKey: componentKey.startsWith("packaging:") ? "packaging" : "frontline",
+    productId: null, productCode, productName, quantity: "1", unit: "kg",
+  },
+  mapping: { componentKey, productCode: status === "unavailable" || status === "invalid-mapping" ? null : productCode, status, allergens },
+}));
 
 async function serveDist(t) {
   const server = createServer(async (request, response) => {
@@ -73,11 +95,36 @@ async function installQcApi(context, baseUrl, { access = "manager" } = {}) {
   const reads = [];
   let targets = [structuredClone(initialTarget)];
   let loseNextLot = false;
+  let loseNextComponent = false;
+  let denyNextSelfVerification = false;
+  let actorId = STAFF_ID;
   let nextRecord = 1;
   const capabilities = access === "manager" ? ["record-qc", "manage-qc"] : access === "recorder" ? ["record-qc"] : [];
-  const dashboard = () => ({
-    run, highWaterMark: records.length ? records.at(-1).sequence : "0", records: structuredClone(records),
-  });
+  const latestSignOff = () => [...records].reverse().find((record) => record.kind === "sign-off");
+  const dashboard = () => {
+    const signOff = latestSignOff();
+    return {
+      run, highWaterMark: records.length ? records.at(-1).sequence : "0", records: structuredClone(records),
+      components: components.map((item) => structuredClone(item.component)), componentSnapshot: structuredClone(componentSnapshot),
+      allergenMappings: components.map((item) => structuredClone(item.mapping)),
+      signOff: signOff ? {
+        recordId: signOff.recordId, actorId: signOff.actorId,
+        highWaterMark: signOff.details.highWaterMark, signedAt: signOff.recordedAt,
+      } : null,
+      newEvidenceSinceSignOff: signOff ? records.some((record) => record.kind !== "sign-off"
+        && BigInt(record.sequence) > BigInt(signOff.details.highWaterMark)) : false,
+    };
+  };
+  const appendRecord = (kind, details, { actorId: recordActorId = actorId, relatedRecordId = null } = {}) => {
+    const record = {
+      recordId: `77000000-0000-4000-8000-${String(1000 + nextRecord).padStart(12, "0")}`,
+      sequence: String(100 + nextRecord), runId: RUN_ID, actorId: recordActorId, relatedRecordId,
+      recordedAt: `2035-05-01T12:${String(nextRecord).padStart(2, "0")}:00.000Z`, kind, details,
+    };
+    nextRecord += 1;
+    records.push(record);
+    return record;
+  };
   const evaluation = (details) => {
     const target = targets.find((item) => item.targetKey === details.targetKey) ?? null;
     if (!target) return { target: null, outcome: "not-evaluated", notEvaluatedReason: details.targetKey ? "target-unavailable" : "no-reviewed-target" };
@@ -92,7 +139,7 @@ async function installQcApi(context, baseUrl, { access = "manager" } = {}) {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     if (pathname === "/api/v3/auth/session") {
-      return json(route, { staff: { userId: STAFF_ID, username: access, role: access, capabilities } });
+      return json(route, { staff: { userId: actorId, username: actorId === REVIEWER_ID ? "reviewer" : access, role: access, capabilities } });
     }
     if (pathname === "/api/v3/auth/bootstrap-status") return json(route, { available: false });
     if (access === "denied") return json(route, { error: "Forbidden" }, 403);
@@ -115,19 +162,69 @@ async function installQcApi(context, baseUrl, { access = "manager" } = {}) {
       if (prior) return json(route, { ...prior, replayed: true });
       const kind = pathname.endsWith("lots") ? "lot" : pathname.endsWith("weight-checks") ? "weight-check" : "brix-check";
       const details = kind === "lot" ? body.details : { ...body.details, ...evaluation(body.details) };
-      const record = {
-        recordId: `77000000-0000-4000-8000-${String(1000 + nextRecord).padStart(12, "0")}`,
-        sequence: String(100 + nextRecord), runId: RUN_ID, actorId: STAFF_ID, relatedRecordId: null,
-        recordedAt: `2035-05-01T12:${String(nextRecord).padStart(2, "0")}:00.000Z`, kind, details,
-      };
-      nextRecord += 1;
-      records.push(record);
+      const record = appendRecord(kind, details);
       const response = { outcome: "accepted", replayed: false, record, ...dashboard() };
       receipts.set(body.requestId, response);
       if (loseNextLot && kind === "lot") {
         loseNextLot = false;
         return json(route, { error: "Synthetic QC response loss after commit." }, 500);
       }
+      return json(route, response, 201);
+    }
+    if (["/api/v3/qc/component-checks", "/api/v3/qc/allergen-reviews", "/api/v3/qc/cleaning-records"].includes(pathname) && request.method() === "POST") {
+      const body = request.postDataJSON();
+      writes.push({ pathname, body });
+      const prior = receipts.get(body.requestId);
+      if (prior) return json(route, { ...prior, replayed: true });
+      const kind = pathname.endsWith("component-checks") ? "component-check"
+        : pathname.endsWith("allergen-reviews") ? "allergen-review" : "cleaning";
+      const fixture = kind === "cleaning" ? null : components.find((item) => item.component.componentKey === body.details.componentKey);
+      if (kind !== "cleaning" && !fixture) return json(route, { error: "Unknown effective component." }, 400);
+      const details = kind === "component-check"
+        ? { ...body.details, component: structuredClone(fixture.component), componentSnapshot: structuredClone(componentSnapshot) }
+        : kind === "allergen-review" ? {
+          ...body.details, component: structuredClone(fixture.component), componentSnapshot: structuredClone(componentSnapshot),
+          allergenMapping: structuredClone(fixture.mapping),
+        } : body.details;
+      const record = appendRecord(kind, details);
+      const response = { outcome: "accepted", replayed: false, record, ...dashboard() };
+      receipts.set(body.requestId, response);
+      if (loseNextComponent && kind === "component-check") {
+        loseNextComponent = false;
+        return json(route, { error: "Synthetic component response loss after commit." }, 500);
+      }
+      return json(route, response, 201);
+    }
+    const verificationMatch = pathname.match(/^\/api\/v3\/qc\/cleaning-records\/([0-9a-f-]{36})\/verification$/u);
+    if (verificationMatch && request.method() === "POST") {
+      const body = request.postDataJSON();
+      writes.push({ pathname, body });
+      const prior = receipts.get(body.requestId);
+      if (prior) return json(route, { ...prior, replayed: true });
+      if (denyNextSelfVerification) {
+        denyNextSelfVerification = false;
+        return json(route, { error: "A different authorized QC manager must verify this cleaning evidence." }, 403);
+      }
+      const cleaning = records.find((record) => record.recordId === verificationMatch[1] && record.kind === "cleaning");
+      if (!cleaning) return json(route, { error: "Cleaning evidence was not found." }, 404);
+      const record = appendRecord("cleaning-verification", body.details, { relatedRecordId: cleaning.recordId });
+      const response = { outcome: "accepted", replayed: false, record, ...dashboard() };
+      receipts.set(body.requestId, response);
+      return json(route, response, 201);
+    }
+    if (pathname === `/api/v3/qc/runs/${RUN_ID}/sign-off` && request.method() === "POST") {
+      const body = request.postDataJSON();
+      writes.push({ pathname, body });
+      const prior = receipts.get(body.requestId);
+      if (prior) return json(route, { ...prior, replayed: true });
+      if (body.expectedHighWaterMark !== dashboard().highWaterMark) {
+        return json(route, {
+          outcome: "conflict", replayed: false, expectedHighWaterMark: body.expectedHighWaterMark, ...dashboard(),
+        }, 409);
+      }
+      const record = appendRecord("sign-off", { highWaterMark: body.expectedHighWaterMark });
+      const response = { outcome: "accepted", replayed: false, record, ...dashboard() };
+      receipts.set(body.requestId, response);
       return json(route, response, 201);
     }
     if (pathname === "/api/v3/qc/targets" && request.method() === "POST") {
@@ -153,6 +250,10 @@ async function installQcApi(context, baseUrl, { access = "manager" } = {}) {
   return {
     writes, reads,
     loseNextLot: () => { loseNextLot = true; },
+    loseNextComponent: () => { loseNextComponent = true; },
+    denyNextSelfVerification: () => { denyNextSelfVerification = true; },
+    actAsReviewer: () => { actorId = REVIEWER_ID; },
+    addLotEvidence: () => appendRecord("lot", { productCode: "FLOUR-01", lotNumber: "LATER-EVIDENCE", notes: "" }),
     records: () => records,
     targets: () => targets,
   };
@@ -325,4 +426,107 @@ test("QC roles, keyboard forms, offline reads, and phone/tablet layout stay boun
   assert.equal(await page.getByRole("button", { name: "New target", exact: true }).isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Edit target browser-dough-weight", exact: true }).isDisabled(), true);
   assert.equal(api.writes.length, writesBeforeOffline, "offline QC mode must not issue writes");
+});
+
+
+test("QC run verification preserves effective evidence, independent review, exact retry, and sign-off boundaries", { timeout: 90_000 }, async (t) => {
+  const baseUrl = await serveDist(t);
+  const browser = await openBrowser(t);
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: "block" });
+  const api = await installQcApi(context, baseUrl);
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await openQc(page, baseUrl);
+  await page.getByRole("tab", { name: "Run verification", exact: true }).click();
+  await page.getByRole("heading", { name: "Component identity and presence", exact: true }).waitFor();
+  await page.getByText("Pizza box", { exact: true }).waitFor();
+  assert.equal(await page.getByText("Not recorded", { exact: true }).count(), 6);
+
+  const allergenPanel = page.locator('section[aria-labelledby="qc-allergens-heading"]');
+  await allergenPanel.getByText(/Reviewed: wheat/).first().waitFor();
+  await allergenPanel.getByText(/Reviewed: no fixed allergens listed/).waitFor();
+  await allergenPanel.getByText(/Unreviewed: allergen status is unknown, not allergen-free/).waitFor();
+  await allergenPanel.getByText(/Unavailable: no canonical allergen mapping is available/).waitFor();
+  await allergenPanel.getByText(/Invalid mapping: review the canonical setup record; this is not allergen-free/).waitFor();
+
+  const componentForm = page.locator('form[aria-label="Record QC component check"]');
+  await componentForm.getByLabel(/^Presence/).selectOption("present");
+  await componentForm.getByLabel("Component notes (optional)", { exact: true }).fill("Identity matched");
+  await componentForm.getByRole("button", { name: "Record component check", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Component check recorded." }).waitFor();
+  await page.locator('section[aria-labelledby="qc-components-heading"]').getByRole("list").getByText("Present", { exact: true }).waitFor();
+
+  const allergenForm = page.locator('form[aria-label="Record QC allergen review"]');
+  await allergenForm.getByLabel(/^Ingredient to review/).selectOption("recipe:0:ingredient:1");
+  await allergenForm.getByLabel(/^Staging status/).selectOption("staged");
+  await allergenForm.getByLabel("Allergen review notes (optional)", { exact: true }).fill("Separated staging confirmed");
+  await allergenForm.getByRole("button", { name: "Record allergen review", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Allergen review recorded." }).waitFor();
+  await allergenPanel.getByText("Staging: Staged", { exact: true }).waitFor();
+
+  const cleaningForm = page.locator('form[aria-label="Record QC cleaning"]');
+  await cleaningForm.getByLabel("Area or equipment", { exact: true }).fill("Mixer 1");
+  await cleaningForm.getByLabel(/^Cleaning status/).selectOption("cleaned");
+  await cleaningForm.getByLabel("Cleaning notes (optional)", { exact: true }).fill("Food-contact surfaces cleaned");
+  await cleaningForm.getByRole("button", { name: "Record cleaning", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Cleaning recorded." }).waitFor();
+
+  api.denyNextSelfVerification();
+  await page.getByRole("button", { name: "Record verification for Mixer 1", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "Your session no longer authorizes this QC record." }).waitFor();
+  assert.equal(api.records().filter((record) => record.kind === "cleaning-verification").length, 0);
+  api.actAsReviewer();
+  await page.reload();
+  await page.getByRole("heading", { name: "Quality control", exact: true }).waitFor();
+  await page.getByRole("tab", { name: "Run verification", exact: true }).click();
+  await page.getByRole("button", { name: "Record verification for Mixer 1", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Cleaning verification recorded." }).waitFor();
+  await page.getByText(new RegExp(`Verified by\\s*${REVIEWER_ID}`)).waitFor();
+
+  await page.getByRole("button", { name: "Sign off current QC evidence", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "QC evidence signed off through high-water mark 104." }).waitFor();
+  const signOffPanel = page.locator('section[aria-labelledby="qc-signoff-heading"]');
+  await signOffPanel.getByText(REVIEWER_ID, { exact: true }).waitFor();
+  await signOffPanel.getByText("104", { exact: true }).waitFor();
+  assert.equal(await signOffPanel.getByText(/New evidence recorded since sign-off/).count(), 0);
+
+  api.addLotEvidence();
+  await page.getByRole("button", { name: "Sign off current QC evidence", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "No sign-off was written." }).waitFor();
+  await signOffPanel.getByText(/New evidence recorded since sign-off/).waitFor();
+  await signOffPanel.getByText(/existing sign-off is historical/).waitFor();
+  assert.equal(api.records().filter((record) => record.kind === "sign-off").length, 1);
+
+  api.loseNextComponent();
+  await componentForm.getByLabel(/^Presence/).selectOption("absent");
+  await componentForm.getByLabel("Component notes (optional)", { exact: true }).fill("Retry component evidence");
+  await componentForm.getByRole("button", { name: "Record component check", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "Synthetic component response loss after commit." }).waitFor();
+  const retained = api.writes.at(-1).body;
+  await page.reload();
+  await page.getByRole("heading", { name: "Quality control", exact: true }).waitFor();
+  await page.getByRole("status").filter({ hasText: "One component-check record has not been confirmed." }).waitFor();
+  await page.getByRole("button", { name: "Retry same request", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Previous request confirmed by exact retry. Component check recorded." }).waitFor();
+  const attempts = api.writes.filter((entry) => entry.body.requestId === retained.requestId);
+  assert.equal(attempts.length, 2);
+  assert.deepEqual(attempts[0].body, attempts[1].body);
+  assert.equal(api.records().filter((record) => record.kind === "component-check"
+    && record.details.notes === "Retry component evidence").length, 1);
+
+  await page.getByRole("tab", { name: "Run verification", exact: true }).click();
+  for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1024, height: 768 }, { width: 1440, height: 1000 }]) {
+    await page.setViewportSize(viewport);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+      `run verification must not overflow at ${viewport.width}px`);
+  }
+  const writesBeforeOffline = api.writes.length;
+  await context.setOffline(true);
+  await page.getByText(/Offline read-only view. Showing QC values confirmed/).waitFor();
+  for (const name of ["Record component check", "Record allergen review", "Record cleaning", "Record verification for Mixer 1", "Sign off current QC evidence"]) {
+    assert.equal(await page.getByRole("button", { name, exact: true }).isDisabled(), true, `${name} must be disabled offline`);
+  }
+  assert.equal(api.writes.length, writesBeforeOffline, "offline run verification must not issue writes");
+  assert.equal(errors.length, 0, errors.join("\n"));
 });

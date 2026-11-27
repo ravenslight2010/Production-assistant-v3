@@ -437,6 +437,19 @@ assert_no_direct_table_access() {
     exit 1
   fi
 }
+assert_no_direct_sequence_access() {
+  local sequence="$1"
+  if "${PSQL[@]}" -c "SET ROLE v3_api_test; SELECT nextval('$sequence'::regclass);" \
+    > /dev/null 2> "$TMP_DIR/direct-sequence-access.log"; then
+    echo "API role unexpectedly has direct access to $sequence" >&2
+    exit 1
+  fi
+  if ! grep -q "permission denied" "$TMP_DIR/direct-sequence-access.log"; then
+    cat "$TMP_DIR/direct-sequence-access.log" >&2
+    echo "Direct access to $sequence failed for an unexpected reason" >&2
+    exit 1
+  fi
+}
 assert_no_direct_table_access "v3.runs"
 assert_no_direct_table_access "v3.staff_accounts"
 assert_no_direct_table_access "v3.staff_sessions"
@@ -727,6 +740,9 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0024-qc-evidence-foundation.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0025-active-runs-and-auto-track-debounce.sql" >/dev/null
 "${PSQL[@]}" -f "$ROOT/db/0025-active-runs-and-auto-track-debounce.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0026-qc-run-verification.sql" >/dev/null
+# Slice 2 migration and transaction test are both safe to re-run.
+"${PSQL[@]}" -f "$ROOT/db/0026-qc-run-verification.sql" >/dev/null
 "${PSQL[@]}" -c "
   GRANT EXECUTE ON FUNCTION v3.list_active_runs(uuid, integer) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.run_list_version(uuid) TO v3_api_test;
@@ -791,6 +807,11 @@ fi
   GRANT EXECUTE ON FUNCTION v3.record_qc_lot(uuid, text, text, uuid, jsonb) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.record_qc_weight_check(uuid, text, text, uuid, jsonb) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.record_qc_brix_check(uuid, text, text, uuid, jsonb) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.record_qc_component_check(uuid, text, text, uuid, jsonb) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.record_qc_allergen_review(uuid, text, text, uuid, jsonb) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.record_qc_cleaning(uuid, text, text, uuid, jsonb) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.verify_qc_cleaning(uuid, text, text, uuid, jsonb) TO v3_api_test;
+  GRANT EXECUTE ON FUNCTION v3.sign_off_qc_run(uuid, text, text, uuid, bigint) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.save_qc_target(uuid, text, text, text, bigint, jsonb) TO v3_api_test;
 " >/dev/null
 for table in v3.cycle_count_schedules v3.cycle_count_confirmations v3.inventory_lots v3.inventory_lot_movements v3.freezer_surplus_lots v3.freezer_surplus_confirmations v3.freezer_surplus_allocations v3.freezer_surplus_events v3.warehouse_guidance_settings v3.inventory_reorder_points v3.run_stoppages v3.facility_stop_reason_settings v3.facility_operation_events v3.substitution_overlays v3.substitution_rules v3.substitution_rule_history v3.completed_run_substitutions v3.mix_recipes v3.mix_recipe_components v3.mix_recipe_history v3.mix_plan_days v3.mix_plan_amounts v3.mix_finalizations v3.mix_surplus_state v3.mix_surplus_lots v3.mix_surplus_allocations v3.mix_surplus_history; do
@@ -822,6 +843,9 @@ assert_no_direct_table_access "v3.qc_command_receipts"
 assert_no_direct_table_access "v3.qc_audit_events"
 assert_no_direct_table_access "v3.qc_targets"
 assert_no_direct_table_access "v3.qc_outbox_events"
+assert_no_direct_table_access "v3.qc_run_signoffs"
+assert_no_direct_sequence_access "v3.qc_records_sequence_seq"
+assert_no_direct_sequence_access "v3.qc_run_signoffs_sequence_seq"
 assert_no_direct_table_access "v3.setup_ingredient_records"
 assert_no_direct_table_access "v3.setup_mix_records"
 assert_no_direct_table_access "v3.setup_mix_component_links"
@@ -870,6 +894,8 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0022-combined-setup-review.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0023-schedule-import-history.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0024-qc-evidence-foundation.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0026-qc-run-verification.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0026-qc-run-verification.test.sql"
 ACCOUNT_FUNCTION_PRIVILEGES="$("${PSQL[@]}" -c "
   SET ROLE v3_api_test;
   SELECT has_function_privilege(current_user,
@@ -985,6 +1011,116 @@ INVITATION_RACE_STATE="$("${PSQL[@]}" -c "
 ")"
 if [[ "$INVITATION_RACE_RESULTS" != "accepted invalid " || "$INVITATION_RACE_STATE" != "1|consumed|1|1" ]]; then
   echo "Concurrent invitation acceptance did not converge on one account: $INVITATION_RACE_RESULTS / $INVITATION_RACE_STATE" >&2
+  exit 1
+fi
+
+QC26_RACE_FACILITY="$("${PSQL[@]}" -c "SELECT facility_id FROM v3.facility_scope WHERE singleton;")"
+QC26_RACE_MANAGER="26200000-0000-4000-8000-000000000001"
+QC26_RACE_RECORDER="26200000-0000-4000-8000-000000000002"
+QC26_RACE_RUN="26200000-0000-4000-8000-000000000010"
+"${PSQL[@]}" -c "
+  INSERT INTO v3.staff_accounts (id, username, password_hash, disabled) VALUES
+    ('$QC26_RACE_MANAGER', 'QC26RaceManager', 'argon2id\$v=19\$m=19456,t=2,p=1\$c2FsdA==\$aGFzaA==', false),
+    ('$QC26_RACE_RECORDER', 'QC26RaceRecorder', 'argon2id\$v=19\$m=19456,t=2,p=1\$c2FsdA==\$aGFzaA==', false);
+  INSERT INTO v3.roles (name, capabilities)
+    VALUES ('qc-recorder-26-race', '[\"record-qc\"]'::jsonb);
+  INSERT INTO v3.user_roles (user_id, role_name) VALUES
+    ('$QC26_RACE_MANAGER', 'manager'), ('$QC26_RACE_RECORDER', 'qc-recorder-26-race');
+  INSERT INTO v3.runs (
+    facility_id, id, status, created_at, updated_at, setup_snapshot, production_date
+  ) VALUES (
+    '$QC26_RACE_FACILITY', '$QC26_RACE_RUN', 'planned', clock_timestamp(), clock_timestamp(),
+    '{\"label\":\"QC26 race\",\"targetCases\":1}'::jsonb, DATE '2032-06-27'
+  );
+" >/dev/null
+
+"${PSQL[@]}" > "$TMP_DIR/qc26-cleaning-race" <<SQL &
+BEGIN;
+SET ROLE v3_api_test;
+CREATE TEMP TABLE qc26_cleaning_race_result AS
+SELECT v3.record_qc_cleaning(
+  '$QC26_RACE_RECORDER', '0026-race-cleaning', repeat('a', 64), '$QC26_RACE_RUN',
+  '{"area":"Race mixer","status":"cleaned","notes":""}'::jsonb
+) AS result;
+\! touch $TMP_DIR/qc26-cleaning-ready
+SELECT pg_sleep(1);
+COMMIT;
+RESET ROLE;
+SELECT result->>'outcome' FROM qc26_cleaning_race_result;
+SQL
+QC26_CLEANING_PID=$!
+for _ in {1..100}; do
+  [[ -f "$TMP_DIR/qc26-cleaning-ready" ]] && break
+  if ! kill -0 "$QC26_CLEANING_PID" 2>/dev/null; then
+    cat "$TMP_DIR/qc26-cleaning-race" >&2
+    echo "QC cleaning race fixture failed before acquiring the run lock." >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+[[ -f "$TMP_DIR/qc26-cleaning-ready" ]] || { echo "QC cleaning race did not become ready." >&2; exit 1; }
+QC26_CLEANING_SIGNOFF="$("${PSQL[@]}" -c "
+  SET ROLE v3_api_test;
+  SELECT result->>'outcome' FROM (
+    SELECT v3.sign_off_qc_run(
+      '$QC26_RACE_MANAGER', '0026-race-cleaning-signoff', repeat('b', 64), '$QC26_RACE_RUN', 0
+    ) AS result
+  ) AS signoff;
+  RESET ROLE;
+")"
+wait "$QC26_CLEANING_PID"
+QC26_CLEANING_OUTCOME="$(tr -d '[:space:]' < "$TMP_DIR/qc26-cleaning-race")"
+if [[ "$QC26_CLEANING_OUTCOME" != "accepted" || "$QC26_CLEANING_SIGNOFF" != "conflict" ]]; then
+  echo "Concurrent cleaning/sign-off did not fence unseen evidence: $QC26_CLEANING_OUTCOME / $QC26_CLEANING_SIGNOFF" >&2
+  exit 1
+fi
+
+"${PSQL[@]}" > "$TMP_DIR/qc26-lot-race" <<SQL &
+BEGIN;
+SET ROLE v3_api_test;
+CREATE TEMP TABLE qc26_lot_race_result AS
+SELECT v3.record_qc_lot(
+  '$QC26_RACE_RECORDER', '0026-race-lot', repeat('c', 64), '$QC26_RACE_RUN',
+  '{"productCode":"QC26-RACE","lotNumber":"RACE-LOT","notes":""}'::jsonb
+) AS result;
+\! touch $TMP_DIR/qc26-lot-ready
+SELECT pg_sleep(1);
+COMMIT;
+RESET ROLE;
+SELECT result->>'outcome' FROM qc26_lot_race_result;
+SQL
+QC26_LOT_PID=$!
+for _ in {1..100}; do
+  [[ -f "$TMP_DIR/qc26-lot-ready" ]] && break
+  if ! kill -0 "$QC26_LOT_PID" 2>/dev/null; then
+    cat "$TMP_DIR/qc26-lot-race" >&2
+    echo "QC lot race fixture failed before acquiring the run lock." >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+[[ -f "$TMP_DIR/qc26-lot-ready" ]] || { echo "QC lot race did not become ready." >&2; exit 1; }
+QC26_LOT_SIGNOFF="$("${PSQL[@]}" -c "
+  SET ROLE v3_api_test;
+  SELECT result->>'outcome' FROM (
+    SELECT v3.sign_off_qc_run(
+      '$QC26_RACE_MANAGER', '0026-race-lot-signoff', repeat('d', 64), '$QC26_RACE_RUN', 1
+    ) AS result
+  ) AS signoff;
+  RESET ROLE;
+")"
+wait "$QC26_LOT_PID"
+QC26_LOT_OUTCOME="$(tr -d '[:space:]' < "$TMP_DIR/qc26-lot-race")"
+QC26_RACE_STATE="$("${PSQL[@]}" -c "
+  SELECT r.status || '|' || r.revision || '|' ||
+    (SELECT count(*) FROM v3.qc_records q WHERE q.run_id = r.id) || '|' ||
+    (SELECT count(*) FROM v3.qc_run_signoffs s WHERE s.run_id = r.id) || '|' ||
+    (SELECT count(*) FROM v3.run_events e WHERE e.run_id = r.id) || '|' ||
+    (SELECT count(*) FROM v3.inventory_movements m WHERE m.run_id = r.id)
+  FROM v3.runs r WHERE r.facility_id = '$QC26_RACE_FACILITY' AND r.id = '$QC26_RACE_RUN';
+")"
+if [[ "$QC26_LOT_OUTCOME" != "accepted" || "$QC26_LOT_SIGNOFF" != "conflict" || "$QC26_RACE_STATE" != "planned|0|2|0|0|0" ]]; then
+  echo "Concurrent lot/sign-off or production isolation failed: $QC26_LOT_OUTCOME / $QC26_LOT_SIGNOFF / $QC26_RACE_STATE" >&2
   exit 1
 fi
 # The disposable database teardown removes these fixtures and their append-only audit.

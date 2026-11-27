@@ -36,17 +36,41 @@ const LOT = {
   recordedAt: "2026-11-25T12:00:00.000Z",
   details: { productCode: "FLOUR", lotNumber: "LOT-A", notes: "" },
 };
+const COMPONENT = {
+  componentKey: "recipe:0:ingredient:0", componentType: "ingredient",
+  recipeCode: "DOUGH", recipeName: "Dough", stationKey: "dough",
+  productId: null, productCode: "FLOUR", productName: "Flour", quantity: "1", unit: "kg",
+};
+const COMPONENT_SNAPSHOT = {
+  productionDate: "2026-11-25", source: "effective-plan", overlayRevision: 0,
+  planCode: "PLAN-1", planName: "Plan 1",
+};
+const ALLERGEN_MAPPING = {
+  componentKey: COMPONENT.componentKey, productCode: COMPONENT.productCode,
+  status: "reviewed", allergens: ["wheat"],
+};
 
-function dashboard(record = null) {
+function runRecord(kind, details, overrides = {}) {
+  return { ...LOT, kind, details, ...overrides };
+}
+
+function dashboard(record = null, overrides = {}) {
+  const records = record === null ? [] : Array.isArray(record) ? record : [record];
   return {
     run: { id: RUN_ID },
-    highWaterMark: record ? record.sequence : "0",
-    records: record ? [record] : [],
+    highWaterMark: records.at(-1)?.sequence ?? "0",
+    records,
+    components: [COMPONENT],
+    componentSnapshot: COMPONENT_SNAPSHOT,
+    allergenMappings: [ALLERGEN_MAPPING],
+    signOff: null,
+    newEvidenceSinceSignOff: false,
+    ...overrides,
   };
 }
 
-function accepted(record = LOT, replayed = false) {
-  return { outcome: "accepted", replayed, record, ...dashboard(record) };
+function accepted(record = LOT, replayed = false, overrides = {}) {
+  return { outcome: "accepted", replayed, record, ...dashboard(record, overrides) };
 }
 
 async function withApi(t, {
@@ -148,6 +172,10 @@ test("QC request envelopes and JSON bodies are strict and bounded", async (t) =>
     ["/api/v3/qc/lots", { ...lotBody(), extra: true }, 400],
     ["/api/v3/qc/lots", { ...lotBody(), details: { productCode: "FLOUR" } }, 400],
     ["/api/v3/qc/targets", { requestId: REQUEST_ID }, 400],
+    [`/api/v3/qc/cleaning-records/${RECORD_ID}/verification`, {
+      requestId: REQUEST_ID, details: { status: "verified", notes: "" }, extra: true,
+    }, 400],
+    [`/api/v3/qc/runs/${RUN_ID}/sign-off`, { requestId: REQUEST_ID }, 400],
   ];
   for (const [path, body, status] of cases) {
     assert.equal((await send(api.baseUrl, path, { method: "POST", body })).status, status);
@@ -183,6 +211,12 @@ test("QC route methods return explicit 405 responses with Allow headers", async 
   const targetDelete = await send(api.baseUrl, "/api/v3/qc/targets", { method: "DELETE" });
   assert.equal(targetDelete.status, 405);
   assert.equal(targetDelete.headers.get("allow"), "GET, POST");
+  const verificationRead = await send(api.baseUrl, `/api/v3/qc/cleaning-records/${RECORD_ID}/verification`);
+  assert.equal(verificationRead.status, 405);
+  assert.equal(verificationRead.headers.get("allow"), "POST");
+  const signOffRead = await send(api.baseUrl, `/api/v3/qc/runs/${RUN_ID}/sign-off`);
+  assert.equal(signOffRead.status, 405);
+  assert.equal(signOffRead.headers.get("allow"), "POST");
   assert.equal(api.calls.length, 0);
 });
 
@@ -277,6 +311,91 @@ test("weight and Brix endpoints preserve their distinct command contracts", asyn
   assert.equal(brixResponse.status, 201);
   assert.match(api.calls[0].text, /record_qc_weight_check/u);
   assert.match(api.calls[1].text, /record_qc_brix_check/u);
+});
+
+test("QC run verification routes preserve their five command contracts", async (t) => {
+  const componentCheck = runRecord("component-check", {
+    componentKey: COMPONENT.componentKey, presence: "present", notes: "Identity confirmed",
+    component: COMPONENT, componentSnapshot: COMPONENT_SNAPSHOT,
+  });
+  const allergenReview = runRecord("allergen-review", {
+    componentKey: COMPONENT.componentKey, stagingStatus: "staged", notes: "Staged separately",
+    component: COMPONENT, componentSnapshot: COMPONENT_SNAPSHOT, allergenMapping: ALLERGEN_MAPPING,
+  });
+  const cleaning = runRecord("cleaning", { area: "Mixer 1", status: "cleaned", notes: "Rinsed" }, {
+    recordId: "10000000-0000-4000-8000-000000000006",
+  });
+  const verification = runRecord("cleaning-verification", { status: "verified", notes: "Confirmed" }, {
+    recordId: "10000000-0000-4000-8000-000000000007", sequence: "2", relatedRecordId: cleaning.recordId,
+  });
+  const signOff = runRecord("sign-off", { highWaterMark: "2" }, {
+    recordId: "10000000-0000-4000-8000-000000000008", sequence: "3",
+  });
+  const signOffState = {
+    signOff: {
+      recordId: signOff.recordId, actorId: ACTOR_ID,
+      highWaterMark: "2", signedAt: signOff.recordedAt,
+    },
+  };
+  const api = await withApi(t, {
+    query: async (sql) => ({ rows: [{ result:
+      sql.includes("record_qc_component_check") ? accepted(componentCheck)
+        : sql.includes("record_qc_allergen_review") ? accepted(allergenReview)
+          : sql.includes("record_qc_cleaning") ? accepted(cleaning)
+            : sql.includes("verify_qc_cleaning") ? accepted(verification)
+              : accepted(signOff, false, signOffState) }] }),
+  });
+  const requests = [
+    ["/api/v3/qc/component-checks", {
+      requestId: REQUEST_ID, runId: RUN_ID,
+      details: { componentKey: COMPONENT.componentKey, presence: "present", notes: "Identity confirmed" },
+    }],
+    ["/api/v3/qc/allergen-reviews", {
+      requestId: REQUEST_ID, runId: RUN_ID,
+      details: { componentKey: COMPONENT.componentKey, stagingStatus: "staged", notes: "Staged separately" },
+    }],
+    ["/api/v3/qc/cleaning-records", {
+      requestId: REQUEST_ID, runId: RUN_ID,
+      details: { area: "Mixer 1", status: "cleaned", notes: "Rinsed" },
+    }],
+    [`/api/v3/qc/cleaning-records/${cleaning.recordId}/verification`, {
+      requestId: REQUEST_ID, details: { status: "verified", notes: "Confirmed" },
+    }],
+    [`/api/v3/qc/runs/${RUN_ID}/sign-off`, { requestId: REQUEST_ID, expectedHighWaterMark: "2" }],
+  ];
+  for (const [path, body] of requests) {
+    const response = await send(api.baseUrl, path, { method: "POST", body });
+    assert.equal(response.status, 201, path);
+    assert.equal((await response.json()).outcome, "accepted");
+  }
+  assert.match(api.calls[0].text, /record_qc_component_check/u);
+  assert.match(api.calls[1].text, /record_qc_allergen_review/u);
+  assert.match(api.calls[2].text, /record_qc_cleaning/u);
+  assert.match(api.calls[3].text, /verify_qc_cleaning/u);
+  assert.equal(api.calls[3].values[3], cleaning.recordId);
+  assert.match(api.calls[4].text, /sign_off_qc_run/u);
+  assert.equal(api.calls[4].values[4], "2");
+
+  const replayApi = await withApi(t, {
+    query: async () => ({ rows: [{ result: accepted(signOff, true, signOffState) }] }),
+  });
+  const replay = await send(replayApi.baseUrl, `/api/v3/qc/runs/${RUN_ID}/sign-off`, {
+    method: "POST", body: { requestId: REQUEST_ID, expectedHighWaterMark: "2" },
+  });
+  assert.equal(replay.status, 200);
+  assert.equal((await replay.json()).replayed, true);
+
+  const conflictApi = await withApi(t, {
+    query: async () => ({ rows: [{ result: {
+      outcome: "conflict", replayed: false, expectedHighWaterMark: "1",
+      ...dashboard(signOff, signOffState),
+    } }] }),
+  });
+  const conflict = await send(conflictApi.baseUrl, `/api/v3/qc/runs/${RUN_ID}/sign-off`, {
+    method: "POST", body: { requestId: REQUEST_ID, expectedHighWaterMark: "1" },
+  });
+  assert.equal(conflict.status, 409);
+  assert.equal((await conflict.json()).highWaterMark, "3");
 });
 
 test("unexpected QC failures return safe JSON and logs exclude request and operational details", async (t) => {

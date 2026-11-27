@@ -7,7 +7,7 @@ constraints and known drift.
 
 ## Status and execution order
 
-As of 2026-11-27, Slice 1 is implemented and Slices 2–7 remain approved but
+As of 2026-11-27, Slices 1–2 are implemented and Slices 3–7 remain approved but
 unimplemented. Handle completion as one continuous objective, executed in order:
 
 1. QC evidence foundation, current-run dashboard, lots, weights, Brix, targets.
@@ -25,14 +25,29 @@ mega-commit or begin owner-gated behavior before its decision.
 
 ## Migration-number drift
 
-The plan's provisional Slice 2 filename `0025-qc-run-verification.sql` is stale:
-`0025-active-runs-and-auto-track-debounce.sql` and its paired test now occupy
-that number. Slice 1 is `0024-qc-evidence-foundation.sql`.
+Slice 1 is `0024-qc-evidence-foundation.sql`; Slice 2 is
+`0026-qc-run-verification.sql` because
+`0025-active-runs-and-auto-track-debounce.sql` already occupied `0025`. Later
+plan migrations were shifted to provisional `0027`–`0031` filenames.
 
 Before every migration, inventory current `db/NNNN-*.sql` on freshly fetched
 `main` and choose the next actually available number with a matching `.test.sql`.
 Update the plan's stale filename when implementing the affected slice. Never
 overwrite or renumber another feature's migration to match an older plan.
+
+## Slice 2 verified state — 2026-11-27
+
+The migration, API, generated client, run-verification UI, exact-retry storage,
+and authenticated real-PostgreSQL journey are implemented. Public tests, the
+Chromium/WebKit/Firefox browser matrix, reviewed Chromium visual comparisons,
+SQL replay/races, typecheck/build, and repository guards passed as detailed in
+`research/feature-matrix.md`. Sign-off is fenced to the global QC evidence
+sequence high-water mark, not a per-run record count; tests must derive that
+mark from the canonical dashboard/request rather than hard-code it.
+
+The next slice is Slice 3, provisionally `0027-qc-advisory-references.sql`.
+QC-2/QC-3 still gate label/date activation and evaluated comparisons. Manual
+screen-reader/visual-contrast and physical-device qualification remain unrun.
 
 ## Owner gates
 

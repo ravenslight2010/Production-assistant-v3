@@ -5,18 +5,25 @@ import {
   getQcRunDashboard,
   getQcTargets,
   listRuns,
+  recordQcAllergenReview,
   recordQcBrixCheck,
+  recordQcCleaning,
+  recordQcComponentCheck,
   recordQcLot,
   recordQcWeightCheck,
   saveQcTarget,
+  signOffQcRun,
+  verifyQcCleaning,
   type AuthSession,
   type QcDashboard,
+  type QcRecordResult,
   type QcRunRecord,
   type QcTarget,
   type QcTargetSaveRequest,
   type Run,
 } from "../api";
 import { QcRecordForms, type QcRecordSubmission } from "../components/QcRecordForms";
+import { QcRunVerification, type QcVerificationSubmission } from "../components/QcRunVerification";
 import { QcTargetManager } from "../components/QcTargetManager";
 import {
   clearPendingQcCommand,
@@ -29,8 +36,11 @@ import {
   type PendingQcCommand,
 } from "../components/qc-storage";
 
-type Section = "run" | "records" | "targets";
+type Section = "run" | "verification" | "records" | "targets";
 type RecordCommand = Extract<PendingQcCommand, { channel: "lot" | "weight-check" | "brix-check" }>;
+type VerificationCommand = Extract<PendingQcCommand, { channel: "component-check" | "allergen-review" | "cleaning" | "cleaning-verification" }>;
+type SignOffCommand = Extract<PendingQcCommand, { channel: "sign-off" }>;
+type EvidenceCommand = RecordCommand | VerificationCommand | SignOffCommand;
 type TargetCommand = Extract<PendingQcCommand, { channel: "target" }>;
 
 const reasonLabels: Record<string, string> = {
@@ -46,17 +56,37 @@ function message(cause: unknown, fallback: string): string {
 }
 
 function recordName(record: QcRunRecord): string {
-  return record.kind === "lot" ? "Lot" : record.kind === "weight-check" ? "Weight check" : "Brix check";
+  const names = {
+    lot: "Lot", "weight-check": "Weight check", "brix-check": "Brix check",
+    "component-check": "Component check", "allergen-review": "Allergen review",
+    cleaning: "Cleaning", "cleaning-verification": "Cleaning verification", "sign-off": "QC sign-off",
+  } as const;
+  return names[record.kind];
 }
 
 function observation(record: QcRunRecord): string {
   if (record.kind === "lot") return `${record.details.productCode} · ${record.details.lotNumber}`;
-  const phase = record.kind === "weight-check" ? `${record.details.phase === "pre-run" ? "Pre-run" : "30-minute"} · ` : "";
-  return `${phase}${record.details.value} ${record.details.unit}`;
+  if (record.kind === "weight-check" || record.kind === "brix-check") {
+    const phase = record.kind === "weight-check" ? `${record.details.phase === "pre-run" ? "Pre-run" : "30-minute"} · ` : "";
+    return `${phase}${record.details.value} ${record.details.unit}`;
+  }
+  if (record.kind === "component-check") return `${record.details.component.productName} · ${record.details.presence === "unknown" ? "Unknown / not checked" : record.details.presence}`;
+  if (record.kind === "allergen-review") return `${record.details.component.productName} · ${record.details.stagingStatus === "unknown" ? "Unknown / not checked" : record.details.stagingStatus}`;
+  if (record.kind === "cleaning") return `${record.details.area} · ${record.details.status === "unknown" ? "Unknown / not checked" : record.details.status}`;
+  if (record.kind === "cleaning-verification") return `Cleaning · ${record.details.status}`;
+  return `Evidence through ${record.details.highWaterMark}`;
 }
 
 function Evaluation({ record }: { record: QcRunRecord }) {
   if (record.kind === "lot") return <span className="status-pill">Recorded</span>;
+  if (record.kind === "component-check" || record.kind === "allergen-review" || record.kind === "cleaning"
+    || record.kind === "cleaning-verification" || record.kind === "sign-off") {
+    const label = record.kind === "component-check" ? record.details.presence
+      : record.kind === "allergen-review" ? record.details.stagingStatus
+        : record.kind === "cleaning" ? record.details.status
+          : record.kind === "cleaning-verification" ? record.details.status : "Signed";
+    return <span className={`status-pill ${label === "unknown" ? "status-paused" : ""}`}>{label === "unknown" ? "Unknown / not checked" : label}</span>;
+  }
   const outcome = record.details.outcome;
   return (
     <div>
@@ -67,6 +97,15 @@ function Evaluation({ record }: { record: QcRunRecord }) {
       {record.details.target ? <span className="mt-2 block font-mono text-[10px] text-muted-foreground">{record.details.target.targetKey} · revision {record.details.target.revision}</span> : null}
     </div>
   );
+}
+
+function evidenceOutcome(record: QcRunRecord): string {
+  if (record.kind === "lot") return "Lot evidence recorded.";
+  if (record.kind === "weight-check" || record.kind === "brix-check") {
+    return `${recordName(record)} recorded with outcome ${record.details.outcome.replace("-", " ")}${record.details.notEvaluatedReason ? `: ${reasonLabels[record.details.notEvaluatedReason]}` : ""}.`;
+  }
+  if (record.kind === "sign-off") return `QC evidence signed off through high-water mark ${record.details.highWaterMark}.`;
+  return `${recordName(record)} recorded.`;
 }
 
 export function QcPage({ session, online }: { session: AuthSession; online: boolean }) {
@@ -204,26 +243,44 @@ export function QcPage({ session, online }: { session: AuthSession; online: bool
     setPending(null);
   }
 
-  async function executeRecord(command: RecordCommand): Promise<boolean> {
+  async function executeRecord(command: EvidenceCommand): Promise<boolean> {
     if (!online || writeLock.current) return false;
     writeLock.current = true;
     setSaving(true);
     setError(null);
     const requestGeneration = generation.current;
     try {
-      const result = command.channel === "lot" ? await recordQcLot(command.request)
-        : command.channel === "weight-check" ? await recordQcWeightCheck(command.request)
-          : await recordQcBrixCheck(command.request);
+      let result: QcRecordResult;
+      if (command.channel === "lot") result = await recordQcLot(command.request);
+      else if (command.channel === "weight-check") result = await recordQcWeightCheck(command.request);
+      else if (command.channel === "brix-check") result = await recordQcBrixCheck(command.request);
+      else if (command.channel === "component-check") result = await recordQcComponentCheck(command.request);
+      else if (command.channel === "allergen-review") result = await recordQcAllergenReview(command.request);
+      else if (command.channel === "cleaning") result = await recordQcCleaning(command.request);
+      else if (command.channel === "cleaning-verification") result = await verifyQcCleaning(command.recordId, command.request);
+      else {
+        const signed = await signOffQcRun(command.runId, command.request);
+        if (requestGeneration !== generation.current) return false;
+        if (signed.outcome === "conflict") {
+          resolvePending();
+          setRuns((current) => current.some((run) => run.id === signed.run.id)
+            ? current.map((run) => run.id === signed.run.id ? signed.run : run) : [signed.run, ...current]);
+          const cacheWarning = cacheConfirmed(signed, targets);
+          if (signed.run.id === selectedId) setDashboard(signed);
+          setNotice(null);
+          setError(`${cacheWarning ? `${cacheWarning} ` : ""}QC evidence changed before sign-off. The canonical dashboard is now shown at high-water mark ${signed.highWaterMark}; review it before signing again. No sign-off was written.`);
+          return false;
+        }
+        result = signed;
+      }
       if (requestGeneration !== generation.current) return false;
       resolvePending();
       setRuns((current) => current.some((run) => run.id === result.run.id)
         ? current.map((run) => run.id === result.run.id ? result.run : run) : [result.run, ...current]);
       const cacheWarning = cacheConfirmed(result, targets);
       if (result.run.id === selectedId) setDashboard(result);
-      const outcome = result.record.kind === "lot" ? "Lot evidence recorded."
-        : `${recordName(result.record)} recorded with outcome ${result.record.details.outcome.replace("-", " ")}${result.record.details.notEvaluatedReason ? `: ${reasonLabels[result.record.details.notEvaluatedReason]}` : ""}.`;
       setError(cacheWarning);
-      setNotice(`${result.replayed ? "Previous request confirmed by exact retry. " : ""}${outcome}`);
+      setNotice(`${result.replayed ? "Previous request confirmed by exact retry. " : ""}${evidenceOutcome(result.record)}`);
       return result.run.id === selectedId;
     } catch (cause) {
       if (requestGeneration !== generation.current) return false;
@@ -251,6 +308,31 @@ export function QcPage({ session, online }: { session: AuthSession; online: bool
       : submission.kind === "weight-check"
         ? { channel: "weight-check", request: { ...common, details: submission.details } }
         : { channel: "brix-check", request: { ...common, details: submission.details } };
+    return begin(command) ? executeRecord(command) : false;
+  }
+
+  async function submitVerification(submission: QcVerificationSubmission): Promise<boolean> {
+    if (!selectedId || !dashboard || loading || saving || pending || !online) return false;
+    const requestId = crypto.randomUUID();
+    let command: VerificationCommand;
+    if (submission.kind === "cleaning-verification") {
+      command = { channel: submission.kind, recordId: submission.recordId, request: { requestId, details: submission.details } };
+    } else if (submission.kind === "component-check") {
+      command = { channel: submission.kind, request: { requestId, runId: selectedId, details: submission.details } };
+    } else if (submission.kind === "allergen-review") {
+      command = { channel: submission.kind, request: { requestId, runId: selectedId, details: submission.details } };
+    } else {
+      command = { channel: submission.kind, request: { requestId, runId: selectedId, details: submission.details } };
+    }
+    return begin(command) ? executeRecord(command) : false;
+  }
+
+  async function submitSignOff(): Promise<boolean> {
+    if (!selectedId || !dashboard || loading || saving || pending || !online || !canManage) return false;
+    const command: SignOffCommand = {
+      channel: "sign-off", runId: selectedId,
+      request: { requestId: crypto.randomUUID(), expectedHighWaterMark: dashboard.highWaterMark },
+    };
     return begin(command) ? executeRecord(command) : false;
   }
 
@@ -319,7 +401,7 @@ export function QcPage({ session, online }: { session: AuthSession; online: bool
         <div>
           <p className="eyebrow">Run evidence · server confirmed</p>
           <h1>Quality control</h1>
-          <p>Record lots, pre-run and 30-minute weights, and Brix observations. Every measurement retains the exact reviewed target used at entry.</p>
+          <p>Record run evidence, effective-component and allergen reviews, cleaning verification, and exact-boundary QC sign-off. Every measurement retains its reviewed target snapshot.</p>
         </div>
         <div className="flex items-center gap-3">
           <span className="hidden text-right text-xs text-muted-foreground sm:block">Confirmed read<br /><strong className="font-medium text-foreground">{lastConfirmed ? new Date(lastConfirmed).toLocaleString() : "Not yet"}</strong></span>
@@ -340,14 +422,14 @@ export function QcPage({ session, online }: { session: AuthSession; online: bool
           {!online ? <div className="error-banner border-amber-500/40 bg-amber-500/10 text-amber-300" role="status">Read-only offline. All QC recording and target writes are disabled; reconnect before retrying an unconfirmed request.</div> : null}
           {pending ? (
             <div className="error-banner border-amber-500/40 bg-amber-500/10 text-amber-300" role="status">
-              <span className="min-w-0 flex-1">One {pending.channel === "target" ? "target change" : `${pending.channel} record`} has not been confirmed. Retry the exact request instead of creating another.</span>
+              <span className="min-w-0 flex-1">One {pending.channel === "target" ? "target change" : pending.channel === "sign-off" ? "QC sign-off" : `${pending.channel} record`} has not been confirmed. Retry the exact request instead of creating another.</span>
               <button type="button" className="button-secondary" onClick={retryPending} disabled={!online || saving}>{saving ? "Confirming…" : "Retry same request"}</button>
             </div>
           ) : null}
 
           <div className="mt-6 flex flex-wrap items-end justify-between gap-3 border-b border-border/70 pb-3">
             <div className="flex flex-wrap gap-1" role="tablist" aria-label="QC workspace">
-              {([{ id: "run", label: "Run" }, { id: "records", label: `Records${dashboard ? ` (${dashboard.records.length})` : ""}` }, { id: "targets", label: `Targets (${targets.length})` }] as { id: Section; label: string }[]).map((item) => (
+              {([{ id: "run", label: "Run" }, { id: "verification", label: "Run verification" }, { id: "records", label: `Records${dashboard ? ` (${dashboard.records.length})` : ""}` }, { id: "targets", label: `Targets (${targets.length})` }] as { id: Section; label: string }[]).map((item) => (
                 <button key={item.id} type="button" role="tab" aria-selected={section === item.id} className={`nav-tab ${section === item.id ? "nav-tab-active" : ""}`} onClick={() => setSection(item.id)}>{item.label}</button>
               ))}
             </div>
@@ -388,6 +470,12 @@ export function QcPage({ session, online }: { session: AuthSession; online: bool
             )
           ) : null}
 
+          {section === "verification" ? (
+            dashboard ? <QcRunVerification key={dashboard.run.id} dashboard={dashboard} canManage={canManage}
+              disabled={recordDisabled} onSubmit={submitVerification} onSignOff={submitSignOff} />
+              : <section className="panel mt-5"><h2 className="text-lg font-semibold">Select a confirmed run</h2><p className="mt-2 text-sm text-muted-foreground">Run verification requires a facility-owned run loaded from the server or a labeled confirmed offline view. Offline views remain read-only.</p></section>
+          ) : null}
+
           {section === "records" && dashboard ? (
             <div className="mt-5 grid items-start gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(22rem,0.8fr)]">
               <section className="panel min-w-0" aria-labelledby="qc-records-heading">
@@ -404,7 +492,7 @@ export function QcPage({ session, online }: { session: AuthSession; online: bool
                           <tr key={record.recordId} className="border-b border-border/50 align-top last:border-0">
                             <td className="py-3 pr-3 font-mono text-muted-foreground">{record.sequence}</td>
                             <th scope="row" className="py-3 pr-3 font-medium">{recordName(record)}</th>
-                            <td className="py-3 pr-3"><span className="font-mono text-foreground">{observation(record)}</span>{record.details.notes ? <span className="mt-1 block max-w-64 whitespace-pre-wrap text-[11px] leading-4 text-muted-foreground">{record.details.notes}</span> : null}</td>
+                            <td className="py-3 pr-3"><span className="font-mono text-foreground">{observation(record)}</span>{"notes" in record.details && record.details.notes ? <span className="mt-1 block max-w-64 whitespace-pre-wrap text-[11px] leading-4 text-muted-foreground">{record.details.notes}</span> : null}</td>
                             <td className="py-3 pr-3"><Evaluation record={record} /></td>
                             <td className="py-3 text-muted-foreground"><time dateTime={record.recordedAt}>{new Date(record.recordedAt).toLocaleString()}</time></td>
                           </tr>

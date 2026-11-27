@@ -30,6 +30,22 @@ const initialTarget = {
   targetKey: "browser-dough-weight", kind: "weight", unit: "g", minimum: "400", maximum: "500",
   active: true, revision: 1, updatedBy: STAFF_ID, updatedAt: "2035-05-01T12:00:00.000Z",
 };
+const componentSnapshot = {
+  productionDate: "2035-05-01", source: "effective-plan", overlayRevision: 0,
+  planCode: "PLAN-QC-A11Y", planName: "QC Accessibility Plan",
+};
+const components = [{
+  componentKey: "recipe:0:ingredient:0", componentType: "ingredient", recipeCode: "PIZZA", recipeName: "QC Accessibility Pizza",
+  stationKey: "frontline", productId: null, productCode: "FLOUR-01", productName: "Flour", quantity: "1", unit: "kg",
+}, {
+  componentKey: "packaging:0", componentType: "packaging", recipeCode: null, recipeName: null,
+  stationKey: "packaging", productId: null, productCode: "BOX-01", productName: "Pizza box", quantity: "1", unit: "each",
+}];
+const allergenMappings = [{
+  componentKey: "recipe:0:ingredient:0", productCode: "FLOUR-01", status: "reviewed", allergens: ["wheat"],
+}, {
+  componentKey: "packaging:0", productCode: "BOX-01", status: "unavailable", allergens: [],
+}];
 let browser;
 
 before(async () => {
@@ -80,6 +96,8 @@ async function installQcApi(context, access) {
   const capabilities = access === "manager" ? ["record-qc", "manage-qc"] : access === "recorder" ? ["record-qc"] : [];
   const dashboard = () => ({
     run, highWaterMark: records.length ? records.at(-1).sequence : "0", records: structuredClone(records),
+    components: structuredClone(components), componentSnapshot: structuredClone(componentSnapshot),
+    allergenMappings: structuredClone(allergenMappings), signOff: null, newEvidenceSinceSignOff: false,
   });
   const evaluation = (details) => {
     const target = targets.find((item) => item.targetKey === details.targetKey) ?? null;
@@ -328,4 +346,23 @@ test("QC recorder phone empty evidence and weight form have no serious accessibi
   await page.getByRole("tab", { name: "Weight", exact: true }).click();
   await page.getByLabel("Observed weight", { exact: true }).waitFor();
   await expectNoSeriousAccessibilityViolations(page, "recorder phone empty evidence and weight form");
+});
+
+
+test("QC manager desktop run verification has no serious accessibility violations", { timeout: 60_000 }, async (t) => {
+  const { page, baseUrl } = await openPage(t);
+  await openQc(page, baseUrl);
+  await page.getByRole("tab", { name: "Run verification", exact: true }).click();
+  await page.getByRole("heading", { name: "Component identity and presence", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Cleaning and independent verification", exact: true }).waitFor();
+  await expectNoSeriousAccessibilityViolations(page, "manager desktop run verification");
+});
+
+test("QC recorder phone run verification and read-only manager guidance have no serious accessibility violations", { timeout: 60_000 }, async (t) => {
+  const { page, baseUrl } = await openPage(t, { access: "recorder", viewport: { width: 390, height: 844 } });
+  await openQc(page, baseUrl);
+  await page.getByRole("tab", { name: "Run verification", exact: true }).click();
+  await page.getByText("QC manager authorization is required for sign-off.", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Sign off current QC evidence", exact: true }).count(), 0);
+  await expectNoSeriousAccessibilityViolations(page, "recorder phone run verification");
 });

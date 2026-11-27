@@ -1535,6 +1535,97 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/qc/component-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record effective-component identity and presence evidence */
+        post: operations["recordQcComponentCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/qc/allergen-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record allergen-mapping and staging review evidence */
+        post: operations["recordQcAllergenReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/qc/cleaning-records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record cleaning evidence for a run */
+        post: operations["recordQcCleaning"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/qc/cleaning-records/{recordId}/verification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Independently verify an existing cleaning record
+         * @description QC manager only. The recorder cannot verify their own cleaning evidence.
+         */
+        post: operations["verifyQcCleaning"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/qc/runs/{runId}/sign-off": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign off QC evidence at an exact high-water mark
+         * @description Advisory evidence only. Later evidence makes the sign-off historical; this command does not change production or release state.
+         */
+        post: operations["signOffQcRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/qc/targets": {
         parameters: {
             query?: never;
@@ -3788,6 +3879,104 @@ export interface components {
             targetKey: string | null;
             notes: string;
         };
+        QcComponentKey: string;
+        /** @description QC sequence boundary represented as a decimal string. */
+        QcHighWaterMark: string;
+        /** @enum {string} */
+        QcFixedAllergen: "milk" | "eggs" | "fish" | "crustacean shellfish" | "tree nuts" | "peanuts" | "wheat" | "soybeans" | "sesame";
+        QcComponentCheckInput: {
+            componentKey: components["schemas"]["QcComponentKey"];
+            /** @enum {string} */
+            presence: "present" | "absent" | "unknown";
+            notes: string;
+        };
+        QcAllergenReviewInput: {
+            componentKey: components["schemas"]["QcComponentKey"];
+            /** @enum {string} */
+            stagingStatus: "staged" | "not-staged" | "unknown";
+            notes: string;
+        };
+        QcCleaningInput: {
+            area: string;
+            /** @enum {string} */
+            status: "cleaned" | "not-cleaned" | "unknown";
+            notes: string;
+        };
+        QcCleaningVerificationInput: {
+            /** @enum {string} */
+            status: "verified" | "not-verified";
+            notes: string;
+        };
+        QcComponent: {
+            componentKey: components["schemas"]["QcComponentKey"];
+            /** @enum {string} */
+            componentType: "ingredient" | "packaging";
+            recipeCode: string | null;
+            recipeName: string | null;
+            stationKey: string | null;
+            /** Format: uuid */
+            productId: string | null;
+            productCode: string | null;
+            productName: string;
+            quantity: string | null;
+            unit: string | null;
+        };
+        QcComponentSnapshot: {
+            /** Format: date */
+            productionDate: string;
+            /** @enum {string} */
+            source: "effective-plan" | "completed-run";
+            overlayRevision: number;
+            planCode: string | null;
+            planName: string | null;
+        };
+        QcAllergenMapping: {
+            componentKey: components["schemas"]["QcComponentKey"];
+            productCode: string | null;
+            /** @enum {string} */
+            status: "reviewed" | "reviewed-empty" | "unreviewed" | "unavailable" | "invalid-mapping";
+            allergens: components["schemas"]["QcFixedAllergen"][];
+        };
+        QcSignOff: {
+            /** Format: uuid */
+            recordId: string;
+            /** Format: uuid */
+            actorId: string;
+            highWaterMark: components["schemas"]["QcHighWaterMark"];
+            /** Format: date-time */
+            signedAt: string;
+        };
+        QcComponentCheckRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            runId: string;
+            details: components["schemas"]["QcComponentCheckInput"];
+        };
+        QcAllergenReviewRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            runId: string;
+            details: components["schemas"]["QcAllergenReviewInput"];
+        };
+        QcCleaningRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            runId: string;
+            details: components["schemas"]["QcCleaningInput"];
+        };
+        QcCleaningVerificationRequest: {
+            /** Format: uuid */
+            requestId: string;
+            details: components["schemas"]["QcCleaningVerificationInput"];
+        };
+        QcSignOffRequest: {
+            /** Format: uuid */
+            requestId: string;
+            expectedHighWaterMark: components["schemas"]["QcHighWaterMark"];
+        };
         QcLotRequest: {
             /** Format: uuid */
             requestId: string;
@@ -3834,7 +4023,8 @@ export interface components {
             runId: string;
             /** Format: uuid */
             actorId: string;
-            relatedRecordId: null;
+            /** Format: uuid */
+            relatedRecordId: string | null;
             /** Format: date-time */
             recordedAt: string;
         };
@@ -3859,12 +4049,54 @@ export interface components {
             kind: "brix-check";
             details: components["schemas"]["QcBrixCheckInput"] & components["schemas"]["QcEvaluation"];
         };
-        QcRunRecord: components["schemas"]["QcLotRecord"] | components["schemas"]["QcWeightCheckRecord"] | components["schemas"]["QcBrixCheckRecord"];
+        QcComponentCheckRecord: components["schemas"]["QcRecordBase"] & {
+            /** @constant */
+            kind: "component-check";
+            details: components["schemas"]["QcComponentCheckInput"] & {
+                component: components["schemas"]["QcComponent"];
+                componentSnapshot: components["schemas"]["QcComponentSnapshot"];
+            };
+        };
+        QcAllergenReviewRecord: components["schemas"]["QcRecordBase"] & {
+            /** @constant */
+            kind: "allergen-review";
+            details: components["schemas"]["QcAllergenReviewInput"] & {
+                component: components["schemas"]["QcComponent"];
+                componentSnapshot: components["schemas"]["QcComponentSnapshot"];
+                allergenMapping: components["schemas"]["QcAllergenMapping"];
+            };
+        };
+        QcCleaningRecord: components["schemas"]["QcRecordBase"] & {
+            /** @constant */
+            kind: "cleaning";
+            details: components["schemas"]["QcCleaningInput"];
+        };
+        QcCleaningVerificationRecord: components["schemas"]["QcRecordBase"] & {
+            /** @constant */
+            kind: "cleaning-verification";
+            /** Format: uuid */
+            relatedRecordId: string;
+            details: components["schemas"]["QcCleaningVerificationInput"];
+        };
+        QcSignOffRecord: components["schemas"]["QcRecordBase"] & {
+            /** @constant */
+            kind: "sign-off";
+            details: {
+                highWaterMark: components["schemas"]["QcHighWaterMark"];
+            };
+        };
+        QcRunRecord: components["schemas"]["QcLotRecord"] | components["schemas"]["QcWeightCheckRecord"] | components["schemas"]["QcBrixCheckRecord"] | components["schemas"]["QcComponentCheckRecord"] | components["schemas"]["QcAllergenReviewRecord"] | components["schemas"]["QcCleaningRecord"] | components["schemas"]["QcCleaningVerificationRecord"] | components["schemas"]["QcSignOffRecord"];
         QcDashboard: {
             run: components["schemas"]["Run"];
             /** @description Highest confirmed run QC sequence; zero means no QC evidence. */
-            highWaterMark: string;
+            highWaterMark: components["schemas"]["QcHighWaterMark"];
             records: components["schemas"]["QcRunRecord"][];
+            components: components["schemas"]["QcComponent"][];
+            componentSnapshot: components["schemas"]["QcComponentSnapshot"];
+            allergenMappings: components["schemas"]["QcAllergenMapping"][];
+            signOff: components["schemas"]["QcSignOff"] | null;
+            /** @description Whether non-sign-off evidence exists after the signed boundary. */
+            newEvidenceSinceSignOff: boolean;
         };
         QcRecordResult: components["schemas"]["QcDashboard"] & {
             /** @constant */
@@ -3872,6 +4104,14 @@ export interface components {
             replayed: boolean;
             record: components["schemas"]["QcRunRecord"];
         };
+        QcSignOffConflict: components["schemas"]["QcDashboard"] & {
+            /** @constant */
+            outcome: "conflict";
+            /** @constant */
+            replayed: false;
+            expectedHighWaterMark: components["schemas"]["QcHighWaterMark"];
+        };
+        QcSignOffResult: components["schemas"]["QcRecordResult"] | components["schemas"]["QcSignOffConflict"] | components["schemas"]["Error"];
         QcTargetSaveAccepted: {
             /** @constant */
             outcome: "accepted";
@@ -3911,6 +4151,7 @@ export interface components {
     };
     parameters: {
         RunId: string;
+        QcRecordId: string;
         ImportId: string;
         CountId: string;
         Limit: number;
@@ -7194,6 +7435,243 @@ export interface operations {
             404: components["responses"]["Error"];
             405: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    recordQcComponentCheck: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QcComponentCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact retry confirmed without duplicating evidence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            /** @description Component evidence appended with its immutable effective-run snapshot */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    recordQcAllergenReview: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QcAllergenReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact retry confirmed without duplicating evidence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            /** @description Allergen and staging evidence appended with its immutable mapping snapshot */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    recordQcCleaning: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QcCleaningRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact retry confirmed without duplicating evidence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            /** @description Cleaning evidence appended */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    verifyQcCleaning: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                recordId: components["parameters"]["QcRecordId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QcCleaningVerificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact retry confirmed without duplicating evidence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            /** @description Independent cleaning verification appended */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    signOffQcRun: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                runId: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QcSignOffRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact retry confirmed with its original stored response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            /** @description QC sign-off appended at the requested evidence boundary */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcRecordResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            /** @description Current canonical dashboard for stale-boundary or request-ID review */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QcSignOffResult"];
+                };
+            };
             413: components["responses"]["Error"];
             415: components["responses"]["Error"];
             500: components["responses"]["Error"];

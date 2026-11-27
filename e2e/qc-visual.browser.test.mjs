@@ -115,7 +115,19 @@ async function installVisualApi(context) {
     if (pathname === "/api/v3/runs" && request.method() === "GET") return json(route, { runs: [run] });
     if (pathname === "/api/v3/qc/targets" && request.method() === "GET") return json(route, { targets });
     if (pathname === `/api/v3/qc/runs/${RUN_ID}` && request.method() === "GET") {
-      return json(route, { run, highWaterMark: "103", records });
+      const component = {
+        componentKey: "recipe:0:ingredient:0", componentType: "ingredient", recipeCode: "PIZZA", recipeName: "QC Visual Pizza",
+        stationKey: "frontline", productId: null, productCode: "FLOUR-01", productName: "Flour", quantity: "1", unit: "kg",
+      };
+      return json(route, {
+        run, highWaterMark: "103", records, components: [component],
+        componentSnapshot: {
+          productionDate: "2035-05-01", source: "effective-plan", overlayRevision: 0,
+          planCode: "PLAN-QC-VISUAL", planName: "QC Visual Plan",
+        },
+        allergenMappings: [{ componentKey: component.componentKey, productCode: "FLOUR-01", status: "reviewed", allergens: ["wheat"] }],
+        signOff: null, newEvidenceSinceSignOff: false,
+      });
     }
     return json(route, { error: `Unexpected visual-fixture request: ${request.method()} ${pathname}` }, 404);
   });

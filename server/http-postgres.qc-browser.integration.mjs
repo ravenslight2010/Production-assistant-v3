@@ -58,6 +58,9 @@ async function main() {
   const retryLot = `LOT-${suffix}-RETRY`;
   const operatorUsername = `QcOperator${suffix}`;
   const operatorPassword = "v3-qc-browser-operator-password";
+  const reviewerUsername = `QcReviewer${suffix}`;
+  const reviewerPassword = "v3-qc-browser-reviewer-password";
+  const laterLot = `LOT-${suffix}-LATER`;
   const errors = [];
   const writes = [];
   const lotRequests = [];
@@ -200,6 +203,126 @@ async function main() {
     assert.equal(Number(currentTarget.rows[0].minimum), 420);
     assert.equal(Number(currentTarget.rows[0].maximum), 530);
 
+    await page.getByRole("button", { name: "Staff", exact: true }).click();
+    await page.getByLabel("Username", { exact: true }).fill(reviewerUsername);
+    await page.getByLabel("Initial password", { exact: true }).fill(reviewerPassword);
+    await page.locator("#new-staff-role").selectOption("manager");
+    await page.getByRole("button", { name: "Create account", exact: true }).click();
+    await page.getByText("Staff account created. The password was not stored in the browser.", { exact: true }).waitFor();
+    const reviewerIdentity = await adminPool.query("SELECT id AS staff_id FROM v3.staff_accounts WHERE lower(username) = lower($1)", [reviewerUsername]);
+    assert.equal(reviewerIdentity.rowCount, 1, "the reviewer staff account must exist after the Staff UI confirms creation");
+    const reviewerId = reviewerIdentity.rows[0].staff_id;
+
+    await page.getByRole("button", { name: "QC", exact: true }).click();
+    await page.getByRole("heading", { name: "Quality control", exact: true }).waitFor();
+    await selectQcRun(page, createdRun.id, runLabel);
+    await page.getByRole("tab", { name: "Run verification", exact: true }).click();
+    const componentForm = page.locator('form[aria-label="Record QC component check"]');
+    await componentForm.getByLabel(/^Effective ingredient/).selectOption({ index: 0 });
+    await componentForm.getByLabel(/^Presence/).selectOption("present");
+    await componentForm.getByLabel("Component notes (optional)", { exact: true }).fill("Authenticated component identity");
+    await componentForm.getByRole("button", { name: "Record component check", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "Component check recorded." }).waitFor();
+
+    const allergenForm = page.locator('form[aria-label="Record QC allergen review"]');
+    await allergenForm.getByLabel(/^Ingredient to review/).selectOption({ index: 0 });
+    await allergenForm.getByLabel(/^Staging status/).selectOption("staged");
+    await allergenForm.getByLabel("Allergen review notes (optional)", { exact: true }).fill("Authenticated staging review");
+    await allergenForm.getByRole("button", { name: "Record allergen review", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "Allergen review recorded." }).waitFor();
+
+    const cleaningForm = page.locator('form[aria-label="Record QC cleaning"]');
+    const cleaningArea = `Mixer ${suffix}`;
+    await cleaningForm.getByLabel("Area or equipment", { exact: true }).fill(cleaningArea);
+    await cleaningForm.getByLabel(/^Cleaning status/).selectOption("cleaned");
+    await cleaningForm.getByLabel("Cleaning notes (optional)", { exact: true }).fill("Authenticated cleaning evidence");
+    await cleaningForm.getByRole("button", { name: "Record cleaning", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "Cleaning recorded." }).waitFor();
+    await page.getByRole("button", { name: `Record verification for ${cleaningArea}`, exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "Your session no longer authorizes this QC record." }).waitFor();
+    const selfVerifications = await adminPool.query("SELECT record_id FROM v3.qc_records WHERE run_id = $1 AND kind = 'cleaning-verification'", [createdRun.id]);
+    assert.equal(selfVerifications.rowCount, 0, "self-verification must not persist evidence");
+
+    const reviewerContext = await browser.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: "block" });
+    const reviewerPage = await reviewerContext.newPage();
+    observe(reviewerPage);
+    await authenticateBrowserContext(baseUrl, reviewerContext, reviewerUsername, reviewerPassword);
+    await reviewerPage.goto(`${baseUrl}/#qc`);
+    await reviewerPage.getByRole("heading", { name: "Quality control", exact: true }).waitFor();
+    await selectQcRun(reviewerPage, createdRun.id, runLabel);
+    await reviewerPage.getByRole("tab", { name: "Run verification", exact: true }).click();
+    await reviewerPage.getByRole("button", { name: `Record verification for ${cleaningArea}`, exact: true }).click();
+    await reviewerPage.getByRole("status").filter({ hasText: "Cleaning verification recorded." }).waitFor();
+    await reviewerPage.getByText(new RegExp(`Verified by\\s*${reviewerId}`)).waitFor();
+    const runStateBeforeSignOff = await adminPool.query("SELECT status, revision FROM v3.runs WHERE id = $1", [createdRun.id]);
+    const runEventsBeforeSignOff = await adminPool.query("SELECT count(*)::integer AS count FROM v3.run_events WHERE run_id = $1", [createdRun.id]);
+    assert.equal(runStateBeforeSignOff.rowCount, 1);
+
+    const signOffResponsePromise = reviewerPage.waitForResponse((response) => new URL(response.url()).pathname === `/api/v3/qc/runs/${createdRun.id}/sign-off` && response.request().method() === "POST");
+    await reviewerPage.getByRole("button", { name: "Sign off current QC evidence", exact: true }).click();
+    const signOffResponse = await signOffResponsePromise;
+    const signOffResponseText = await signOffResponse.text();
+    assert.equal(signOffResponse.status(), 201, signOffResponseText);
+    const signOffBody = JSON.parse(signOffResponseText);
+    const signedHighWaterMark = signOffResponse.request().postDataJSON().expectedHighWaterMark;
+    assert.match(signedHighWaterMark, /^(0|[1-9][0-9]*)$/);
+    assert.equal(signOffBody.record.kind, "sign-off");
+    assert.equal(signOffBody.record.details.highWaterMark, signedHighWaterMark);
+    await reviewerPage.getByRole("status").filter({ hasText: `QC evidence signed off through high-water mark ${signedHighWaterMark}.` }).waitFor();
+    const signOffPanel = reviewerPage.locator('section[aria-labelledby="qc-signoff-heading"]');
+    await signOffPanel.getByText(reviewerId, { exact: true }).waitFor();
+    await signOffPanel.getByText(signedHighWaterMark, { exact: true }).waitFor();
+    assert.equal(await signOffPanel.locator("time").count(), 1, "sign-off must show its recorded timestamp");
+    assert.equal(await signOffPanel.getByText(/New evidence recorded since sign-off/).count(), 0);
+
+    const laterContext = await browser.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: "block" });
+    const laterPage = await laterContext.newPage();
+    observe(laterPage);
+    await authenticateBrowserContext(baseUrl, laterContext);
+    await laterPage.goto(`${baseUrl}/#qc`);
+    await laterPage.getByRole("heading", { name: "Quality control", exact: true }).waitFor();
+    await selectQcRun(laterPage, createdRun.id, runLabel);
+    await showRecords(laterPage);
+    await laterPage.getByRole("tab", { name: "Lot", exact: true }).click();
+    await laterPage.getByLabel("Product code", { exact: true }).fill("FLOUR-01");
+    await laterPage.getByLabel("Lot number", { exact: true }).fill(laterLot);
+    await laterPage.getByRole("button", { name: "Record lot", exact: true }).click();
+    await laterPage.getByRole("status").filter({ hasText: "Lot evidence recorded." }).waitFor();
+
+    const staleSignOffResponsePromise = reviewerPage.waitForResponse((response) => new URL(response.url()).pathname === `/api/v3/qc/runs/${createdRun.id}/sign-off` && response.request().method() === "POST");
+    await reviewerPage.getByRole("button", { name: "Sign off current QC evidence", exact: true }).click();
+    const staleSignOffResponse = await staleSignOffResponsePromise;
+    assert.equal(staleSignOffResponse.status(), 409, await staleSignOffResponse.text());
+    await reviewerPage.getByRole("alert").filter({ hasText: "No sign-off was written." }).waitFor();
+    await signOffPanel.getByText(/New evidence recorded since sign-off/).waitFor();
+    await signOffPanel.getByText(/existing sign-off is historical/).waitFor();
+    const signOffs = await adminPool.query("SELECT record_id, actor_id, details FROM v3.qc_records WHERE run_id = $1 AND kind = 'sign-off'", [createdRun.id]);
+    assert.equal(signOffs.rowCount, 1, "a stale sign-off attempt must not append evidence");
+    assert.equal(signOffs.rows[0].actor_id, reviewerId);
+    assert.equal(signOffs.rows[0].details.highWaterMark, signedHighWaterMark);
+    const finalRecords = await adminPool.query("SELECT kind FROM v3.qc_records WHERE run_id = $1 ORDER BY sequence", [createdRun.id]);
+    assert.deepEqual(finalRecords.rows.map((row) => row.kind), [
+      "lot", "weight-check", "weight-check", "brix-check", "component-check",
+      "allergen-review", "cleaning", "cleaning-verification", "sign-off", "lot",
+    ]);
+    const runStateAfterSignOff = await adminPool.query("SELECT status, revision FROM v3.runs WHERE id = $1", [createdRun.id]);
+    const runEventsAfterSignOff = await adminPool.query("SELECT count(*)::integer AS count FROM v3.run_events WHERE run_id = $1", [createdRun.id]);
+    assert.deepEqual(runStateAfterSignOff.rows, runStateBeforeSignOff.rows, "QC sign-off must not change run status or revision");
+    assert.deepEqual(runEventsAfterSignOff.rows, runEventsBeforeSignOff.rows, "QC sign-off must not append run events");
+    await laterContext.close();
+
+    const verificationWritesBeforeOffline = writes.length;
+    await reviewerContext.setOffline(true);
+    await reviewerPage.getByText(/Offline read-only view. Showing QC values confirmed/).waitFor();
+    for (const name of ["Record component check", "Record allergen review", "Record cleaning", `Record verification for ${cleaningArea}`, "Sign off current QC evidence"]) {
+      assert.equal(await reviewerPage.getByRole("button", { name, exact: true }).isDisabled(), true, `${name} must be disabled offline`);
+    }
+    assert.equal(writes.length, verificationWritesBeforeOffline, "offline run verification must not issue writes");
+    await reviewerContext.setOffline(false);
+    await reviewerPage.getByText("Connected", { exact: true }).first().waitFor();
+    await reviewerContext.close();
+
+    await showRecords(page);
     const writesBeforeOffline = writes.length;
     offline = true;
     await context.setOffline(true);
@@ -249,7 +372,7 @@ async function main() {
     await operatorContext.close();
 
     assert.deepEqual(errors, [], "the real QC browser journey must have no unexpected browser or server errors");
-    console.log("V3 authenticated Chromium/PostgreSQL QC journey passed: run context; revision-fenced target creation; post-commit response-loss exact retry with one persisted lot; pre-run/30-minute weight and Brix evidence; reload and two-session canonical readback; stale-target review with immutable snapshots; offline write lockout; operator denial without QC reads; desktop/phone/tablet overflow checks.");
+    console.log("V3 authenticated Chromium/PostgreSQL QC journey passed: run context; revision-fenced target creation; post-commit response-loss exact retry with one persisted lot; pre-run/30-minute weight and Brix evidence; reload and two-session canonical readback; stale-target review with immutable snapshots; effective-component, allergen/staging, and cleaning evidence; denied self-verification and independent manager verification; exact sign-off with later-evidence 409 and no duplicate sign-off; run-state invariance; offline write lockout for every QC control; operator denial without QC reads; desktop/phone/tablet overflow checks.");
     await secondPage.close();
   } finally {
     if (browser) await browser.close();

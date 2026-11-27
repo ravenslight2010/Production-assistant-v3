@@ -168,7 +168,7 @@ Add `client/src/pages/QcPage.tsx` and focused QC dashboard/record-form component
 
 **Depends on:** Slice 1 evidence, targets, dashboard, and receipts.
 **Owner gates:** QC-4; no enforcement is included.
-**Migration:** `0025-qc-run-verification.sql` plus `.test.sql`.
+**Migration:** `0026-qc-run-verification.sql` plus `.test.sql`. (`0025` was already allocated to active runs and auto-track debounce.)
 
 ### Observable outcome
 
@@ -210,7 +210,7 @@ Prove effective-component resolution before/after substitution, unknown states, 
 
 **Depends on:** Slice 1.
 **Owner gates:** QC-2 and QC-3 before activating evaluated comparisons; QC-4 remains unchanged.
-**Migration:** `0026-qc-advisory-references.sql` plus `.test.sql`.
+**Migration:** `0027-qc-advisory-references.sql` plus `.test.sql` (provisional; inventory `main` first).
 
 ### Observable outcome
 
@@ -255,7 +255,7 @@ Pin Unicode NFC/boundary-space cases and prove case/punctuation/internal-space d
 
 **Depends on:** Slices 1–3 for run context and review projections.
 **Owner gates:** none beyond the existing advisory-only boundary.
-**Migration:** `0027-qc-planning-and-review.sql` plus `.test.sql`.
+**Migration:** `0028-qc-planning-and-review.sql` plus `.test.sql` (provisional; inventory `main` first).
 
 ### Observable outcome
 
@@ -291,7 +291,7 @@ Prove canonical schedule/date readback, no schedule mutation, bounded date range
 
 **Depends on:** Slices 1–4.
 **Owner gates:** QC-5 for daily/date-grouped aggregates; QC-4 remains advisory.
-**Migration:** `0028-qc-history-and-intelligence.sql` plus `.test.sql`.
+**Migration:** `0029-qc-history-and-intelligence.sql` plus `.test.sql` (provisional; inventory `main` first).
 
 ### Observable outcome
 
@@ -336,7 +336,7 @@ Prove correction chains, redaction projection parity across every read/export, a
 
 **Depends on:** existing accounts/capabilities; QC linkage is optional and uses Slice 1 identifiers when present.
 **Owner gates:** none for manual sanitized reporting; AI diagnosis remains excluded.
-**Migration:** `0029-incidents.sql` plus `.test.sql`.
+**Migration:** `0030-incidents.sql` plus `.test.sql` (provisional; inventory `main` first).
 
 ### Observable outcome
 
@@ -383,7 +383,7 @@ Prove any-authenticated creation, reviewer-only reads/workflow, reporter data is
 
 **Depends on:** Slices 1–6 plus existing runs, operations, schedules, inventory, receipts, and audit foundations.
 **Owner gates:** QC-5 for date grouping; QC-6 for signing only.
-**Migration:** `0030-operational-reports.sql` plus `.test.sql`.
+**Migration:** `0031-operational-reports.sql` plus `.test.sql` (provisional; inventory `main` first).
 
 ### Observable outcome
 
@@ -456,10 +456,10 @@ Every slice updates and runs the applicable rows below on synthetic data and dis
 | Authenticated browser | Real React/Chromium/PostgreSQL journey for each new workflow, reload/reconnect readback, two-session editing, lost response/exact retry, stale conflict, role denial, and no duplicate records. |
 | Offline/PWA | Read-only confirmed state, visible staleness/confirmation context, every mutation disabled offline, no queued intent, no API response caching that exposes stale state as current. |
 | Accessibility/responsive | Keyboard/focus/dialog/status announcements, accessible table equivalent for charts, desktop and phone/tablet portrait+landscape. |
-| Engines | Chromium required; WebKit where the pinned executable is available, clearly labeled emulation rather than physical Safari evidence. Current lack of a WebKit executable remains `BLOCKED`, not passed. |
+| Engines | Chromium required; WebKit/Firefox where the pinned executables are available, clearly labeled emulation rather than physical-device evidence. An unavailable required engine remains `BLOCKED`, not passed. |
 | Repository guards | Production build, server/static syntax, public synthetic tests, dependency audit, `check:no-ai`, `check:research`, and `git diff --check`. Required-private importer corpus remains unchanged and must remain green when provisioned. |
 
-Final area qualification runs the complete chain through `0030`, full public and required-private suites, all HTTP/PostgreSQL integrations, authenticated browser journeys, build/type/generated-client checks, and security/research/no-AI guards. Update `research/feature-matrix.md` with only observed results and explicit limitations. No production-readiness claim is allowed.
+Final area qualification runs the complete chain through the then-current final migration (provisionally `0031`), full public and required-private suites, all HTTP/PostgreSQL integrations, authenticated browser journeys, build/type/generated-client checks, and security/research/no-AI guards. Update `research/feature-matrix.md` with only observed results and explicit limitations. No production-readiness claim is allowed.
 
 ## 12. Explicit exclusions and deferred scope
 

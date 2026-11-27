@@ -1,9 +1,14 @@
 import {
   isQcDashboard,
   isQcTarget,
+  type QcAllergenReviewRequest,
   type QcBrixCheckRequest,
+  type QcCleaningRequest,
+  type QcCleaningVerificationRequest,
+  type QcComponentCheckRequest,
   type QcDashboard,
   type QcLotRequest,
+  type QcSignOffRequest,
   type QcTarget,
   type QcTargetSaveRequest,
   type QcWeightCheckRequest,
@@ -24,6 +29,11 @@ export type PendingQcCommand =
   | { channel: "lot"; request: QcLotRequest }
   | { channel: "weight-check"; request: QcWeightCheckRequest }
   | { channel: "brix-check"; request: QcBrixCheckRequest }
+  | { channel: "component-check"; request: QcComponentCheckRequest }
+  | { channel: "allergen-review"; request: QcAllergenReviewRequest }
+  | { channel: "cleaning"; request: QcCleaningRequest }
+  | { channel: "cleaning-verification"; recordId: string; request: QcCleaningVerificationRequest }
+  | { channel: "sign-off"; runId: string; request: QcSignOffRequest }
   | { channel: "target"; request: QcTargetSaveRequest };
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -43,6 +53,12 @@ function targetKey(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(value);
 }
 
+function componentKey(value: unknown, ingredientOnly = false): value is string {
+  return typeof value === "string"
+    && /^(recipe:(0|[1-9][0-9]{0,5}):ingredient:(0|[1-9][0-9]{0,5})|packaging:(0|[1-9][0-9]{0,5}))$/.test(value)
+    && (!ingredientOnly || value.startsWith("recipe:"));
+}
+
 function validMeasurement(value: unknown, kind: "weight" | "brix"): boolean {
   if (!object(value) || !decimal(value.value, true) || !text(value.notes)
     || !(value.targetKey === null || targetKey(value.targetKey))) return false;
@@ -54,7 +70,8 @@ function validMeasurement(value: unknown, kind: "weight" | "brix"): boolean {
 }
 
 function validPending(value: unknown): value is PendingQcCommand {
-  if (!object(value) || !["lot", "weight-check", "brix-check", "target"].includes(String(value.channel))
+  if (!object(value) || !["lot", "weight-check", "brix-check", "component-check", "allergen-review",
+    "cleaning", "cleaning-verification", "sign-off", "target"].includes(String(value.channel))
     || !object(value.request) || !UUID.test(String(value.request.requestId))) return false;
   const request = value.request;
   if (value.channel === "target") {
@@ -67,12 +84,33 @@ function validPending(value: unknown): value is PendingQcCommand {
       && (request.details.minimum !== null || request.details.maximum !== null)
       && typeof request.details.active === "boolean";
   }
+  if (value.channel === "cleaning-verification") {
+    return UUID.test(String(value.recordId)) && object(request.details)
+      && ["verified", "not-verified"].includes(String(request.details.status)) && text(request.details.notes);
+  }
+  if (value.channel === "sign-off") {
+    return UUID.test(String(value.runId)) && typeof request.expectedHighWaterMark === "string"
+      && /^(0|[1-9][0-9]{0,15})$/.test(request.expectedHighWaterMark)
+      && BigInt(request.expectedHighWaterMark) <= 9007199254740991n;
+  }
   if (!UUID.test(String(request.runId)) || !object(request.details)) return false;
   if (value.channel === "lot") {
     return typeof request.details.productCode === "string"
       && /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(request.details.productCode)
       && text(request.details.lotNumber, 120) && request.details.lotNumber.trim().length > 0
       && text(request.details.notes);
+  }
+  if (value.channel === "component-check") {
+    return componentKey(request.details.componentKey)
+      && ["present", "absent", "unknown"].includes(String(request.details.presence)) && text(request.details.notes);
+  }
+  if (value.channel === "allergen-review") {
+    return componentKey(request.details.componentKey, true)
+      && ["staged", "not-staged", "unknown"].includes(String(request.details.stagingStatus)) && text(request.details.notes);
+  }
+  if (value.channel === "cleaning") {
+    return text(request.details.area, 120) && request.details.area.trim().length > 0
+      && ["cleaned", "not-cleaned", "unknown"].includes(String(request.details.status)) && text(request.details.notes);
   }
   return validMeasurement(request.details, value.channel === "weight-check" ? "weight" : "brix");
 }

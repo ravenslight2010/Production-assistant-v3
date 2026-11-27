@@ -7,8 +7,13 @@ const RECORD_PATHS = new Map([
   [`${QC_ROOT}/lots`, "lot"],
   [`${QC_ROOT}/weight-checks`, "weight-check"],
   [`${QC_ROOT}/brix-checks`, "brix-check"],
+  [`${QC_ROOT}/component-checks`, "component-check"],
+  [`${QC_ROOT}/allergen-reviews`, "allergen-review"],
+  [`${QC_ROOT}/cleaning-records`, "cleaning"],
 ]);
 const DASHBOARD_PATH = /^\/api\/v3\/qc\/runs\/([^/]+)$/u;
+const VERIFICATION_PATH = /^\/api\/v3\/qc\/cleaning-records\/([^/]+)\/verification$/u;
+const SIGN_OFF_PATH = /^\/api\/v3\/qc\/runs\/([^/]+)\/sign-off$/u;
 const MAX_BODY_BYTES = 32 * 1024;
 
 class QcApiError extends Error {
@@ -88,8 +93,10 @@ export function createQcApi({ pool, authenticate, verifyCsrf, logger = () => {} 
   return async function handleQcApi(request, response) {
     const url = new URL(request.url || "/", "http://v3.local");
     const dashboardMatch = DASHBOARD_PATH.exec(url.pathname);
+    const verificationMatch = VERIFICATION_PATH.exec(url.pathname);
+    const signOffMatch = SIGN_OFF_PATH.exec(url.pathname);
     const recordKind = RECORD_PATHS.get(url.pathname);
-    if (url.pathname !== TARGETS_PATH && !recordKind && !dashboardMatch) return false;
+    if (url.pathname !== TARGETS_PATH && !recordKind && !dashboardMatch && !verificationMatch && !signOffMatch) return false;
     try {
       const auth = await authenticate(request);
       if (auth?.verified !== true) throw new QcApiError(401, "Sign in to access QC.");
@@ -114,6 +121,26 @@ export function createQcApi({ pool, authenticate, verifyCsrf, logger = () => {} 
           auth, kind: recordKind, requestId: body.requestId, runId: body.runId, details: body.details,
         });
         sendJson(response, result.replayed ? 200 : 201, result);
+        return true;
+      }
+      if (verificationMatch && request.method === "POST") {
+        const body = await readJsonBody(request);
+        exactKeys(body, ["requestId", "details"]);
+        const result = await service.verifyCleaning({
+          auth, requestId: body.requestId,
+          cleaningRecordId: decodeURIComponent(verificationMatch[1]), details: body.details,
+        });
+        sendJson(response, result.replayed ? 200 : 201, result);
+        return true;
+      }
+      if (signOffMatch && request.method === "POST") {
+        const body = await readJsonBody(request);
+        exactKeys(body, ["requestId", "expectedHighWaterMark"]);
+        const result = await service.signOff({
+          auth, requestId: body.requestId, runId: decodeURIComponent(signOffMatch[1]),
+          expectedHighWaterMark: body.expectedHighWaterMark,
+        });
+        sendJson(response, result.outcome === "conflict" ? 409 : result.replayed ? 200 : 201, result);
         return true;
       }
       if (url.pathname === TARGETS_PATH && request.method === "POST") {
