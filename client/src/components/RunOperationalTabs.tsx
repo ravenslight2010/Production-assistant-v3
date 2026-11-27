@@ -13,12 +13,15 @@ import {
 // from the payload and every mutation goes through the command APIs. v1's
 // tab capabilities arrive slice by slice — Run and Dough first, then the
 // remaining stations, then stoppages.
-const TABS = ["run", "dough", "summary"] as const;
+const TABS = ["run", "dough", "sauce", "frontline", "packaging", "summary"] as const;
 type OperationalTab = (typeof TABS)[number];
 
 const tabLabels: Record<OperationalTab, string> = {
   run: "Run",
   dough: "Dough",
+  sauce: "Sauce",
+  frontline: "Frontline",
+  packaging: "Packaging",
   summary: "Summary",
 };
 
@@ -48,7 +51,7 @@ function projectedFinishMs(run: Run, calc: OperationalSnapshot["projection"]["ca
  */
 function CommandField({ run, stationKey, fieldKey, label, unit, online, onUpdated }: {
   run: Run;
-  stationKey: "line" | "dough";
+  stationKey: "line" | "dough" | "sauce" | "frontline" | "packaging";
   fieldKey: string;
   label: string;
   unit?: string;
@@ -202,6 +205,143 @@ function DoughTab({ run, snapshot, online, onUpdated }: {
   );
 }
 
+function SauceTab({ run, snapshot, online, onUpdated }: {
+  run: Run;
+  snapshot: OperationalSnapshot;
+  online: boolean;
+  onUpdated: (run: Run, notice?: string) => void;
+}) {
+  const { projection } = snapshot;
+  const remainingSec = Math.max(0, (projection.calc.adjustedTimeSec ?? 0) - projection.effectiveElapsedSec);
+  const depletionSec = projection.calc.sauceDepletionSec ?? 0;
+  const short = remainingSec > 0 && depletionSec > 0 && depletionSec < remainingSec;
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <section className="panel">
+        <p className="eyebrow">Barrel position</p>
+        <dl className="mt-3 space-y-2 text-sm">
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Barrels made</dt><dd className="font-semibold tabular-nums">{Math.round(projection.counters.sauceBarrelsMade).toLocaleString()}</dd></div>
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Effective barrel</dt><dd className="font-semibold tabular-nums">{(projection.calc.sauceEffBarrel ?? 0).toFixed(2)}</dd></div>
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Sauce batches</dt><dd className="font-semibold tabular-nums">{Math.round(projection.calc.sauceBatches ?? 0).toLocaleString()}</dd></div>
+        </dl>
+      </section>
+      <section className="panel">
+        <p className="eyebrow">Supply</p>
+        <dl className="mt-3 space-y-2 text-sm">
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Supply covers</dt><dd className="font-semibold tabular-nums">{depletionSec > 0 ? formatElapsed(depletionSec) : "—"}</dd></div>
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Run time remaining</dt><dd className="font-semibold tabular-nums">{formatElapsed(remainingSec)}</dd></div>
+        </dl>
+        {short ? (
+          <div className="error-banner mt-4" role="alert">
+            Sauce runs out in {formatElapsed(depletionSec)} — {formatElapsed(remainingSec - depletionSec)} short of the remaining run.
+          </div>
+        ) : (
+          <p className="mt-4 text-xs text-muted-foreground">Sauce supply covers the remaining run.</p>
+        )}
+      </section>
+      <section className="panel">
+        <p className="eyebrow">Barrel setup</p>
+        <div className="mt-3">
+          <CommandField run={run} stationKey="sauce" fieldKey="barrelLbs"
+            label="Barrel size" unit="lb" online={online} onUpdated={onUpdated} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function FrontlineTab({ run, snapshot, online, onUpdated }: {
+  run: Run;
+  snapshot: OperationalSnapshot;
+  online: boolean;
+  onUpdated: (run: Run, notice?: string) => void;
+}) {
+  const { projection } = snapshot;
+  const applicators = [
+    { n: 1, batches: projection.counters.app1BatchesMade, lbs: projection.calc.app1Lbs },
+    { n: 2, batches: projection.counters.app2BatchesMade, lbs: projection.calc.app2Lbs },
+    { n: 3, batches: projection.counters.app3BatchesMade, lbs: projection.calc.app3Lbs },
+    { n: 4, batches: projection.counters.app4BatchesMade, lbs: projection.calc.app4Lbs },
+  ];
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <section className="panel sm:col-span-2 xl:col-span-2">
+        <p className="eyebrow">Applicator batches</p>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-muted-foreground">
+                <th className="py-1 pr-4 font-medium">Applicator</th>
+                <th className="py-1 pr-4 text-right font-medium">Batches made</th>
+                <th className="py-1 text-right font-medium">Pounds</th>
+              </tr>
+            </thead>
+            <tbody>
+              {applicators.map((app) => (
+                <tr key={app.n} className="border-t border-border/60">
+                  <td className="py-2 pr-4">Applicator {app.n}</td>
+                  <td className="py-2 pr-4 text-right font-semibold tabular-nums">{Math.round(app.batches).toLocaleString()}</td>
+                  <td className="py-2 text-right font-semibold tabular-nums">{Math.round(app.lbs ?? 0).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section className="panel">
+        <p className="eyebrow">Batch setup</p>
+        <div className="mt-3 space-y-3">
+          <CommandField run={run} stationKey="frontline" fieldKey="batchLbs"
+            label="Batch size" unit="lb" online={online} onUpdated={onUpdated} />
+          <CommandField run={run} stationKey="frontline" fieldKey="ozPerPizza"
+            label="Ounces per pizza" unit="oz" online={online} onUpdated={onUpdated} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function PackagingTab({ run, snapshot, online, onUpdated }: {
+  run: Run;
+  snapshot: OperationalSnapshot;
+  online: boolean;
+  onUpdated: (run: Run, notice?: string) => void;
+}) {
+  const { projection } = snapshot;
+  const packed = run.stationProgress.packaging?.progress?.casesPacked;
+  const perSkid = run.stationProgress.packaging?.inputs?.casesPerSkid;
+  const onLastSkid = projection.calc.casesOnLastSkid ?? 0;
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <section className="panel">
+        <p className="eyebrow">Skid building</p>
+        <dl className="mt-3 space-y-2 text-sm">
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Cases packed</dt><dd className="font-semibold tabular-nums">{typeof packed === "number" ? Math.round(packed).toLocaleString() : "—"}</dd></div>
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Current skid</dt><dd className="font-semibold tabular-nums">{perSkid ? `${Math.round(onLastSkid)} of ${Math.round(perSkid)}` : `${Math.round(onLastSkid)}`}</dd></div>
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Stacks needed</dt><dd className="font-semibold tabular-nums">{Math.round(projection.calc.stacksNeededTotal ?? 0).toLocaleString()}</dd></div>
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Cases left to open</dt><dd className="font-semibold tabular-nums">{Math.round(projection.calc.casesLeftToOpen ?? 0).toLocaleString()}</dd></div>
+        </dl>
+      </section>
+      <section className="panel">
+        <p className="eyebrow">Freeze tunnel</p>
+        <dl className="mt-3 space-y-2 text-sm">
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Cases on line</dt><dd className="font-semibold tabular-nums">{Math.round(projection.counters.casesOnLine).toLocaleString()}</dd></div>
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Cases in freezer</dt><dd className="font-semibold tabular-nums">{Math.round(projection.counters.casesInFreezer).toLocaleString()}</dd></div>
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Tunnel clears in</dt><dd className="font-semibold tabular-nums">{formatElapsed(projection.timers.freezerRemainingSec)}</dd></div>
+          <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Time per skid</dt><dd className="font-semibold tabular-nums">{formatElapsed(projection.calc.timePerSkidSec ?? 0)}</dd></div>
+        </dl>
+      </section>
+      <section className="panel">
+        <p className="eyebrow">Skid setup</p>
+        <div className="mt-3">
+          <CommandField run={run} stationKey="packaging" fieldKey="casesPerSkid"
+            label="Cases per skid" online={online} onUpdated={onUpdated} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function SummaryTab({ snapshot }: { snapshot: OperationalSnapshot }) {
   const { view, projection } = snapshot;
   const paceLabel = view.pace.paceStatus === "ahead" ? `Ahead ${Math.abs(view.pace.paceDelta).toFixed(1)} cases`
@@ -339,6 +479,9 @@ export function RunOperationalTabs({ run, online, onUpdated }: { run: Run; onlin
         {snapshot ? (
           activeTab === "run" ? <RunTab run={run} snapshot={snapshot} online={online} onUpdated={onUpdated} />
           : activeTab === "dough" ? <DoughTab run={run} snapshot={snapshot} online={online} onUpdated={onUpdated} />
+          : activeTab === "sauce" ? <SauceTab run={run} snapshot={snapshot} online={online} onUpdated={onUpdated} />
+          : activeTab === "frontline" ? <FrontlineTab run={run} snapshot={snapshot} online={online} onUpdated={onUpdated} />
+          : activeTab === "packaging" ? <PackagingTab run={run} snapshot={snapshot} online={online} onUpdated={onUpdated} />
           : <SummaryTab snapshot={snapshot} />
         ) : (
           <p className="py-6 text-sm text-muted-foreground">{online ? "Reading operational state…" : "Operational state refreshes when the connection returns."}</p>

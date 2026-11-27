@@ -5314,6 +5314,28 @@ components:
               type: number
             doughDepletionSec:
               type: number
+            sauceBatches:
+              type: number
+            sauceEffBarrel:
+              type: number
+              description: Fractional barrel count including the barrel in progress.
+            sauceDepletionSec:
+              type: number
+              description: Seconds of run time the current sauce supply covers at the current rate.
+            app1Lbs:
+              type: number
+            app2Lbs:
+              type: number
+            app3Lbs:
+              type: number
+            app4Lbs:
+              type: number
+            casesOnLastSkid:
+              type: number
+            stacksNeededTotal:
+              type: number
+            casesLeftToOpen:
+              type: number
         due:
           $ref: "#/components/schemas/OperationalSchedule"
     OperationalView:

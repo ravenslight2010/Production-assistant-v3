@@ -2507,6 +2507,18 @@ export interface components {
                 perBatch?: number;
                 doughMadeTimeSec?: number;
                 doughDepletionSec?: number;
+                sauceBatches?: number;
+                /** @description Fractional barrel count including the barrel in progress. */
+                sauceEffBarrel?: number;
+                /** @description Seconds of run time the current sauce supply covers at the current rate. */
+                sauceDepletionSec?: number;
+                app1Lbs?: number;
+                app2Lbs?: number;
+                app3Lbs?: number;
+                app4Lbs?: number;
+                casesOnLastSkid?: number;
+                stacksNeededTotal?: number;
+                casesLeftToOpen?: number;
             };
             due: components["schemas"]["OperationalSchedule"];
         };
