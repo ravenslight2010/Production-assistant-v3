@@ -630,6 +630,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/runs/{runId}/operational": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Server-computed operational read for one run
+         * @description Auto-track schedule, live projection, and audit view computed on the server. The ETag is the run revision; when If-None-Match matches the server answers 304 without running the calculator chain. Clients render this payload; they never recompute.
+         */
+        get: operations["getOperationalRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/runs/{runId}/run-to-time": {
         parameters: {
             query?: never;
@@ -2403,6 +2423,123 @@ export interface components {
             endedAt: string | null;
             /** @description Required for lifecycle pauses; false allows only line and packaging automatic progress during the open pause. */
             stopTunnel?: boolean;
+        };
+        OperationalSnapshot: {
+            /** @description Run revision the payload was computed against; also the ETag value. */
+            revision: number;
+            /** Format: int64 */
+            serverTimeMs: number;
+            schedule: components["schemas"]["OperationalSchedule"];
+            projection: components["schemas"]["OperationalProjection"];
+            view: components["schemas"]["OperationalView"];
+        };
+        OperationalSchedule: {
+            runId: string;
+            /** @description Lifecycle-qualified schedule generation; changes when any timer resets. */
+            generation: string;
+            /** Format: int64 */
+            atMs: number;
+            entries: {
+                channel: string;
+                /** Format: int64 */
+                dueAt: number;
+                dueNow: boolean;
+                /** Format: int64 */
+                nextDueAt: number;
+                /** @description false for replay-derived catch-up entries after a pause. */
+                canonical: boolean;
+            }[];
+        };
+        OperationalProjection: {
+            version: number;
+            runId: string;
+            lifecycleGeneration: string;
+            /** Format: int64 */
+            serverTimeMs: number;
+            /** Format: int64 */
+            capturedAtServerMs?: number;
+            calculationRevision: number;
+            effectiveElapsedSec: number;
+            stationActivity?: Record<string, never> | null;
+            linePhases?: Record<string, never>;
+            timers: {
+                nextBatchInSec: number;
+                pressRemainingSec: number;
+                freezerElapsedSec: number;
+                freezerRemainingSec: number;
+                currentBatchNum: number;
+                secUntilNextBatch: number;
+                totalBatchesNeeded: number;
+            };
+            counters: {
+                casesCompleted: number;
+                casesInFreezer: number;
+                casesOnLine: number;
+                casesLeftToRun: number;
+                pressCasesLeft: number;
+                traysOnLine: number;
+                batchesReady: number;
+                sauceBarrelsMade: number;
+                app1BatchesMade: number;
+                app2BatchesMade: number;
+                app3BatchesMade: number;
+                app4BatchesMade: number;
+            };
+            facts: {
+                runStatus: string;
+                pressDone: boolean;
+                paceStatus: string;
+                paceDelta: number;
+            };
+            /** @description The ported v1 computeCalc output for this run; field set is owned by the calculator. */
+            calc: Record<string, never>;
+            due: components["schemas"]["OperationalSchedule"];
+        };
+        OperationalView: {
+            version: number;
+            date: string;
+            runId: string;
+            observed: {
+                /** @enum {string} */
+                status: "not-started" | "running" | "paused" | "ended";
+                elapsedBatchSec: number;
+                stoppages: {
+                    count: number;
+                    downtimeSeconds: number;
+                };
+            };
+            recap: {
+                casesNeeded: number;
+                casesCompleted: number;
+                casesLeftToRun: number;
+                pressDone: boolean;
+                extraCases: number;
+            };
+            elapsed: {
+                batchSec: number;
+                phase?: Record<string, never>;
+            };
+            pace: {
+                ppm: number;
+                paceStatus: string;
+                paceDelta: number;
+                catchUpPpm: number;
+            };
+            advisory: Record<string, never>;
+            /** Format: int64 */
+            calculatedAt: number;
+            freshness: {
+                /** @enum {string} */
+                status: "fresh" | "stale";
+                snapshotId: string;
+                /** Format: int64 */
+                capturedAt: number;
+                /** Format: int64 */
+                ageMs: number;
+                /** Format: int64 */
+                maxAgeMs: number;
+            };
+            formulaProvenance: Record<string, never>;
         };
         /** @description Server-owned run snapshot. Optional productionRules contains enabled manager-imported rule assessments. Unknown is not a pass. Flexible findings warn; strict unknown/violated findings block preparation/start. A bypass can only come from the reviewed imported rule configuration. */
         Run: {
@@ -5560,6 +5697,47 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             405: components["responses"]["Error"];
+        };
+    };
+    getOperationalRun: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a prior getOperationalRun response (the run revision). When the run revision is unchanged the server answers 304 with an empty body. */
+                "If-None-Match"?: string;
+            };
+            path: {
+                runId: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Operational schedule, projection, and view */
+            200: {
+                headers: {
+                    /** @description Run-revision tag; send as If-None-Match to poll cheaply. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationalSnapshot"];
+                };
+            };
+            /** @description Not modified — the run revision has not changed since the tagged version. */
+            304: {
+                headers: {
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            412: components["responses"]["Error"];
         };
     };
     applyRunToTime: {

@@ -1453,6 +1453,56 @@ paths:
           $ref: "#/components/responses/Error"
         "405":
           $ref: "#/components/responses/Error"
+  /api/v3/runs/{runId}/operational:
+    get:
+      operationId: getOperationalRun
+      summary: Server-computed operational read for one run
+      description: >
+        Auto-track schedule, live projection, and audit view computed on the
+        server. The ETag is the run revision; when If-None-Match matches the
+        server answers 304 without running the calculator chain. Clients
+        render this payload; they never recompute.
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - in: header
+          name: If-None-Match
+          required: false
+          schema:
+            type: string
+          description: >
+            Strong ETag from a prior getOperationalRun response (the run
+            revision). When the run revision is unchanged the server answers
+            304 with an empty body.
+      responses:
+        "200":
+          description: Operational schedule, projection, and view
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Run-revision tag; send as If-None-Match to poll cheaply.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationalSnapshot"
+        "304":
+          description: Not modified — the run revision has not changed since the tagged version.
+          headers:
+            ETag:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
+        "412":
+          $ref: "#/components/responses/Error"
   /api/v3/runs/{runId}/run-to-time:
     post:
       operationId: applyRunToTime
@@ -5102,6 +5152,227 @@ components:
         stopTunnel:
           type: boolean
           description: Required for lifecycle pauses; false allows only line and packaging automatic progress during the open pause.
+    OperationalSnapshot:
+      type: object
+      required: [view, projection, schedule, revision, serverTimeMs]
+      properties:
+        revision:
+          type: integer
+          description: Run revision the payload was computed against; also the ETag value.
+        serverTimeMs:
+          type: integer
+          format: int64
+        schedule:
+          $ref: "#/components/schemas/OperationalSchedule"
+        projection:
+          $ref: "#/components/schemas/OperationalProjection"
+        view:
+          $ref: "#/components/schemas/OperationalView"
+    OperationalSchedule:
+      type: object
+      required: [runId, generation, atMs, entries]
+      properties:
+        runId:
+          type: string
+        generation:
+          type: string
+          description: Lifecycle-qualified schedule generation; changes when any timer resets.
+        atMs:
+          type: integer
+          format: int64
+        entries:
+          type: array
+          items:
+            type: object
+            required: [channel, dueAt, dueNow, nextDueAt, canonical]
+            properties:
+              channel:
+                type: string
+              dueAt:
+                type: integer
+                format: int64
+              dueNow:
+                type: boolean
+              nextDueAt:
+                type: integer
+                format: int64
+              canonical:
+                type: boolean
+                description: false for replay-derived catch-up entries after a pause.
+    OperationalProjection:
+      type: object
+      required: [version, runId, lifecycleGeneration, serverTimeMs, calculationRevision, effectiveElapsedSec, timers, counters, facts, calc, due]
+      properties:
+        version:
+          type: integer
+        runId:
+          type: string
+        lifecycleGeneration:
+          type: string
+        serverTimeMs:
+          type: integer
+          format: int64
+        capturedAtServerMs:
+          type: integer
+          format: int64
+        calculationRevision:
+          type: integer
+        effectiveElapsedSec:
+          type: number
+        stationActivity:
+          type: object
+          nullable: true
+        linePhases:
+          type: object
+        timers:
+          type: object
+          required: [nextBatchInSec, pressRemainingSec, freezerElapsedSec, freezerRemainingSec, currentBatchNum, secUntilNextBatch, totalBatchesNeeded]
+          properties:
+            nextBatchInSec:
+              type: number
+            pressRemainingSec:
+              type: number
+            freezerElapsedSec:
+              type: number
+            freezerRemainingSec:
+              type: number
+            currentBatchNum:
+              type: number
+            secUntilNextBatch:
+              type: number
+            totalBatchesNeeded:
+              type: number
+        counters:
+          type: object
+          required: [casesCompleted, casesInFreezer, casesOnLine, casesLeftToRun, pressCasesLeft, traysOnLine, batchesReady, sauceBarrelsMade, app1BatchesMade, app2BatchesMade, app3BatchesMade, app4BatchesMade]
+          properties:
+            casesCompleted:
+              type: number
+            casesInFreezer:
+              type: number
+            casesOnLine:
+              type: number
+            casesLeftToRun:
+              type: number
+            pressCasesLeft:
+              type: number
+            traysOnLine:
+              type: number
+            batchesReady:
+              type: number
+            sauceBarrelsMade:
+              type: number
+            app1BatchesMade:
+              type: number
+            app2BatchesMade:
+              type: number
+            app3BatchesMade:
+              type: number
+            app4BatchesMade:
+              type: number
+        facts:
+          type: object
+          required: [runStatus, pressDone, paceStatus, paceDelta]
+          properties:
+            runStatus:
+              type: string
+            pressDone:
+              type: boolean
+            paceStatus:
+              type: string
+            paceDelta:
+              type: number
+        calc:
+          type: object
+          description: The ported v1 computeCalc output for this run; field set is owned by the calculator.
+        due:
+          $ref: "#/components/schemas/OperationalSchedule"
+    OperationalView:
+      type: object
+      required: [version, date, runId, observed, recap, elapsed, pace, advisory, calculatedAt, freshness, formulaProvenance]
+      properties:
+        version:
+          type: integer
+        date:
+          type: string
+        runId:
+          type: string
+        observed:
+          type: object
+          required: [status, elapsedBatchSec, stoppages]
+          properties:
+            status:
+              type: string
+              enum: [not-started, running, paused, ended]
+            elapsedBatchSec:
+              type: number
+            stoppages:
+              type: object
+              required: [count, downtimeSeconds]
+              properties:
+                count:
+                  type: integer
+                downtimeSeconds:
+                  type: number
+        recap:
+          type: object
+          required: [casesNeeded, casesCompleted, casesLeftToRun, pressDone, extraCases]
+          properties:
+            casesNeeded:
+              type: number
+            casesCompleted:
+              type: number
+            casesLeftToRun:
+              type: number
+            pressDone:
+              type: boolean
+            extraCases:
+              type: number
+        elapsed:
+          type: object
+          required: [batchSec]
+          properties:
+            batchSec:
+              type: number
+            phase:
+              type: object
+        pace:
+          type: object
+          required: [ppm, paceStatus, paceDelta, catchUpPpm]
+          properties:
+            ppm:
+              type: number
+            paceStatus:
+              type: string
+            paceDelta:
+              type: number
+            catchUpPpm:
+              type: number
+        advisory:
+          type: object
+        calculatedAt:
+          type: integer
+          format: int64
+        freshness:
+          type: object
+          required: [status, snapshotId, capturedAt, ageMs, maxAgeMs]
+          properties:
+            status:
+              type: string
+              enum: [fresh, stale]
+            snapshotId:
+              type: string
+            capturedAt:
+              type: integer
+              format: int64
+            ageMs:
+              type: integer
+              format: int64
+            maxAgeMs:
+              type: integer
+              format: int64
+        formulaProvenance:
+          type: object
     Run:
       type: object
       description: >

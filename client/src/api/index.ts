@@ -1,5 +1,6 @@
 import createClient from "openapi-typesafe-fetch";
 import { nextRunsListPollDelayMs } from "../../../web/runs-list-cadence.mjs";
+import { nextOperationalPollDelayMs } from "../../../web/operational-cadence.mjs";
 import type { components, paths } from "./schema";
 
 const client = createClient<paths>({ baseUrl: "/" });
@@ -527,6 +528,50 @@ export async function listRuns(limit = 50, options?: { scope?: RunListScope }): 
   const etag = result.response.headers.get("etag");
   if (typeof etag === "string" && etag.length > 0) runsListCaches.set(scope, { etag, runs: data.runs });
   return data.runs;
+}
+
+export type OperationalSnapshot = components["schemas"]["OperationalSnapshot"];
+
+const operationalCaches = new Map<string, { etag: string; snapshot: OperationalSnapshot }>();
+const operationalNotModifiedStreaks = new Map<string, number>();
+
+export function operationalPollDelayMs(runId: string): number {
+  return nextOperationalPollDelayMs(operationalNotModifiedStreaks.get(runId) ?? 0);
+}
+
+export function resetOperationalPollBackoff(runId: string): void {
+  operationalNotModifiedStreaks.set(runId, 0);
+}
+
+export function invalidateOperationalSnapshot(runId: string): void {
+  operationalCaches.delete(runId);
+  resetOperationalPollBackoff(runId);
+}
+
+/**
+ * Polls the server-owned operational read for one run. Matching revisions
+ * answer 304 and resolve to null (the caller keeps rendering its last
+ * snapshot); fresh payloads carry the new ETag in the returned snapshot's
+ * revision. The snapshot is complete on its own — clients render it, they
+ * never recompute schedule/projection/view math.
+ */
+export async function getOperationalSnapshot(runId: string): Promise<OperationalSnapshot | null> {
+  let cache = operationalCaches.get(runId);
+  const headers: { "If-None-Match"?: string } = {};
+  if (cache) headers["If-None-Match"] = cache.etag;
+  const result = await client.GET("/api/v3/runs/{runId}/operational", {
+    params: { path: { runId }, header: headers },
+  });
+  if (result.response.status === 304) {
+    operationalNotModifiedStreaks.set(runId, (operationalNotModifiedStreaks.get(runId) ?? 0) + 1);
+    if (cache) return null;
+    throw new ApiError("Operational read could not be confirmed.", 304);
+  }
+  const data = await unwrap(result);
+  operationalNotModifiedStreaks.set(runId, 0);
+  const etag = result.response.headers.get("etag");
+  if (typeof etag === "string" && etag.length > 0) operationalCaches.set(runId, { etag, snapshot: data });
+  return data;
 }
 
 export async function listRunProducts(): Promise<RunProduct[]> {

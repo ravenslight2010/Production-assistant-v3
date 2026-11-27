@@ -3,6 +3,7 @@ import { ApiError, applyRunCommand, applyStationCommand, type Run, type RunComma
 import { RunToTimeControl } from "./RunToTimeControl";
 import { RunOperationsPanel } from "./RunOperationsPanel";
 import { EffectiveProductionPlan } from "./EffectiveProductionPlan";
+import { RunOperationalTabs } from "./RunOperationalTabs";
 
 const stationOrder: StationKey[] = ["line", "dough", "cheese", "pepperoni", "sauce", "frontline", "packaging"];
 const stationFields: Record<StationKey, { inputs: string[]; progress: string[] }> = {
@@ -185,6 +186,7 @@ export function RunDetail({ run, online, canManageReasons, onUpdated }: {
         </div>
         <StationCard key={selectedStation} run={run} stationKey={selectedStation} online={online} onUpdated={onUpdated} />
       </div>
+      {run.status !== "planned" ? <RunOperationalTabs run={run} online={online} /> : null}
     </section>
   );
 }
