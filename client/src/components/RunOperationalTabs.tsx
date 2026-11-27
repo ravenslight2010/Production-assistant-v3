@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { TriangleAlert } from "lucide-react";
+import { TriangleAlert, Wand2 } from "lucide-react";
 import {
   ApiError,
   applyLineTiming,
   applyStationCommand,
   getOperationalSnapshot,
+  getRunFillMissing,
   operationalPollDelayMs,
   resetOperationalPollBackoff,
+  saveFillMissingValues,
+  type FillMissingGap,
+  type FillMissingScan,
   type OperationalSnapshot,
   type Run,
   type RunLineTiming,
@@ -241,16 +245,168 @@ function LineTimingEditor({ run, online, onUpdated }: {
   );
 }
 
-function RunTab({ run, snapshot, online, onUpdated }: {
+const FILL_MISSING_CATEGORIES: FillMissingGap["category"][] = ["line", "dough", "cheese", "pepperoni", "sauce", "frontline"];
+
+// v1's FillMissing panel, ported to the run cockpit: one server-side scan
+// reports every blank station input the calculator consumes, each with a
+// proposal (learned > catalog) and a one-click apply routed through the
+// existing station command. The scan never writes; confirmed values are
+// committed field by field, exactly as v1 did.
+function FillMissingPanel({ run, online, canManageProfiles, onUpdated }: {
+  run: Run;
+  online: boolean;
+  canManageProfiles: boolean;
+  onUpdated: (run: Run, notice?: string) => void;
+}) {
+  const [scan, setScan] = useState<FillMissingScan | null>(null);
+  const [scanned, setScanned] = useState(false);
+  const [skipped, setSkipped] = useState<string[]>([]);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [remember, setRemember] = useState(true);
+  const [scanning, setScanning] = useState(false);
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const commandIds = useRef(new Map<string, string>());
+  const editable = online && ["planned", "running", "paused"].includes(run.status);
+
+  async function scanNow() {
+    setError(null);
+    setScanning(true);
+    try {
+      const result = await getRunFillMissing(run.id);
+      setScan(result);
+      setScanned(true);
+      setSkipped([]);
+      setDrafts({});
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "The scan failed. Refresh and retry when connected.");
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  const gaps = scan ? scan.gaps.filter((gap) => !skipped.includes(gap.key)) : [];
+  const groups = FILL_MISSING_CATEGORIES
+    .map((category) => [category, gaps.filter((gap) => gap.category === category)] as const)
+    .filter(([, list]) => list.length > 0);
+  const productCode = scan?.productCode ?? run.setupSnapshot.productCode;
+
+  async function applyGap(gap: FillMissingGap) {
+    const raw = drafts[gap.key] ?? (gap.proposedValue != null ? String(gap.proposedValue) : "");
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value <= 0) {
+      setError(`Enter a positive number for ${gap.label}.`);
+      return;
+    }
+    setError(null);
+    let commandId = commandIds.current.get(gap.key);
+    if (!commandId) {
+      commandId = crypto.randomUUID();
+      commandIds.current.set(gap.key, commandId);
+    }
+    setPendingKey(gap.key);
+    try {
+      const result = await applyStationCommand(
+        run,
+        gap.apply.station as StationKey,
+        { [gap.apply.field]: value },
+        commandId,
+      );
+      commandIds.current.delete(gap.key);
+      // v1's one-click remember: after the server confirms the value, offer
+      // to store it as a learned value for this product. Best effort — the
+      // fill itself already landed.
+      if (remember && canManageProfiles && productCode) {
+        try {
+          await saveFillMissingValues([{ productCode, fieldKey: gap.key, value: String(value) }]);
+        } catch {
+          // The fill landed; failing to remember must not surface an error.
+        }
+      }
+      setScan((prior) => prior ? { ...prior, gaps: prior.gaps.filter((item) => item.key !== gap.key) } : prior);
+      onUpdated(result.run, result.conflict
+        ? "Stale change discarded; the latest server state is now displayed."
+        : `${gap.label} confirmed by the server.`);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : `${gap.label} could not be applied. Refresh before retrying.`);
+    } finally {
+      setPendingKey(null);
+    }
+  }
+
+  return (
+    <div className="mt-4 border-t border-border pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="eyebrow">Missing data</p>
+        <button type="button" className="button-secondary" disabled={!editable || scanning} onClick={() => void scanNow()}>
+          <Wand2 className="mr-1 inline size-3.5" />
+          {scanning ? "Scanning…" : scanned ? "Rescan" : "Scan for missing data"}
+        </button>
+      </div>
+      {!scanned ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Find blank station inputs this run's calculator needs, with proposals from remembered and catalog values.
+        </p>
+      ) : null}
+      {scanned && gaps.length === 0 ? (
+        <div className="notice-banner mt-3" role="status">No missing data found.</div>
+      ) : null}
+      {groups.map(([category, list]) => (
+        <div key={category} className="mt-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{category}</p>
+          <ul className="mt-1 divide-y divide-border">
+            {list.map((gap) => (
+              <li key={gap.key} className="flex flex-wrap items-center gap-2 py-2">
+                <span className="min-w-40 flex-1 text-sm font-medium">{gap.label}</span>
+                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {gap.source === "learned" ? "Learned" : gap.source === "catalog" ? "Catalog" : "No suggestion"}
+                </span>
+                <input
+                  className="field w-24 text-sm text-foreground"
+                  type="number" min={0} step="any" inputMode="decimal"
+                  aria-label={gap.label}
+                  placeholder={gap.proposedValue != null ? String(gap.proposedValue) : "blank"}
+                  value={drafts[gap.key] ?? ""}
+                  disabled={!editable || pendingKey !== null}
+                  onChange={(event) => { commandIds.current.delete(gap.key); setDrafts((prior) => ({ ...prior, [gap.key]: event.target.value })); }}
+                />
+                <button type="button" className="button-secondary" disabled={!editable || pendingKey !== null}
+                  onClick={() => void applyGap(gap)}>
+                  {pendingKey === gap.key ? "Applying…" : "Apply"}
+                </button>
+                <button type="button" className="text-xs underline text-muted-foreground disabled:opacity-50"
+                  disabled={pendingKey !== null}
+                  onClick={() => setSkipped((prior) => [...prior, gap.key])}>
+                  Skip
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      {canManageProfiles && productCode && gaps.length > 0 ? (
+        <label className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />
+          Remember confirmed values for {productCode}
+        </label>
+      ) : null}
+      {error ? <span className="error-text mt-2 block" role="alert">{error}</span> : null}
+    </div>
+  );
+}
+
+function RunTab({ run, snapshot, online, canManageProfiles, onUpdated }: {
   run: Run;
   snapshot: OperationalSnapshot;
   online: boolean;
+  canManageProfiles: boolean;
   onUpdated: (run: Run, notice?: string) => void;
 }) {
   const { view, projection } = snapshot;
   const finishMs = projectedFinishMs(run, projection.calc);
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+    <>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       <section className="panel">
         <p className="eyebrow">Line speed</p>
         <p className="mt-2 text-2xl font-semibold tabular-nums">{view.pace.ppm.toFixed(1)}<span className="ml-1 text-sm font-normal text-muted-foreground">cases/min</span></p>
@@ -288,7 +444,9 @@ function RunTab({ run, snapshot, online, onUpdated }: {
             label="Cases produced" online={online} onUpdated={onUpdated} />
         </div>
       </section>
-    </div>
+      </div>
+      <FillMissingPanel run={run} online={online} canManageProfiles={canManageProfiles} onUpdated={onUpdated} />
+    </>
   );
 }
 
@@ -620,7 +778,7 @@ function statusLabel(status: string) {
     : "Finished";
 }
 
-export function RunOperationalTabs({ run, online, onUpdated }: { run: Run; online: boolean; onUpdated: (run: Run, notice?: string) => void }) {
+export function RunOperationalTabs({ run, online, canManageProfiles, onUpdated }: { run: Run; online: boolean; canManageProfiles: boolean; onUpdated: (run: Run, notice?: string) => void }) {
   const [snapshot, setSnapshot] = useState<OperationalSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<OperationalTab>("run");
   const [error, setError] = useState<string | null>(null);
@@ -700,7 +858,7 @@ export function RunOperationalTabs({ run, online, onUpdated }: { run: Run; onlin
       {error ? <div className="error-banner mt-4" role="alert">{error}</div> : null}
       <div className="mt-4">
         {snapshot ? (
-          activeTab === "run" ? <RunTab run={run} snapshot={snapshot} online={online} onUpdated={onUpdated} />
+          activeTab === "run" ? <RunTab run={run} snapshot={snapshot} online={online} canManageProfiles={canManageProfiles} onUpdated={onUpdated} />
           : activeTab === "dough" ? <DoughTab run={run} snapshot={snapshot} online={online} onUpdated={onUpdated} />
           : activeTab === "sauce" ? <SauceTab run={run} snapshot={snapshot} online={online} onUpdated={onUpdated} />
           : activeTab === "frontline" ? <FrontlineTab run={run} snapshot={snapshot} online={online} onUpdated={onUpdated} />

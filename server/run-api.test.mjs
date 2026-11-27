@@ -106,6 +106,12 @@ async function withApi(t, overrides = {}, options = {}) {
         : { outcome: "conflict", expectedRevision: 0, currentRun: { ...RUN, status: "running", revision: 1 } };
     },
   };
+  const lineTiming = {
+    execute: async (input) => {
+      calls.push(["lineTiming", input]);
+      return { outcome: "accepted", replayed: false, commandId: input.command.commandId, run: { ...RUN, revision: 1 } };
+    },
+  };
   const runToTimes = {
     execute: async (input) => {
       calls.push(["runToTime", input]);
@@ -152,20 +158,68 @@ async function withApi(t, overrides = {}, options = {}) {
       };
     },
   };
+  const fillMissingScans = {
+    build: async (input) => {
+      calls.push(["fillMissingScan", input]);
+      if (input.runId !== RUN_ID) return null;
+      return {
+        runId: input.runId,
+        productCode: "CHEESE-16",
+        gaps: [{
+          key: "sauce.barrelLbs",
+          runId: input.runId,
+          label: "Sauce barrel (lbs)",
+          category: "sauce",
+          currentValue: null,
+          proposedValue: 450,
+          source: "learned",
+          fillable: true,
+          apply: { kind: "station_command", station: "sauce", field: "barrelLbs" },
+        }],
+      };
+    },
+  };
   const services = {
     runs: { ...runs, ...overrides.runs },
     commands: { ...commands, ...overrides.commands },
     runToTimes: { ...runToTimes, ...overrides.runToTimes },
+    lineTiming: { ...lineTiming, ...overrides.lineTiming },
     operations: { ...operations, ...overrides.operations },
     stations: { ...stations, ...overrides.stations },
     operationalReads: { ...operationalReads, ...overrides.operationalReads },
+    fillMissingScans: { ...fillMissingScans, ...overrides.fillMissingScans },
     authenticate: overrides.authenticate ?? (async () => AUTH),
     verifyCsrf: overrides.verifyCsrf ?? (async (request, auth) => auth === AUTH && request.headers["x-csrf-token"] === "ok"),
     maxBodyBytes: options.maxBodyBytes ?? 16 * 1024,
   };
   if (overrides.operationalReads === false) delete services.operationalReads;
+  if (overrides.fillMissingScans === false) delete services.fillMissingScans;
   const handler = createRunApi(services);
   return listenHandler(t, handler, calls);
+}
+
+function withApiArgs(overrides = {}) {
+  // Build the same service bag as withApi without listening, for construction-time guards.
+  const noop = async () => ({});
+  const base = {
+    runs: { list: noop, listProducts: noop, get: noop, create: noop },
+    commands: { execute: noop },
+    runToTimes: { execute: noop },
+    lineTiming: { execute: noop },
+    operations: { execute: noop, getStopReasons: noop, saveStopReasons: noop },
+    stations: { execute: noop },
+    operationalReads: { build: noop },
+    fillMissingScans: { build: noop },
+    authenticate: noop,
+    verifyCsrf: noop,
+    maxBodyBytes: 16 * 1024,
+    logger: () => {},
+  };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === false) delete base[key];
+    else base[key] = value;
+  }
+  return () => createRunApi(base);
 }
 
 async function send(baseUrl, path, { method = "GET", body, headers = {} } = {}) {
@@ -647,6 +701,39 @@ test("serves the server-owned operational read with a revision ETag and answers 
   assert.equal(await fresh.text(), "");
   assert.deepEqual(calls.map(([name]) => name), ["operational", "operational"]);
   assert.equal(calls[1][1].ifNoneMatch, '"3"');
+});
+
+test("serves the fill-missing scan with proposals and routing metadata", async (t) => {
+  const { baseUrl, calls } = await withApi(t);
+  const response = await send(baseUrl, `/api/v3/runs/${RUN_ID}/fill-missing`);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.runId, RUN_ID);
+  assert.equal(body.productCode, "CHEESE-16");
+  assert.equal(body.gaps.length, 1);
+  assert.equal(body.gaps[0].key, "sauce.barrelLbs");
+  assert.equal(body.gaps[0].source, "learned");
+  assert.deepEqual(body.gaps[0].apply, { kind: "station_command", station: "sauce", field: "barrelLbs" });
+  assert.deepEqual(calls.map(([name]) => name), ["fillMissingScan"]);
+  assert.equal(calls[0][1].runId, RUN_ID);
+  assert.equal(calls[0][1].auth, AUTH);
+});
+
+test("answers 404 when the fill-missing scan finds no run and 400 for malformed ids", async (t) => {
+  const { baseUrl } = await withApi(t);
+  const missing = await send(baseUrl, "/api/v3/runs/00000000-0000-4000-8000-000000000099/fill-missing");
+  assert.equal(missing.status, 404);
+  const malformed = await send(baseUrl, "/api/v3/runs/not-a-uuid/fill-missing");
+  assert.equal(malformed.status, 400);
+  const query = await send(baseUrl, `/api/v3/runs/${RUN_ID}/fill-missing?x=1`);
+  assert.equal(query.status, 400);
+});
+
+test("requires the fill-missing scan service at construction time", () => {
+  assert.throws(
+    withApiArgs({ fillMissingScans: false }),
+    /fill-missing scan service must provide build/,
+  );
 });
 
 test("rejects operational query parameters and malformed run ids", async (t) => {

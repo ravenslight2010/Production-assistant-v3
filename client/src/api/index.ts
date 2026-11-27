@@ -710,6 +710,28 @@ export async function applyStationCommand(
   return { run: "run" in accepted ? accepted.run : accepted.currentRun, conflict: false };
 }
 
+export type FillMissingScan = components["schemas"]["FillMissingScan"];
+export type FillMissingGap = components["schemas"]["FillMissingGap"];
+export type FillMissingLearnedValue = components["schemas"]["FillMissingLearnedValue"];
+
+export async function getRunFillMissing(runId: string): Promise<FillMissingScan> {
+  const result = await client.GET("/api/v3/runs/{runId}/fill-missing", {
+    params: { path: { runId } },
+  });
+  return unwrap(result);
+}
+
+export async function saveFillMissingValues(
+  rows: { productCode: string; fieldKey: string; value: string }[],
+): Promise<number> {
+  const result = await client.POST("/api/v3/fill-missing-values", {
+    params: { header: mutationHeaders() },
+    body: { rows },
+  });
+  const data = await unwrap(result);
+  return data.saved;
+}
+
 export async function getStaffDirectory(): Promise<StaffDirectory> {
   return unwrap(await client.GET("/api/v3/auth/staff"));
 }

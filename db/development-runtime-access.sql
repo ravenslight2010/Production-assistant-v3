@@ -56,6 +56,8 @@ GRANT EXECUTE ON FUNCTION
   v3.list_combined_setup_reviews(uuid, integer),
   v3.list_die_default_events(uuid, integer),
   v3.list_die_defaults(uuid),
+  v3.list_fill_missing_values(uuid),
+  v3.save_fill_missing_values(uuid, uuid, jsonb),
   v3.list_due_station_auto_track(integer),
   v3.list_freezer_surplus(uuid),
   v3.list_inventory_movements(uuid, uuid, integer, timestamptz, uuid),

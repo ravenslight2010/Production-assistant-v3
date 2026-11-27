@@ -110,7 +110,7 @@ export function RunPage({ session, online }: { session: AuthSession; online: boo
               </select>
             </label>
           ) : null}
-          {selected ? <RunDetail run={selected} online={online} canManageReasons={session.staff.capabilities.includes("manage-factory-settings")} onUpdated={updated} /> : (
+          {selected ? <RunDetail run={selected} online={online} canManageReasons={session.staff.capabilities.includes("manage-factory-settings")} canManageProfiles={session.staff.capabilities.includes("manage-profiles")} onUpdated={updated} /> : (
             <section className="panel">
               <p className="eyebrow">Current run</p>
               <h2 className="mt-2 text-xl font-semibold">{loading ? "Reading server state…" : "No production runs yet"}</h2>

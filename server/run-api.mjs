@@ -7,6 +7,7 @@ import { createLineTimingCommandService } from "../core/line-timing-command-serv
 import { createRunOperationsService } from "../core/run-operations-service.mjs";
 import { createStationCommandService } from "../core/station-command-service.mjs";
 import { createOperationalReadService } from "../core/station-operational-read.mjs";
+import { createFillMissingScanService } from "../core/fill-missing-scan-service.mjs";
 
 const API_PREFIX = "/api/v3/runs";
 const STOP_REASONS_PATH = "/api/v3/operations/stop-reasons";
@@ -164,6 +165,7 @@ export function createRunApi({
   operations,
   stations,
   operationalReads,
+  fillMissingScans,
   authenticate,
   verifyCsrf,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
@@ -191,6 +193,9 @@ export function createRunApi({
   }
   if (operationalReads !== undefined && typeof operationalReads?.build !== "function") {
     throw new TypeError("The operational read service must provide build().");
+  }
+  if (!fillMissingScans || typeof fillMissingScans.build !== "function") {
+    throw new TypeError("The fill-missing scan service must provide build().");
   }
   if (typeof authenticate !== "function") {
     throw new TypeError("A server authentication adapter is required.");
@@ -328,6 +333,16 @@ export function createRunApi({
         return;
       }
 
+      const fillMissingMatch = url.pathname.match(/^\/api\/v3\/runs\/([^/]+)\/fill-missing$/);
+      if (fillMissingMatch && request.method === "GET") {
+        if (url.search) throw new RunApiError(400, "Fill-missing query parameters are not supported.");
+        const runId = normalizePathRunId(fillMissingMatch[1]);
+        const result = await fillMissingScans.build({ auth, runId });
+        if (result === null) throw new RunApiError(404, "Run not found.");
+        sendJson(request, response, 200, result);
+        return;
+      }
+
       const operationalMatch = url.pathname.match(/^\/api\/v3\/runs\/([^/]+)\/operational$/);
       if (operationalMatch && request.method === "GET") {
         if (!operationalReads) throw new RunApiError(404, "Operational route not found.");
@@ -412,5 +427,6 @@ export function createRunApiForDatabase({
   const operations = createRunOperationsService({ query, authorize });
   const stations = createStationCommandService({ query, authorize });
   const operationalReads = createOperationalReadService({ runs });
-  return createRunApi({ runs, commands, runToTimes, lineTiming, operations, stations, operationalReads, authenticate, verifyCsrf, maxBodyBytes, logger });
+  const fillMissingScans = createFillMissingScanService({ runs, query });
+  return createRunApi({ runs, commands, runToTimes, lineTiming, operations, stations, operationalReads, fillMissingScans, authenticate, verifyCsrf, maxBodyBytes, logger });
 }

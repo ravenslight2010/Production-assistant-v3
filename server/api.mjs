@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createAccountApi } from "./account-api.mjs";
 import { createAccountService } from "./account-service.mjs";
 import { createAuthApi } from "./auth-api.mjs";
+import { createFillMissingValuesApi } from "./fill-missing-values-api.mjs";
 import { createInventoryApi } from "./inventory-api.mjs";
 import { createMixApi } from "./mix-api.mjs";
 import { createQcApi } from "./qc-api.mjs";
@@ -202,6 +203,12 @@ export function createV3Api({
     verifyCsrf: (request, auth) => authAdapter.verifyCsrf(request, auth),
     logger,
   });
+  const fillMissingValuesApi = createFillMissingValuesApi({
+    pool,
+    authenticate: (request) => authAdapter.authenticate(request),
+    verifyCsrf: (request, auth) => authAdapter.verifyCsrf(request, auth),
+    logger,
+  });
   const scheduleApi = createScheduleApi({
     pool,
     authenticate: (request) => authAdapter.authenticate(request),
@@ -284,6 +291,7 @@ export function createV3Api({
 
       if (await accountApi(request, response)) return;
       if (await authApi(request, response)) return;
+      if (await fillMissingValuesApi(request, response)) return;
       if (await inventoryApi(request, response)) return;
       if (await scheduleApi(request, response)) return;
       if (await mixApi(request, response)) return;

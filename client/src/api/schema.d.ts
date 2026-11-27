@@ -650,6 +650,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/runs/{runId}/fill-missing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Scan one run for blank operational inputs with proposals
+         * @description Server-side port of v1's FillMissing detection: reports every blank run-time station input the operational read consumes (absent or not positive), each with a proposal sourced learned > catalog > none, plus the apply route (an existing station command) for one-click fill. Clients never recompute gaps; they render this payload and commit confirmed values through the command APIs.
+         */
+        get: operations["getRunFillMissing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/fill-missing-values": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Factory-wide learned fill-missing values
+         * @description Manager-confirmed values remembered per product code and field key, proposed first by the fill-missing scan. Open to any signed-in staff member (v1 parity); saving requires the manage-profiles capability.
+         */
+        get: operations["listFillMissingValues"];
+        put?: never;
+        /**
+         * Remember confirmed fill-missing values per product and field
+         * @description Upserts learned values (v1 parity: saving required the manage-profiles capability). Re-confirming a product + field key replaces the previous value.
+         */
+        post: operations["saveFillMissingValues"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/runs/{runId}/run-to-time": {
         parameters: {
             query?: never;
@@ -2443,6 +2487,43 @@ export interface components {
             endedAt: string | null;
             /** @description Required for lifecycle pauses; false allows only line and packaging automatic progress during the open pause. */
             stopTunnel?: boolean;
+        };
+        FillMissingScan: {
+            /** Format: uuid */
+            runId: string;
+            productCode?: string | null;
+            gaps: components["schemas"]["FillMissingGap"][];
+        };
+        FillMissingGap: {
+            /** @description Namespaced field key, e.g. "sauce.barrelLbs". */
+            key: string;
+            /** Format: uuid */
+            runId: string;
+            label: string;
+            /** @enum {string} */
+            category: "line" | "dough" | "cheese" | "pepperoni" | "sauce" | "frontline";
+            currentValue: number | null;
+            /** @description Present unless the source is "none". */
+            proposedValue?: number | null;
+            /** @enum {string} */
+            source: "learned" | "catalog" | "none";
+            fillable: boolean;
+            apply: components["schemas"]["FillMissingApply"];
+        };
+        FillMissingApply: {
+            /** @enum {string} */
+            kind: "station_command";
+            station: string;
+            field: string;
+        };
+        FillMissingLearnedValue: {
+            productCode: string;
+            fieldKey: string;
+            value: string;
+            /** Format: uuid */
+            updatedBy: string;
+            /** Format: date-time */
+            updatedAt: string;
         };
         OperationalSnapshot: {
             /** @description Run revision the payload was computed against; also the ETag value. */
@@ -5785,6 +5866,92 @@ export interface operations {
             404: components["responses"]["Error"];
             405: components["responses"]["Error"];
             412: components["responses"]["Error"];
+        };
+    };
+    getRunFillMissing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Gap list with proposals for the run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FillMissingScan"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+        };
+    };
+    listFillMissingValues: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Learned values for the facility */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        values: components["schemas"]["FillMissingLearnedValue"][];
+                    };
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    saveFillMissingValues: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    rows: {
+                        productCode: string;
+                        fieldKey: string;
+                        value: string;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Number of rows saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        saved: number;
+                    };
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     applyRunToTime: {

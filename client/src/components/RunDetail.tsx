@@ -12,10 +12,11 @@ const commands: Record<Run["status"], RunCommand[]> = {
   completed: [],
 };
 
-export function RunDetail({ run, online, canManageReasons, onUpdated }: {
+export function RunDetail({ run, online, canManageReasons, canManageProfiles, onUpdated }: {
   run: Run;
   online: boolean;
   canManageReasons: boolean;
+  canManageProfiles: boolean;
   onUpdated: (run: Run, notice?: string) => void;
 }) {
   const [pending, setPending] = useState<RunCommand | null>(null);
@@ -73,7 +74,7 @@ export function RunDetail({ run, online, canManageReasons, onUpdated }: {
           </button>
         ))}
       </div>
-      {run.status !== "planned" ? <RunOperationalTabs run={run} online={online} onUpdated={onUpdated} /> : null}
+      {run.status !== "planned" ? <RunOperationalTabs run={run} online={online} canManageProfiles={canManageProfiles} onUpdated={onUpdated} /> : null}
     </section>
   );
 }
