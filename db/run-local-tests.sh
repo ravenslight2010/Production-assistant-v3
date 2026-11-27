@@ -946,6 +946,17 @@ V3_TEST_ADMIN_URL="$V3_TEST_ADMIN_URL" V3_DATABASE_URL="$V3_API_URL" \
   NODE_ENV=development PORT=0 node "$ROOT/server/http-postgres.integration.mjs"
 "${PSQL[@]}" -f "$ROOT/db/0006-run-inventory-linkage.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0008-reviewed-die-defaults.test.sql"
+# The browser suites serve the built client. A missing or stale dist/ fails
+# them with UI-timeout symptoms far from the cause, so fail fast and say why.
+if [[ ! -f "$ROOT/dist/index.html" ]]; then
+  echo "dist/ is missing; run 'pnpm build' before the database harness browser suites." >&2
+  exit 1
+fi
+if [[ -n "$(find "$ROOT/client/src" -type f -newer "$ROOT/dist/index.html" -print -quit 2>/dev/null)" \
+     || "$ROOT/client/vite.config.ts" -nt "$ROOT/dist/index.html" ]]; then
+  echo "dist/ is older than client/src; run 'pnpm build' or the browser suites test stale UI." >&2
+  exit 1
+fi
 V3_TEST_ADMIN_URL="$V3_TEST_ADMIN_URL" V3_DATABASE_URL="$V3_API_URL" NODE_ENV=development \
   node "$ROOT/server/http-postgres.browser.integration.mjs"
 V3_TEST_ADMIN_URL="$V3_TEST_ADMIN_URL" V3_DATABASE_URL="$V3_API_URL" NODE_ENV=development \

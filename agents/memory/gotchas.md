@@ -161,6 +161,13 @@ rely on the 0027 default privilege) and let the backfill test
 the rig but passes the harness, diff `has_function_privilege('v3', ...)`
 against the same check for `v3_api_test`.
 
+The same drift hit `db/development-runtime-access.sql` (reviewed dev group):
+26 API-referenced functions (schedule imports, combined reviews, die defaults,
+freezer surplus, warehouse guidance/cycle counts, production schedule) were
+absent. That file now carries a completeness invariant — every `v3.*`
+function referenced by `server/*.mjs` appears in its grant list; re-derive the
+set against `pg_proc` whenever a slice adds API-surfaced functions.
+
 ## 13. Green client protocol on a half-dead rig (2026-11-27)
 
 **What happened:** the rig's API was up and answered sign-in, run lists,
