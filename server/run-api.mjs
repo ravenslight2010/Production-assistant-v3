@@ -5,6 +5,7 @@ import { createRunService } from "../core/run-service.mjs";
 import { createRunToTimeService } from "../core/run-to-time-service.mjs";
 import { createRunOperationsService } from "../core/run-operations-service.mjs";
 import { createStationCommandService } from "../core/station-command-service.mjs";
+import { createOperationalReadService } from "../core/station-operational-read.mjs";
 
 const API_PREFIX = "/api/v3/runs";
 const STOP_REASONS_PATH = "/api/v3/operations/stop-reasons";
@@ -158,6 +159,7 @@ export function createRunApi({
   runToTimes,
   operations,
   stations,
+  operationalReads,
   authenticate,
   verifyCsrf,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
@@ -179,6 +181,9 @@ export function createRunApi({
   }
   if (stations !== undefined && typeof stations?.execute !== "function") {
     throw new TypeError("The station command service must provide execute().");
+  }
+  if (operationalReads !== undefined && typeof operationalReads?.build !== "function") {
+    throw new TypeError("The operational read service must provide build().");
   }
   if (typeof authenticate !== "function") {
     throw new TypeError("A server authentication adapter is required.");
@@ -305,6 +310,24 @@ export function createRunApi({
         return;
       }
 
+      const operationalMatch = url.pathname.match(/^\/api\/v3\/runs\/([^/]+)\/operational$/);
+      if (operationalMatch && request.method === "GET") {
+        if (!operationalReads) throw new RunApiError(404, "Operational route not found.");
+        if (url.search) throw new RunApiError(400, "Operational query parameters are not supported.");
+        const runId = normalizePathRunId(operationalMatch[1]);
+        const result = await operationalReads.build({
+          auth,
+          runId,
+          ifNoneMatch: request.headers["if-none-match"],
+        });
+        if (result.matched === true) {
+          sendNotModified(response, result.etag);
+          return;
+        }
+        sendJson(request, response, 200, result.body, { ETag: result.etag });
+        return;
+      }
+
       const match = url.pathname.match(/^\/api\/v3\/runs\/([^/]+)(?:\/(commands))?$/);
       if (!match) throw new RunApiError(404, "Run route not found.");
       const runId = normalizePathRunId(match[1]);
@@ -369,5 +392,6 @@ export function createRunApiForDatabase({
   const runToTimes = createRunToTimeService({ query, authorize });
   const operations = createRunOperationsService({ query, authorize });
   const stations = createStationCommandService({ query, authorize });
-  return createRunApi({ runs, commands, runToTimes, operations, stations, authenticate, verifyCsrf, maxBodyBytes, logger });
+  const operationalReads = createOperationalReadService({ runs });
+  return createRunApi({ runs, commands, runToTimes, operations, stations, operationalReads, authenticate, verifyCsrf, maxBodyBytes, logger });
 }

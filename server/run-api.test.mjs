@@ -140,16 +140,31 @@ async function withApi(t, overrides = {}, options = {}) {
       };
     },
   };
-  const handler = createRunApi({
+  const operationalReads = {
+    build: async (input) => {
+      calls.push(["operational", input]);
+      if (input.ifNoneMatch === '"3"') return { matched: true, etag: '"3"', revision: 3 };
+      return {
+        matched: false,
+        etag: '"3"',
+        revision: 3,
+        body: { view: { snapshotId: "operational" }, projection: { runId: input.runId }, schedule: { runId: input.runId }, revision: 3, serverTimeMs: 1 },
+      };
+    },
+  };
+  const services = {
     runs: { ...runs, ...overrides.runs },
     commands: { ...commands, ...overrides.commands },
     runToTimes: { ...runToTimes, ...overrides.runToTimes },
     operations: { ...operations, ...overrides.operations },
     stations: { ...stations, ...overrides.stations },
+    operationalReads: { ...operationalReads, ...overrides.operationalReads },
     authenticate: overrides.authenticate ?? (async () => AUTH),
     verifyCsrf: overrides.verifyCsrf ?? (async (request, auth) => auth === AUTH && request.headers["x-csrf-token"] === "ok"),
     maxBodyBytes: options.maxBodyBytes ?? 16 * 1024,
-  });
+  };
+  if (overrides.operationalReads === false) delete services.operationalReads;
+  const handler = createRunApi(services);
   return listenHandler(t, handler, calls);
 }
 
@@ -614,4 +629,38 @@ test("serves stop reasons and forwards exact operational commands", async (t) =>
     },
   });
   assert.equal(bypass.status, 400);
+});
+
+test("serves the server-owned operational read with a revision ETag and answers matching polls with 304", async (t) => {
+  const { baseUrl, calls } = await withApi(t);
+  const first = await send(baseUrl, `/api/v3/runs/${RUN_ID}/operational`);
+  assert.equal(first.status, 200);
+  assert.equal(first.headers.get("etag"), '"3"');
+  const body = await first.json();
+  assert.equal(body.revision, 3);
+  assert.equal(body.projection.runId, RUN_ID);
+  assert.deepEqual(calls.map(([name]) => name), ["operational"]);
+
+  const fresh = await send(baseUrl, `/api/v3/runs/${RUN_ID}/operational`, { headers: { "If-None-Match": '"3"' } });
+  assert.equal(fresh.status, 304);
+  assert.equal(fresh.headers.get("etag"), '"3"');
+  assert.equal(await fresh.text(), "");
+  assert.deepEqual(calls.map(([name]) => name), ["operational", "operational"]);
+  assert.equal(calls[1][1].ifNoneMatch, '"3"');
+});
+
+test("rejects operational query parameters and malformed run ids", async (t) => {
+  const { baseUrl, calls } = await withApi(t);
+  const query = await send(baseUrl, `/api/v3/runs/${RUN_ID}/operational?x=1`);
+  assert.equal(query.status, 400);
+
+  const malformed = await send(baseUrl, "/api/v3/runs/not-a-uuid/operational");
+  assert.equal(malformed.status, 400);
+  assert.deepEqual(calls, []);
+});
+
+test("returns 404 for the operational route when the read service is not configured", async (t) => {
+  const { baseUrl } = await withApi(t, { operationalReads: false });
+  const response = await send(baseUrl, `/api/v3/runs/${RUN_ID}/operational`);
+  assert.equal(response.status, 404);
 });
