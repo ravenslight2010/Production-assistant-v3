@@ -3,6 +3,7 @@ import { gzipSync } from "node:zlib";
 import { createRunCommandService } from "../core/run-command-service.mjs";
 import { createRunService } from "../core/run-service.mjs";
 import { createRunToTimeService } from "../core/run-to-time-service.mjs";
+import { createLineTimingCommandService } from "../core/line-timing-command-service.mjs";
 import { createRunOperationsService } from "../core/run-operations-service.mjs";
 import { createStationCommandService } from "../core/station-command-service.mjs";
 import { createOperationalReadService } from "../core/station-operational-read.mjs";
@@ -96,6 +97,7 @@ function safeStatus(error) {
   const knownService = error?.name === "RunServiceError"
     || error?.name === "RunCommandServiceError"
     || error?.name === "RunToTimeServiceError"
+    || error?.name === "LineTimingCommandServiceError"
     || error?.name === "RunOperationsServiceError"
     || error?.name === "RunStationServiceError"
     || error?.name === "V3AuthError";
@@ -111,6 +113,7 @@ function safeMessage(error) {
     || error?.name === "RunServiceError"
     || error?.name === "RunCommandServiceError"
     || error?.name === "RunToTimeServiceError"
+    || error?.name === "LineTimingCommandServiceError"
     || error?.name === "RunOperationsServiceError"
     || error?.name === "RunStationServiceError"
     || error?.name === "V3AuthError") {
@@ -157,6 +160,7 @@ export function createRunApi({
   runs,
   commands,
   runToTimes,
+  lineTiming,
   operations,
   stations,
   operationalReads,
@@ -174,6 +178,9 @@ export function createRunApi({
   }
   if (!runToTimes || typeof runToTimes.execute !== "function") {
     throw new TypeError("The Run to Time command service is required.");
+  }
+  if (!lineTiming || typeof lineTiming.execute !== "function") {
+    throw new TypeError("The line timing command service is required.");
   }
   if (!operations || typeof operations.execute !== "function"
     || typeof operations.getStopReasons !== "function" || typeof operations.saveStopReasons !== "function") {
@@ -274,6 +281,17 @@ export function createRunApi({
         const body = await readJsonBody(request, maxBodyBytes);
         requireExactKeys(body, ["commandId", "commandType", "expectedRevision", "details"]);
         const result = await operations.execute({ auth, command: { ...body, runId } });
+        sendJson(request, response, result?.outcome === "accepted" ? 200 : 409, result);
+        return;
+      }
+
+      const lineTimingMatch = url.pathname.match(/^\/api\/v3\/runs\/([^/]+)\/line-timing$/);
+      if (lineTimingMatch && request.method === "POST") {
+        if (url.search) throw new RunApiError(400, "Line timing query parameters are not supported.");
+        const runId = normalizePathRunId(lineTimingMatch[1]);
+        const body = await readJsonBody(request, maxBodyBytes);
+        requireExactKeys(body, ["commandId", "expectedRevision", "timing"]);
+        const result = await lineTiming.execute({ auth, command: { ...body, runId } });
         sendJson(request, response, result?.outcome === "accepted" ? 200 : 409, result);
         return;
       }
@@ -390,8 +408,9 @@ export function createRunApiForDatabase({
   const runs = createRunService({ query, authorize });
   const commands = createRunCommandService({ query, authorize });
   const runToTimes = createRunToTimeService({ query, authorize });
+  const lineTiming = createLineTimingCommandService({ query, authorize });
   const operations = createRunOperationsService({ query, authorize });
   const stations = createStationCommandService({ query, authorize });
   const operationalReads = createOperationalReadService({ runs });
-  return createRunApi({ runs, commands, runToTimes, operations, stations, operationalReads, authenticate, verifyCsrf, maxBodyBytes, logger });
+  return createRunApi({ runs, commands, runToTimes, lineTiming, operations, stations, operationalReads, authenticate, verifyCsrf, maxBodyBytes, logger });
 }

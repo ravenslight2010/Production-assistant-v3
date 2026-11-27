@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { centralDate } from "../../../core/schedule-planning.mjs";
-import { ApiError, createRun, type Run, type RunProduct } from "../api";
+import { ApiError, createRun, listReviewedDieDefaults, type Run, type RunProduct, type ReviewedDieDefault } from "../api";
 
 export function CreateRunForm({ products, online, onCreated }: {
   products: RunProduct[];
@@ -12,11 +12,23 @@ export function CreateRunForm({ products, online, onCreated }: {
   const [targetCases, setTargetCases] = useState("");
   const [productCode, setProductCode] = useState("");
   const [setupCode, setSetupCode] = useState("");
+  const [dieCode, setDieCode] = useState("");
+  const [dieDefaults, setDieDefaults] = useState<ReviewedDieDefault[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestId = useRef<string | null>(null);
   const product = products.find((item) => item.code === productCode);
   const setups = product?.productionSetups ?? [];
+  const activeDies = dieDefaults.filter((item) => item.status === "active" && item.defaults !== null);
+
+  useEffect(() => {
+    if (!online) return;
+    let cancelled = false;
+    listReviewedDieDefaults()
+      .then((result) => { if (!cancelled) setDieDefaults(result.defaults); })
+      .catch(() => { if (!cancelled) setDieDefaults([]); });
+    return () => { cancelled = true; };
+  }, [online]);
 
   useEffect(() => {
     if (setups.length === 0) setSetupCode("");
@@ -44,6 +56,7 @@ export function CreateRunForm({ products, online, onCreated }: {
     requestId.current ??= crypto.randomUUID();
     setPending(true);
     try {
+      const die = activeDies.find((item) => item.code === dieCode);
       const run = await createRun({
         requestId: requestId.current,
         productionDate,
@@ -51,6 +64,9 @@ export function CreateRunForm({ products, online, onCreated }: {
         targetCases: cases,
         productCode,
         productionSetupCode: setupCode,
+        ...(die && die.defaults
+          ? { dieSetup: { dieTypeCode: die.code, expectedRevision: die.revision, lineSettings: die.defaults } }
+          : {}),
       });
       requestId.current = null;
       setLabel("");
@@ -98,6 +114,14 @@ export function CreateRunForm({ products, online, onCreated }: {
               {setups.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}
             </select>
           </label>
+          {activeDies.length > 0 ? (
+            <label className="text-sm font-medium sm:col-span-2" htmlFor="run-die">Die setup (optional — freezes reviewed line timing)
+              <select id="run-die" className="field mt-2" value={dieCode} onChange={(event) => changed(setDieCode, event.target.value)}>
+                <option value="">No die timing</option>
+                {activeDies.map((item) => <option key={item.code} value={item.code}>{item.name} · revision {item.revision}</option>)}
+              </select>
+            </label>
+          ) : null}
           <p className="text-xs leading-5 text-muted-foreground sm:col-span-2">The server freezes the reviewed recipe, production warehouse, and immutable production date. Retrying a lost response uses the same request ID.</p>
           {error ? <p className="error-text sm:col-span-2" role="alert">{error}</p> : null}
           <button type="submit" className="button-primary sm:col-span-2" disabled={pending || !online}>{pending ? "Preparing on server…" : "Prepare run"}</button>

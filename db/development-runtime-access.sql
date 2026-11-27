@@ -18,6 +18,7 @@ GRANT EXECUTE ON FUNCTION
   v3.apply_run_lifecycle_command(uuid, uuid, uuid, text, text, text, bigint),
   v3.apply_run_operation_command(uuid, uuid, uuid, text, text, text, jsonb, bigint),
   v3.apply_run_to_time_command(uuid, uuid, uuid, text, text, time, bigint),
+  v3.apply_line_timing_command(uuid, uuid, uuid, text, text, bigint, jsonb),
   v3.apply_setup_catalog_import(uuid, uuid, uuid),
   v3.apply_setup_import(uuid, uuid, uuid),
   v3.apply_station_command(uuid, uuid, uuid, text, text, bigint, text, text, jsonb, jsonb, text),

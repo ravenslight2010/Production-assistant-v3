@@ -1615,6 +1615,91 @@ paths:
           $ref: "#/components/responses/Error"
         "405":
           $ref: "#/components/responses/Error"
+  /api/v3/runs/{runId}/line-timing:
+    post:
+      operationId: applyLineTimingCommand
+      summary: Adjust the run's die-line transit timings (planned, running, or paused runs)
+      description: >
+        Revision-guarded command that patches pressOvenMin, frontlineMin,
+        postTunnelMin, and/or freezerTime in the run snapshot's reviewed
+        die-line settings. The server re-derives preTunnelMin as
+        pressOvenMin + frontlineMin so the v1 invariant cannot drift.
+        Completed runs refuse with invalid_transition.
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [commandId, expectedRevision, timing]
+              properties:
+                commandId:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                expectedRevision:
+                  type: integer
+                  minimum: 0
+                  maximum: 9007199254740991
+                timing:
+                  type: object
+                  additionalProperties: false
+                  minProperties: 1
+                  properties:
+                    pressOvenMin:
+                      type: number
+                      minimum: 0
+                      maximum: 100000
+                    frontlineMin:
+                      type: number
+                      minimum: 0
+                      maximum: 100000
+                    postTunnelMin:
+                      type: number
+                      minimum: 0
+                      maximum: 100000
+                    freezerTime:
+                      type: number
+                      minimum: 0
+                      maximum: 100000
+      responses:
+        "200":
+          description: Timing command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunCommandAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          description: Stale revision or invalid transition; includes canonical state
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/RunConflict"
+                  - $ref: "#/components/schemas/InvalidTransition"
+        "500":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
   /api/v3/runs/{runId}/stations/{stationKey}/commands:
     post:
       operationId: applyRunStationCommand

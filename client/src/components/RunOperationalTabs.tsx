@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { TriangleAlert } from "lucide-react";
 import {
   ApiError,
+  applyLineTiming,
   applyStationCommand,
   getOperationalSnapshot,
   operationalPollDelayMs,
   resetOperationalPollBackoff,
   type OperationalSnapshot,
   type Run,
+  type RunLineTiming,
   type StationKey,
 } from "../api";
 
@@ -118,6 +121,126 @@ function CommandField({ run, stationKey, fieldKey, label, unit, kind = "inputs",
   );
 }
 
+// v1's LineTransitSettings: adjust the reviewed die-line transit timings of
+// a live run. preTunnelMin is server-derived as pressOvenMin + frontlineMin;
+// the amber warning is client-side math (same rule as v1) and never blocks.
+const TIMING_FIELDS = [
+  { key: "pressOvenMin", label: "Press/Oven transit" },
+  { key: "frontlineMin", label: "Frontline transit" },
+  { key: "postTunnelMin", label: "Wrapper/Packaging transit" },
+  { key: "freezerTime", label: "Total line freeze time" },
+] as const;
+type TimingFieldKey = (typeof TIMING_FIELDS)[number]["key"];
+
+function LineTimingEditor({ run, online, onUpdated }: {
+  run: Run;
+  online: boolean;
+  onUpdated: (run: Run, notice?: string) => void;
+}) {
+  const lineSettings = run.setupSnapshot.dieSetup?.lineSettings;
+  const editable = online && ["planned", "running", "paused"].includes(run.status);
+  const [open, setOpen] = useState(false);
+  const [drafts, setDrafts] = useState<Record<TimingFieldKey, string>>({
+    pressOvenMin: "", frontlineMin: "", postTunnelMin: "", freezerTime: "",
+  });
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const commandId = useRef<string | null>(null);
+
+  if (!lineSettings) return null;
+
+  const current = (key: TimingFieldKey): number => lineSettings[key] ?? 0;
+  const draftValue = (key: TimingFieldKey): number => {
+    const raw = drafts[key];
+    return raw === "" ? current(key) : Number(raw);
+  };
+  const preTunnel = draftValue("pressOvenMin") + draftValue("frontlineMin");
+  const total = preTunnel + draftValue("freezerTime") + draftValue("postTunnelMin");
+  const sectionExceeds = preTunnel + draftValue("postTunnelMin") > draftValue("freezerTime");
+  const unchanged = TIMING_FIELDS.every((field) => drafts[field.key] === "" || draftValue(field.key) === current(field.key));
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError(null);
+    const timing: RunLineTiming = {};
+    for (const field of TIMING_FIELDS) {
+      const raw = drafts[field.key];
+      if (raw === "") continue;
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < 0) {
+        setError("Enter non-negative numbers, or leave a field blank to keep its current value.");
+        return;
+      }
+      if (value !== current(field.key)) timing[field.key] = value;
+    }
+    if (Object.keys(timing).length === 0) {
+      setOpen(false);
+      return;
+    }
+    commandId.current ??= crypto.randomUUID();
+    setPending(true);
+    try {
+      const result = await applyLineTiming(run, timing, commandId.current);
+      commandId.current = null;
+      setDrafts({ pressOvenMin: "", frontlineMin: "", postTunnelMin: "", freezerTime: "" });
+      setOpen(false);
+      onUpdated(result.run, result.conflict
+        ? "Stale change discarded; the latest server state is now displayed."
+        : "Line timing confirmed by the server.");
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Line timing update failed. Refresh before retrying.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 border-t border-border pt-3">
+      {open ? (
+        <form onSubmit={submit} className="grid gap-2" aria-label="Adjust line timing">
+          {TIMING_FIELDS.map((field) => (
+            <label key={field.key} className="text-xs font-medium text-muted-foreground">
+              {field.label}
+              <input
+                className="field mt-1 w-full text-sm text-foreground"
+                type="number" min={0} step="any" inputMode="decimal"
+                placeholder={String(current(field.key))}
+                value={drafts[field.key]}
+                disabled={!editable || pending}
+                onChange={(event) => { commandId.current = null; setDrafts((prior) => ({ ...prior, [field.key]: event.target.value })); }}
+              />
+            </label>
+          ))}
+          <dl className="mt-1 space-y-1 text-sm">
+            <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Pre-tunnel (derived)</dt><dd className="font-semibold tabular-nums">{preTunnel.toFixed(1)} min</dd></div>
+            <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Total line time (derived)</dt><dd className="font-semibold tabular-nums">{total.toFixed(1)} min</dd></div>
+          </dl>
+          {sectionExceeds ? (
+            <p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-amber-600" role="alert">
+              <TriangleAlert className="size-3.5" /> Section times exceed total line freeze time
+            </p>
+          ) : null}
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button type="submit" className="button-secondary" disabled={!editable || pending || unchanged}>
+              {pending ? "Saving…" : "Save timing"}
+            </button>
+            <button type="button" className="button-secondary" disabled={pending}
+              onClick={() => { setOpen(false); setError(null); setDrafts({ pressOvenMin: "", frontlineMin: "", postTunnelMin: "", freezerTime: "" }); }}>
+              Cancel
+            </button>
+          </div>
+          {error ? <span className="error-text" role="alert">{error}</span> : null}
+        </form>
+      ) : (
+        <button type="button" className="button-secondary" disabled={!editable}
+          onClick={() => setOpen(true)}>
+          Adjust line timing
+        </button>
+      )}
+    </div>
+  );
+}
+
 function RunTab({ run, snapshot, online, onUpdated }: {
   run: Run;
   snapshot: OperationalSnapshot;
@@ -150,6 +273,7 @@ function RunTab({ run, snapshot, online, onUpdated }: {
           <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Press remaining</dt><dd className="font-semibold tabular-nums">{formatElapsed(projection.timers.pressRemainingSec)}</dd></div>
           <div className="flex items-baseline justify-between gap-3"><dt className="text-muted-foreground">Freezer remaining</dt><dd className="font-semibold tabular-nums">{formatElapsed(projection.timers.freezerRemainingSec)}</dd></div>
         </dl>
+        <LineTimingEditor run={run} online={online} onUpdated={onUpdated} />
       </section>
       <section className="panel">
         <p className="eyebrow">Batch</p>

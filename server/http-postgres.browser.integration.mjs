@@ -10,6 +10,57 @@ const MANAGER_USERNAME = "V3IntegrationManager";
 const MANAGER_PASSWORD = "v3-test-manager-password";
 const SCHEDULE_DATE = "2035-04-16";
 
+// Seed an active reviewed die default so the run-create die picker is
+// exercised end-to-end (the die freezes line timing into the run snapshot).
+async function seedActiveDieDefault(baseUrl) {
+  const signIn = await fetch(`${baseUrl}/api/v3/auth/sign-in`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: baseUrl, "Sec-Fetch-Site": "same-origin" },
+    body: JSON.stringify({ username: MANAGER_USERNAME, password: MANAGER_PASSWORD }),
+  });
+  assert.equal(signIn.status, 200);
+  const cookies = signIn.headers.getSetCookie().map((cookie) => cookie.split(";", 1)[0]);
+  const cookieHeader = cookies.join("; ");
+  const csrfToken = cookies.find((cookie) => cookie.startsWith("v3_csrf="))?.slice("v3_csrf=".length) ?? "";
+  const post = async (path, body) => {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookieHeader,
+        "X-CSRF-Token": csrfToken,
+      },
+      body: JSON.stringify(body),
+    });
+    assert.ok([200, 201].includes(response.status), `${path}: ${await response.clone().text()}`);
+    return response.json();
+  };
+  const created = await post("/api/v3/setup-catalog/edits", {
+    requestId: "73000000-0000-4000-8000-000000000500",
+    family: "die-types",
+    record: { code: "BROWSER-DIE", name: "Browser journey die", data: {} },
+    expectedFingerprint: null,
+  });
+  await post(`/api/v3/setup-catalog/imports/${created.importId}/apply`, {});
+  const saved = await fetch(`${baseUrl}/api/v3/inventory/die-defaults`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Cookie: cookieHeader,
+      "X-CSRF-Token": csrfToken,
+    },
+    body: JSON.stringify({
+      requestId: "73000000-0000-4000-8000-000000000501",
+      dieCode: "BROWSER-DIE", expectedRevision: 0, enabled: true,
+      defaults: {
+        crustsPerCycle: 2, cycleSpeed: 10, speedAdjustment: 1, freezerTime: 40, casesPerLayer: 6,
+        preTunnelMin: 6, postTunnelMin: 2.5, pressOvenMin: 3.5, frontlineMin: 2.5,
+      },
+    }),
+  });
+  assert.equal(saved.status, 201, await saved.clone().text());
+}
+
 async function authenticateBrowserContext(baseUrl, context) {
   const unauthenticated = await fetch(`${baseUrl}/api/v3/auth/session`);
   assert.equal(unauthenticated.status, 401, "a new browser context must not inherit a staff session");
@@ -245,6 +296,7 @@ async function main() {
     });
 
     await authenticateBrowserContext(baseUrl, context);
+    await seedActiveDieDefault(baseUrl);
     await page.goto(baseUrl);
     await page.getByRole("heading", { name: "Run control", exact: true }).waitFor();
     await page.getByLabel("Imported product").selectOption("DOUGH-A");
@@ -254,6 +306,7 @@ async function main() {
     await page.getByLabel("Run label").fill(runLabel);
     await page.getByLabel("Target cases").fill("3");
     await page.locator("#run-setup").selectOption("LINE-A");
+    await page.getByLabel(/Die setup \(optional/).selectOption("BROWSER-DIE");
     const createResponsePromise = page.waitForResponse((response) =>
       new URL(response.url()).pathname === "/api/v3/runs" && response.request().method() === "POST");
     await page.getByRole("button", { name: "Prepare run", exact: true }).click();
@@ -265,6 +318,8 @@ async function main() {
     assert.equal(createdRun.revision, 0);
     assert.equal(createdRun.setupSnapshot.productCode, "DOUGH-A");
     assert.equal(createdRun.setupSnapshot.productionSetupCode, "LINE-A");
+    assert.equal(createdRun.setupSnapshot.dieSetup.dieTypeCode, "BROWSER-DIE");
+    assert.equal(createdRun.setupSnapshot.dieSetup.lineSettings.frontlineMin, 2.5);
     assert.equal(createdRun.doughCapacity.doughballYield, 645.19);
     assert.equal(createdRun.doughCapacity.pizzasPerCase, 12);
 
@@ -329,6 +384,42 @@ async function main() {
     await page.getByLabel("Cases produced", { exact: true }).fill("2");
     await page.getByLabel("Cases produced", { exact: true }).press("Enter");
     await page.getByText("Cases produced confirmed by the server.").waitFor();
+
+    // v1 LineTransitSettings parity: adjust the run's die-line transit times.
+    await page.getByRole("button", { name: "Adjust line timing", exact: true }).click();
+    await page.getByLabel("Press/Oven transit", { exact: true }).fill("4");
+    await page.getByLabel("Frontline transit", { exact: true }).fill("6");
+    await page.getByLabel("Total line freeze time", { exact: true }).fill("45");
+    await page.getByText("Pre-tunnel (derived)").waitFor();
+    await page.getByText("10.0 min", { exact: true }).waitFor();
+    const timingResponsePromise = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === `/api/v3/runs/${createdRun.id}/line-timing`
+      && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Save timing", exact: true }).click();
+    const timingResponse = await timingResponsePromise;
+    assert.equal(timingResponse.status(), 200);
+    const timingResult = (await timingResponse.json()).run.setupSnapshot.dieSetup.lineSettings;
+    assert.equal(timingResult.preTunnelMin, 10, "server re-derives preTunnelMin");
+    await page.getByText("Line timing confirmed by the server.").waitFor();
+    // Reopen: the editor placeholders now carry the confirmed values.
+    await page.getByRole("button", { name: "Adjust line timing", exact: true }).click();
+    await waitPlaceholder(page, "Press/Oven transit", "4");
+    await waitPlaceholder(page, "Frontline transit", "6");
+    await page.screenshot({ path: "/tmp/v3-line-timing-editor.png", fullPage: true });
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+
+    // Phone-width regression: the open timing editor must not overflow 375px.
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.getByRole("button", { name: "Adjust line timing", exact: true }).click();
+    await page.getByLabel("Press/Oven transit", { exact: true }).waitFor();
+    const timingOverflow = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      vw: window.innerWidth,
+    }));
+    assert.ok(timingOverflow.scrollWidth <= timingOverflow.vw + 1,
+      `the open line timing editor must fit 375px: ${JSON.stringify(timingOverflow)}`);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.setViewportSize({ width: 1280, height: 900 });
 
     const secondPage = await context.newPage();
     observePage(secondPage);

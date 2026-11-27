@@ -1003,6 +1003,83 @@ async function main() {
       acceptedStation.run.stationProgress.line.progress.casesProduced,
     );
 
+    // Line timing command: a run with a reviewed die setup can adjust its
+    // transit timings; retries replay, stale revisions conflict, unknown
+    // fields fail closed at the API boundary.
+    const timingRunResponse = await fetch(`${baseUrl}/api/v3/runs`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: manager.cookieHeader,
+        "X-CSRF-Token": manager.csrfToken,
+      },
+      body: JSON.stringify({
+        requestId: "73000000-0000-4000-8000-000000000220",
+        productionDate: "2026-11-18",
+        setupSnapshot: {
+          label: "Timing check", targetCases: 5, productCode: "DOUGH-A", productionSetupCode: "LINE-A",
+          dieSetup: {
+            dieTypeCode: "TYPED-DIE", expectedRevision: 1,
+            lineSettings: {
+              crustsPerCycle: 1, cycleSpeed: 1, speedAdjustment: 1,
+              freezerTime: 40, casesPerLayer: 6,
+              preTunnelMin: 5, postTunnelMin: 2.5, pressOvenMin: 2.5, frontlineMin: 2.5,
+            },
+          },
+        },
+      }),
+    });
+    assert.equal(timingRunResponse.status, 201);
+    const timingRun = (await jsonResponse(timingRunResponse)).run;
+    assert.equal(timingRun.setupSnapshot.dieSetup.lineSettings.frontlineMin, 2.5);
+
+    const timingBody = {
+      commandId: "73000000-0000-4000-8000-000000000221",
+      expectedRevision: 0,
+      timing: { frontlineMin: 7.5, freezerTime: 45 },
+    };
+    const timingAccepted = await sessionPost(manager, `/api/v3/runs/${timingRun.id}/line-timing`, timingBody);
+    assert.equal(timingAccepted.status, 200);
+    const timingResult = await jsonResponse(timingAccepted);
+    assert.equal(timingResult.outcome, "accepted");
+    const timingSettings = timingResult.run.setupSnapshot.dieSetup.lineSettings;
+    assert.equal(timingSettings.frontlineMin, 7.5);
+    assert.equal(timingSettings.freezerTime, 45);
+    assert.equal(timingSettings.preTunnelMin, 10, "preTunnelMin re-derives as pressOven + frontline");
+    assert.equal(timingResult.run.revision, 1);
+
+    const timingReplay = await sessionPost(manager, `/api/v3/runs/${timingRun.id}/line-timing`, timingBody);
+    assert.equal(timingReplay.status, 200);
+    const timingReplayResult = await jsonResponse(timingReplay);
+    assert.equal(timingReplayResult.replayed, true, "identical retry must replay");
+    assert.equal(timingReplayResult.run.revision, 1, "replay must not bump revision");
+
+    const timingStale = await sessionPost(manager, `/api/v3/runs/${timingRun.id}/line-timing`, {
+      commandId: "73000000-0000-4000-8000-000000000222",
+      expectedRevision: 0,
+      timing: { frontlineMin: 8 },
+    });
+    assert.equal(timingStale.status, 409);
+    assert.equal((await jsonResponse(timingStale)).outcome, "conflict");
+
+    const timingUnknownField = await sessionPost(manager, `/api/v3/runs/${timingRun.id}/line-timing`, {
+      commandId: "73000000-0000-4000-8000-000000000223",
+      expectedRevision: 1,
+      timing: { frontlineMin: 8, mystery: 1 },
+    });
+    assert.equal(timingUnknownField.status, 400);
+
+    const timingUnauthenticated = await fetch(`${baseUrl}/api/v3/runs/${timingRun.id}/line-timing`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        commandId: "73000000-0000-4000-8000-000000000224",
+        expectedRevision: 1,
+        timing: { frontlineMin: 8 },
+      }),
+    });
+    assert.equal(timingUnauthenticated.status, 401);
+
     const completeResponse = await fetch(`${baseUrl}/api/v3/runs/${created.run.id}/commands`, {
       method: "POST",
       headers: {

@@ -21,7 +21,10 @@ function runFixture(overrides = {}) {
     pausedAt: null,
     completedAt: null,
     updatedAt: new Date(NOW_MS).toISOString(),
-    setupSnapshot: { label: "Run A", targetCases: 12, productCode: "PEP-16" },
+    setupSnapshot: {
+      label: "Run A", targetCases: 12, productCode: "PEP-16",
+      dieSetup: overrides.dieSetup,
+    },
     stoppages: [
       {
         id: "pause-1", type: "pause", reason: "lunch",
@@ -70,7 +73,16 @@ function runFixture(overrides = {}) {
 }
 
 test("adaptStationRun maps pa3 station state onto the v1 crusts calculator input", () => {
-  const { runMeta, runValues, packagingEntry, startedAt, date } = adaptStationRun({ run: runFixture() });
+  const TIMED_RUN = runFixture({
+    dieSetup: {
+      lineSettings: {
+        crustsPerCycle: 1, cycleSpeed: 1, speedAdjustment: 1,
+        freezerTime: 40, casesPerLayer: 6,
+        preTunnelMin: 5, postTunnelMin: 2.5, pressOvenMin: 2.5, frontlineMin: 2.5,
+      },
+    },
+  });
+  const { runMeta, runValues, packagingEntry, startedAt, date } = adaptStationRun({ run: TIMED_RUN });
 
   assert.equal(startedAt, BASE_MS);
   assert.equal(date, "2026-11-28");
@@ -95,7 +107,12 @@ test("adaptStationRun maps pa3 station state onto the v1 crusts calculator input
   assert.equal(runValues.casesPerSkid, 10);
   assert.equal(runValues.crustsPerStack, 4);
   assert.equal(runValues.crustsPerCase, 8);
-  assert.equal(runValues.freezerTime, 0);
+  // Reviewed die-line timing flows from the snapshot into the calculator input.
+  assert.equal(runValues.freezerTime, 40);
+  assert.equal(runValues.preTunnelMin, 5);
+  assert.equal(runValues.postTunnelMin, 2.5);
+  assert.equal(runValues.pressOvenMin, 2.5);
+  assert.equal(runValues.frontlineMin, 2.5);
 
   // Station state flows into the v1 progress slots.
   assert.equal(runValues.traysOnLine, 3);

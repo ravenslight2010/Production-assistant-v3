@@ -586,6 +586,11 @@ export async function createRun(input: {
   targetCases: number;
   productCode: string;
   productionSetupCode: string;
+  dieSetup?: {
+    dieTypeCode: string;
+    expectedRevision: number;
+    lineSettings: ReviewedDieLineSettings;
+  };
 }): Promise<Run> {
   const { requestId, productionDate, ...setupSnapshot } = input;
   const result = await unwrap(await client.POST("/api/v3/runs", {
@@ -612,6 +617,26 @@ export async function applyRunToTime(run: Run, runToTime: string, commandId: str
   const result = await client.POST("/api/v3/runs/{runId}/run-to-time", {
     params: { path: { runId: run.id }, header: mutationHeaders() },
     body: { commandId, expectedRevision: run.revision, runToTime },
+  });
+  if (result.response.status === 409) {
+    const conflict = result.error as { currentRun?: Run } | undefined;
+    if (conflict?.currentRun) return { run: conflict.currentRun, conflict: true };
+  }
+  const accepted = await unwrap(result);
+  return { run: accepted.run, conflict: false };
+}
+
+export type RunLineTiming = Partial<{
+  pressOvenMin: number;
+  frontlineMin: number;
+  postTunnelMin: number;
+  freezerTime: number;
+}>;
+
+export async function applyLineTiming(run: Run, timing: RunLineTiming, commandId: string): Promise<RunCommandResult> {
+  const result = await client.POST("/api/v3/runs/{runId}/line-timing", {
+    params: { path: { runId: run.id }, header: mutationHeaders() },
+    body: { commandId, expectedRevision: run.revision, timing },
   });
   if (result.response.status === 409) {
     const conflict = result.error as { currentRun?: Run } | undefined;

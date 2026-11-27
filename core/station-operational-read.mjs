@@ -6,10 +6,11 @@
 // The mapping from pa3's leaner station model to the v1 calculator input is
 // deliberate and documented line by line in adaptStationRun(). pa3 stores
 // explicit rates where v1 stored machine settings, so runs map onto v1's
-// "crusts" calculator mode (direct ppm). Fields pa3 does not store yet
-// (freezer time, press/oven and frontline minutes, per-slot applicator
-// details) default to v1's zero/NaN guards; the math degrades exactly as v1
-// did for an empty form.
+// "crusts" calculator mode (direct ppm). Line timing (freezer time,
+// press/oven and frontline minutes) comes from the snapshot's reviewed
+// die-line settings (adjustable mid-run via apply_line_timing_command);
+// per-slot applicator details v1 carried still default to zero/NaN guards,
+// degrading exactly as v1 did for an empty form.
 
 import { computeCalc } from "./station-live-calc.mjs";
 import { computeAutoTrackSchedule } from "./station-autotrack-schedule.mjs";
@@ -37,6 +38,7 @@ export function adaptStationRun({ run }) {
   const progress = (station) => sp?.[station]?.progress ?? {};
 
   const line = inputs("line");
+  const lineSettings = run.setupSnapshot?.dieSetup?.lineSettings ?? {};
   const dough = inputs("dough");
   const cheese = inputs("cheese");
   const pepperoni = inputs("pepperoni");
@@ -75,9 +77,15 @@ export function adaptStationRun({ run }) {
     crustsPerCase: pizzasPerCase,
     doughballsPerTray: 0,
     doughBatchYield: 0,
-    // Line-timing inputs pa3 does not store yet; the projection falls back to
-    // v1's defaults (pre/post tunnel 2.5 min) via its typeof checks.
-    freezerTime: 0,
+    // Line-timing from the run snapshot's reviewed die-line settings. Zero or
+    // missing values keep the projection's typeof-check fallbacks (v1's
+    // pre/post tunnel 2.5 min defaults), so runs created before die defaults
+    // behave exactly as before; runs with real timing get honest projections.
+    freezerTime: positive(lineSettings.freezerTime),
+    preTunnelMin: positive(lineSettings.preTunnelMin),
+    postTunnelMin: positive(lineSettings.postTunnelMin),
+    pressOvenMin: positive(lineSettings.pressOvenMin),
+    frontlineMin: positive(lineSettings.frontlineMin),
     skidsCompleted,
     casesOnCurrentSkid,
     traysOnLine: positive(doughProgress.traysOnLine),

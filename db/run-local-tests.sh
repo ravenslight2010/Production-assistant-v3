@@ -747,6 +747,11 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0027-api-runtime-function-grants.sql" >/dev/null
 # Safe to re-run; the grant backfill and default privileges are idempotent.
 "${PSQL[@]}" -f "$ROOT/db/0027-api-runtime-function-grants.sql" >/dev/null
+# Slice: run line-timing command. Safe to re-run (idempotent function replace).
+"${PSQL[@]}" -f "$ROOT/db/0028-run-line-timing-command.sql" >/dev/null
+"${PSQL[@]}" -c "
+  GRANT EXECUTE ON FUNCTION v3.apply_line_timing_command(uuid, uuid, uuid, text, text, bigint, jsonb) TO v3_api_test;
+" >/dev/null
 "${PSQL[@]}" -c "
   GRANT EXECUTE ON FUNCTION v3.list_active_runs(uuid, integer) TO v3_api_test;
   GRANT EXECUTE ON FUNCTION v3.run_list_version(uuid) TO v3_api_test;
@@ -901,6 +906,7 @@ fi
 "${PSQL[@]}" -f "$ROOT/db/0026-qc-run-verification.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0026-qc-run-verification.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0027-api-runtime-function-grants.test.sql"
+"${PSQL[@]}" -f "$ROOT/db/0028-run-line-timing-command.test.sql"
 ACCOUNT_FUNCTION_PRIVILEGES="$("${PSQL[@]}" -c "
   SET ROLE v3_api_test;
   SELECT has_function_privilege(current_user,

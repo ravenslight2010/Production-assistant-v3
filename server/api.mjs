@@ -112,6 +112,7 @@ function safeRouteName(url) {
   if (url.pathname === "/api/v3/runs") return "runs.collection";
   if (url.pathname === "/api/v3/runs/products") return "runs.products";
   if (/^\/api\/v3\/runs\/[^/]+\/commands$/.test(url.pathname)) return "runs.command";
+  if (/^\/api\/v3\/runs\/[^/]+\/line-timing$/.test(url.pathname)) return "runs.line_timing";
   if (/^\/api\/v3\/runs\/[^/]+\/stations\/[^/]+\/commands$/.test(url.pathname)) return "runs.station_command";
   if (/^\/api\/v3\/runs\/[^/]+$/.test(url.pathname)) return "runs.detail";
   if (url.pathname === "/api/v3/schedules") return "schedules.date";

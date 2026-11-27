@@ -684,6 +684,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/runs/{runId}/line-timing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adjust the run's die-line transit timings (planned, running, or paused runs)
+         * @description Revision-guarded command that patches pressOvenMin, frontlineMin, postTunnelMin, and/or freezerTime in the run snapshot's reviewed die-line settings. The server re-derives preTunnelMin as pressOvenMin + frontlineMin so the v1 invariant cannot drift. Completed runs refuse with invalid_transition.
+         */
+        post: operations["applyLineTimingCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/runs/{runId}/stations/{stationKey}/commands": {
         parameters: {
             query?: never;
@@ -5867,6 +5887,60 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            500: components["responses"]["Error"];
+        };
+    };
+    applyLineTimingCommand: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                runId: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    commandId: string;
+                    expectedRevision: number;
+                    timing: {
+                        pressOvenMin?: number;
+                        frontlineMin?: number;
+                        postTunnelMin?: number;
+                        freezerTime?: number;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Timing command accepted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunCommandAccepted"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            /** @description Stale revision or invalid transition; includes canonical state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConflict"] | components["schemas"]["InvalidTransition"];
+                };
+            };
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
             500: components["responses"]["Error"];
         };
     };
