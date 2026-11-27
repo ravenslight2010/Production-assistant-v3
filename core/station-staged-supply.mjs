@@ -1,7 +1,12 @@
-// Ported from v1 lib/live-calc/src/stagedSupply.ts. Round 2 carries the
-// batch-weight helpers applicatorStock depends on; the full staged-supply
-// ledger port appends to this module in a later round.
+// Ported from v1 lib/live-calc/src/stagedSupply.ts. Round 2 carried the
+// batch-weight helpers applicatorStock depends on; this module now carries
+// the full staged-supply ledger. Values are deliberately allowed to be
+// fractional: a final Sauce barrel or Frontline batch can be partial, and
+// rounding here would make the operator's "still to make" number grow or
+// shrink as work moves between stages.
 
+export const SAUCE_STAGED_UNIT_CAP = 3;
+export const FRONTLINE_STAGED_UNIT_CAP = 2;
 export const FRONTLINE_DEFAULT_OPERATIONAL_BATCH_WEIGHT = 50;
 
 export function computeFrontlineEffectiveBatchWeight(configuredEffectiveWeight) {
@@ -19,4 +24,155 @@ export function knownFrontlineBatchWeight(configuredEffectiveWeight) {
     Number(configuredEffectiveWeight) <= FRONTLINE_DEFAULT_OPERATIONAL_BATCH_WEIGHT
     ? Number(configuredEffectiveWeight)
     : null;
+}
+
+function positive(value) {
+  return Number.isFinite(value) && Number(value) > 0 ? Number(value) : 0;
+}
+
+function remainder(total, accounted) {
+  const difference = total - accounted;
+  // Suppress arithmetic dust, not physically meaningful fractional batches.
+  const tolerance = Number.EPSILON * 16 * Math.max(1, total, accounted);
+  return difference > tolerance ? difference : 0;
+}
+
+/** Compute the state of a staged supply pipeline without rounding partial units. */
+export function computeStagedSupply(input) {
+  const total = positive(input.total);
+  const consumed = positive(input.consumed);
+  const onLine = positive(input.onLine);
+  const ready = positive(input.ready);
+  const inProduction = positive(input.inProduction);
+  const cap = positive(input.cap);
+  const remaining = remainder(total, consumed);
+  const staged = onLine + ready + inProduction;
+  return {
+    total,
+    consumed,
+    onLine,
+    ready,
+    inProduction,
+    remaining,
+    stillToMake: remainder(remaining, staged),
+    stagingRoom: Math.max(0, cap - staged),
+  };
+}
+
+/**
+ * Fill a station pipeline from canonical lifetime consumption. This projection
+ * is deliberately stateless: every device derives the same active stages after
+ * reload or peer adoption, while the cumulative consumed register remains the
+ * only synchronized correction/claim ledger.
+ */
+export function computeAutomaticStagedSupply(input) {
+  const total = positive(input.total);
+  const consumed = Math.min(total, positive(input.consumed));
+  let open = Math.max(0, total - consumed);
+  const take = () => {
+    const amount = Math.min(1, open);
+    open = Math.max(0, open - amount);
+    return amount;
+  };
+  const onLine = take();
+  const ready = input.cap >= 2 ? take() : 0;
+  const inProduction = input.cap >= 3 ? take() : 0;
+  return computeStagedSupply({
+    total,
+    consumed,
+    onLine,
+    ready,
+    inProduction,
+    cap: input.cap,
+  });
+}
+
+export function computeSauceSupply(input) {
+  return computeStagedSupply({ ...input, cap: SAUCE_STAGED_UNIT_CAP });
+}
+
+export function computeAutomaticSauceSupply(input) {
+  return computeAutomaticStagedSupply({ ...input, cap: SAUCE_STAGED_UNIT_CAP });
+}
+
+export function computeFrontlineSupply(input) {
+  return computeStagedSupply({ ...input, cap: FRONTLINE_STAGED_UNIT_CAP });
+}
+
+export function computeAutomaticFrontlineSupply(input) {
+  return computeAutomaticStagedSupply({ ...input, cap: FRONTLINE_STAGED_UNIT_CAP });
+}
+
+/**
+ * Compatibility baseline only: before the on-line supply model, BatchesMade
+ * recorded cumulative consumption. Preserve that as consumption, never stock.
+ * Once a pounds ledger exists it is authoritative; later production observations
+ * in BatchesMade must not re-initialize it.
+ */
+export function legacyFrontlineConsumption(values) {
+  const baseline = {};
+  for (const slot of ["app1", "app2", "app3", "app4"]) {
+    const field = `${slot}StockConsumedLbs`;
+    if (values[field] !== undefined) continue;
+    const recipe = values[`${slot}CheeseRecipe`];
+    const recipeLbs = Array.isArray(recipe)
+      ? recipe.reduce((sum, row) => sum + positive(Number(row?.lbs)), 0)
+      : 0;
+    const weight = knownFrontlineBatchWeight(recipeLbs || Number(values[`${slot}BatchLbs`]));
+    const count = Number(values[`${slot}BatchesMade`]);
+    if (weight !== null && Number.isFinite(count) && count >= 0) baseline[field] = count * weight;
+  }
+  return baseline;
+}
+
+/** Convert pounds of Frontline demand into (possibly partial) batch units. */
+export function computeFrontlineSupplyFromLbs(input) {
+  const effectiveBatchWeight = computeFrontlineEffectiveBatchWeight(input.configuredEffectiveWeight);
+  return {
+    ...computeFrontlineSupply({
+      ...input,
+      total: positive(input.demandLbs) / effectiveBatchWeight,
+    }),
+    effectiveBatchWeight,
+  };
+}
+
+/** Convert known physical Frontline stock and consumption to the shared batch-unit pipeline. */
+export function computeFrontlineSupplyFromStockLbs(input) {
+  const effectiveBatchWeight = knownFrontlineBatchWeight(input.configuredEffectiveWeight);
+  if (effectiveBatchWeight === null) return null;
+  return {
+    ...computeFrontlineSupply({
+      total: positive(input.demandLbs) / effectiveBatchWeight,
+      consumed: positive(input.consumedLbs) / effectiveBatchWeight,
+      onLine: positive(input.onLineLbs) / effectiveBatchWeight,
+    }),
+    effectiveBatchWeight,
+  };
+}
+
+export function computeSauceRunRequirement(input) {
+  const pizzas = positive(input.casesNeeded) * positive(input.pizzasPerCase);
+  const totalLbs = pizzas > 0 && positive(input.ozPerPizza) > 0
+    ? pizzas * positive(input.ozPerPizza) / 16 + 30
+    : 0;
+  const barrelLbs = positive(input.barrelLbs);
+  return {
+    totalLbs,
+    totalUnits: barrelLbs > 0 ? totalLbs / barrelLbs : 0,
+  };
+}
+
+export function computeFrontlineRunRequirement(input) {
+  const pizzas = positive(input.casesNeeded) * positive(input.pizzasPerCase);
+  const totalLbs = pizzas > 0 && positive(input.ozPerPizza) > 0
+    ? pizzas * positive(input.ozPerPizza) / 16 + 20
+    : 0;
+  const effectiveBatchWeight =
+    computeFrontlineEffectiveBatchWeight(input.configuredEffectiveWeight);
+  return {
+    totalLbs,
+    totalUnits: totalLbs / effectiveBatchWeight,
+    effectiveBatchWeight,
+  };
 }
