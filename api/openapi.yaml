@@ -5284,7 +5284,36 @@ components:
               type: number
         calc:
           type: object
-          description: The ported v1 computeCalc output for this run; field set is owned by the calculator.
+          description: The ported v1 computeCalc output for this run; the fields below are the ones the operational tabs read, and the calculator may add more.
+          properties:
+            adjustedTimeSec:
+              type: number
+            totalTimeSec:
+              type: number
+            timePressHzSec:
+              type: number
+            timePerTraySec:
+              type: number
+            timePerBatchSec:
+              type: number
+            timePerSkidSec:
+              type: number
+            pressCasesLeft:
+              type: number
+            doughShortCases:
+              type: number
+            batchesNeeded:
+              type: number
+            traysNeeded:
+              type: number
+            perTray:
+              type: number
+            perBatch:
+              type: number
+            doughMadeTimeSec:
+              type: number
+            doughDepletionSec:
+              type: number
         due:
           $ref: "#/components/schemas/OperationalSchedule"
     OperationalView:

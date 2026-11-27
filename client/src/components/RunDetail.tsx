@@ -186,7 +186,7 @@ export function RunDetail({ run, online, canManageReasons, onUpdated }: {
         </div>
         <StationCard key={selectedStation} run={run} stationKey={selectedStation} online={online} onUpdated={onUpdated} />
       </div>
-      {run.status !== "planned" ? <RunOperationalTabs run={run} online={online} /> : null}
+      {run.status !== "planned" ? <RunOperationalTabs run={run} online={online} onUpdated={onUpdated} /> : null}
     </section>
   );
 }

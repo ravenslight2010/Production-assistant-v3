@@ -2491,8 +2491,23 @@ export interface components {
                 paceStatus: string;
                 paceDelta: number;
             };
-            /** @description The ported v1 computeCalc output for this run; field set is owned by the calculator. */
-            calc: Record<string, never>;
+            /** @description The ported v1 computeCalc output for this run; the fields below are the ones the operational tabs read, and the calculator may add more. */
+            calc: {
+                adjustedTimeSec?: number;
+                totalTimeSec?: number;
+                timePressHzSec?: number;
+                timePerTraySec?: number;
+                timePerBatchSec?: number;
+                timePerSkidSec?: number;
+                pressCasesLeft?: number;
+                doughShortCases?: number;
+                batchesNeeded?: number;
+                traysNeeded?: number;
+                perTray?: number;
+                perBatch?: number;
+                doughMadeTimeSec?: number;
+                doughDepletionSec?: number;
+            };
             due: components["schemas"]["OperationalSchedule"];
         };
         OperationalView: {
