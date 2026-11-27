@@ -944,6 +944,8 @@ V3_TEST_ADMIN_URL="postgresql://$ENCODED_DB_USER@127.0.0.1:$PORT/v3_test"
 V3_API_URL="postgresql://v3_api_login@127.0.0.1:$PORT/v3_test"
 V3_TEST_ADMIN_URL="$V3_TEST_ADMIN_URL" V3_DATABASE_URL="$V3_API_URL" \
   NODE_ENV=development PORT=0 node "$ROOT/server/http-postgres.integration.mjs"
+V3_TEST_ADMIN_URL="$V3_TEST_ADMIN_URL" V3_DATABASE_URL="$V3_API_URL" NODE_ENV=development \
+  node "$ROOT/server/http-postgres.operational.integration.mjs"
 "${PSQL[@]}" -f "$ROOT/db/0006-run-inventory-linkage.test.sql"
 "${PSQL[@]}" -f "$ROOT/db/0008-reviewed-die-defaults.test.sql"
 # The browser suites serve the built client. A missing or stale dist/ fails
