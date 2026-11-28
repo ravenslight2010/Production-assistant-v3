@@ -748,6 +748,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/runs/{runId}/outcome": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record the run closeout (actual cases, waste lbs)
+         * @description Revision-guarded command that wholesale-replaces the run's outcome capture. Resending a field overwrites it; sending null clears it (v1 RunMeta updateRunMeta parity). Planned runs refuse with invalid_transition; running, paused, and completed runs accept.
+         */
+        post: operations["applyRunOutcomeCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/runs/{runId}/stations/{stationKey}/commands": {
         parameters: {
             query?: never;
@@ -2708,6 +2728,10 @@ export interface components {
             /** @description Server-owned America/Chicago wall-time operator target; not a lifecycle scheduling instruction. */
             runToTime: string;
             operationalNotes: string;
+            /** @description Closeout actual cases recorded through the outcome command; null until recorded or after a wholesale clear. */
+            actualCases: number | null;
+            /** @description Closeout waste lbs recorded through the outcome command; null until recorded or after a wholesale clear. */
+            wasteLbs: number | null;
             stoppages: components["schemas"]["Stoppage"][];
             setupSnapshot: components["schemas"]["RunSetup"];
             /** @description Current effective plan for planned, running, or paused runs; the exact retained completion plan for completed runs. */
@@ -6084,6 +6108,56 @@ export interface operations {
         };
         responses: {
             /** @description Timing command accepted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunCommandAccepted"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            405: components["responses"]["Error"];
+            /** @description Stale revision or invalid transition; includes canonical state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConflict"] | components["schemas"]["InvalidTransition"];
+                };
+            };
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+        };
+    };
+    applyRunOutcomeCommand: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                runId: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    commandId: string;
+                    expectedRevision: number;
+                    actualCases: number | null;
+                    wasteLbs: number | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Outcome command accepted */
             200: {
                 headers: {
                     [name: string]: unknown;

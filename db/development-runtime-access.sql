@@ -17,6 +17,7 @@ GRANT EXECUTE ON FUNCTION
   v3.apply_production_schedule_command(uuid, uuid, date, text, text, bigint, jsonb),
   v3.apply_run_lifecycle_command(uuid, uuid, uuid, text, text, text, bigint),
   v3.apply_run_operation_command(uuid, uuid, uuid, text, text, text, jsonb, bigint),
+  v3.apply_run_outcome_command(uuid, uuid, uuid, text, text, bigint, integer, numeric),
   v3.apply_run_to_time_command(uuid, uuid, uuid, text, text, time, bigint),
   v3.apply_line_timing_command(uuid, uuid, uuid, text, text, bigint, jsonb),
   v3.apply_setup_catalog_import(uuid, uuid, uuid),

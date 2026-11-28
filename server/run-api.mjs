@@ -4,6 +4,7 @@ import { createRunCommandService } from "../core/run-command-service.mjs";
 import { createRunService } from "../core/run-service.mjs";
 import { createRunToTimeService } from "../core/run-to-time-service.mjs";
 import { createLineTimingCommandService } from "../core/line-timing-command-service.mjs";
+import { createRunOutcomeCommandService } from "../core/run-outcome-service.mjs";
 import { createRunOperationsService } from "../core/run-operations-service.mjs";
 import { createStationCommandService } from "../core/station-command-service.mjs";
 import { createOperationalReadService } from "../core/station-operational-read.mjs";
@@ -162,6 +163,7 @@ export function createRunApi({
   commands,
   runToTimes,
   lineTiming,
+  outcomes,
   operations,
   stations,
   operationalReads,
@@ -183,6 +185,9 @@ export function createRunApi({
   }
   if (!lineTiming || typeof lineTiming.execute !== "function") {
     throw new TypeError("The line timing command service is required.");
+  }
+  if (!outcomes || typeof outcomes.execute !== "function") {
+    throw new TypeError("The run outcome command service is required.");
   }
   if (!operations || typeof operations.execute !== "function"
     || typeof operations.getStopReasons !== "function" || typeof operations.saveStopReasons !== "function") {
@@ -297,6 +302,17 @@ export function createRunApi({
         const body = await readJsonBody(request, maxBodyBytes);
         requireExactKeys(body, ["commandId", "expectedRevision", "timing"]);
         const result = await lineTiming.execute({ auth, command: { ...body, runId } });
+        sendJson(request, response, result?.outcome === "accepted" ? 200 : 409, result);
+        return;
+      }
+
+      const outcomeMatch = url.pathname.match(/^\/api\/v3\/runs\/([^/]+)\/outcome$/);
+      if (outcomeMatch && request.method === "POST") {
+        if (url.search) throw new RunApiError(400, "Run outcome query parameters are not supported.");
+        const runId = normalizePathRunId(outcomeMatch[1]);
+        const body = await readJsonBody(request, maxBodyBytes);
+        requireExactKeys(body, ["commandId", "expectedRevision", "actualCases", "wasteLbs"]);
+        const result = await outcomes.execute({ auth, command: { ...body, runId } });
         sendJson(request, response, result?.outcome === "accepted" ? 200 : 409, result);
         return;
       }
@@ -424,9 +440,10 @@ export function createRunApiForDatabase({
   const commands = createRunCommandService({ query, authorize });
   const runToTimes = createRunToTimeService({ query, authorize });
   const lineTiming = createLineTimingCommandService({ query, authorize });
+  const outcomes = createRunOutcomeCommandService({ query, authorize });
   const operations = createRunOperationsService({ query, authorize });
   const stations = createStationCommandService({ query, authorize });
   const operationalReads = createOperationalReadService({ runs });
   const fillMissingScans = createFillMissingScanService({ runs, query });
-  return createRunApi({ runs, commands, runToTimes, lineTiming, operations, stations, operationalReads, fillMissingScans, authenticate, verifyCsrf, maxBodyBytes, logger });
+  return createRunApi({ runs, commands, runToTimes, lineTiming, outcomes, operations, stations, operationalReads, fillMissingScans, authenticate, verifyCsrf, maxBodyBytes, logger });
 }

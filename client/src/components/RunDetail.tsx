@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { ApiError, applyRunCommand, type Run, type RunCommand } from "../api";
 import { RunToTimeControl } from "./RunToTimeControl";
 import { RunOperationsPanel } from "./RunOperationsPanel";
+import { RunOutcomePanel } from "./RunOutcomePanel";
 import { EffectiveProductionPlan } from "./EffectiveProductionPlan";
 import { RunOperationalTabs } from "./RunOperationalTabs";
 
@@ -60,6 +61,7 @@ export function RunDetail({ run, online, canManageReasons, canManageProfiles, on
       <EffectiveProductionPlan run={run} />
       <RunToTimeControl run={run} online={online} onUpdated={onUpdated} />
       <RunOperationsPanel run={run} online={online} canManageReasons={canManageReasons} onUpdated={onUpdated} />
+      <RunOutcomePanel run={run} online={online} onUpdated={onUpdated} />
       {run.productionRules?.length ? (
         <div className="mt-4 rounded-lg border border-border p-3 text-xs text-muted-foreground">
           Production rules: {run.productionRules.map((rule) => `${rule.name}: ${rule.status}`).join(" · ")}

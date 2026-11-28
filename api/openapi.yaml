@@ -1807,6 +1807,77 @@ paths:
           $ref: "#/components/responses/Error"
         "405":
           $ref: "#/components/responses/Error"
+  /api/v3/runs/{runId}/outcome:
+    post:
+      operationId: applyRunOutcomeCommand
+      summary: Record the run closeout (actual cases, waste lbs)
+      description: >
+        Revision-guarded command that wholesale-replaces the run's outcome
+        capture. Resending a field overwrites it; sending null clears it
+        (v1 RunMeta updateRunMeta parity). Planned runs refuse with
+        invalid_transition; running, paused, and completed runs accept.
+      security:
+        - v3Session: []
+          v3CsrfCookie: []
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [commandId, expectedRevision, actualCases, wasteLbs]
+              properties:
+                commandId:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                expectedRevision:
+                  type: integer
+                  minimum: 0
+                  maximum: 9007199254740991
+                actualCases:
+                  type: [integer, "null"]
+                  minimum: 0
+                  maximum: 10000000
+                wasteLbs:
+                  type: [number, "null"]
+                  minimum: 0
+                  maximum: 10000000
+      responses:
+        "200":
+          description: Outcome command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunCommandAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          description: Stale revision or invalid transition; includes canonical state
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/RunConflict"
+                  - $ref: "#/components/schemas/InvalidTransition"
+        "500":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "415":
+          $ref: "#/components/responses/Error"
+        "405":
+          $ref: "#/components/responses/Error"
   /api/v3/runs/{runId}/stations/{stationKey}/commands:
     post:
       operationId: applyRunStationCommand
@@ -5704,6 +5775,8 @@ components:
         - serverNow
         - runToTime
         - operationalNotes
+        - actualCases
+        - wasteLbs
         - setupSnapshot
         - effectiveProductionPlan
         - substitutionOverlay
@@ -5774,6 +5847,16 @@ components:
         operationalNotes:
           type: string
           maxLength: 4000
+        actualCases:
+          oneOf:
+            - type: integer
+            - type: "null"
+          description: Closeout actual cases recorded through the outcome command; null until recorded or after a wholesale clear.
+        wasteLbs:
+          oneOf:
+            - type: number
+            - type: "null"
+          description: Closeout waste lbs recorded through the outcome command; null until recorded or after a wholesale clear.
         stoppages:
           type: array
           items:

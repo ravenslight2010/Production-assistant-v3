@@ -646,6 +646,24 @@ export async function applyLineTiming(run: Run, timing: RunLineTiming, commandId
   return { run: accepted.run, conflict: false };
 }
 
+export type RunOutcome = {
+  actualCases: number | null;
+  wasteLbs: number | null;
+};
+
+export async function applyRunOutcome(run: Run, outcome: RunOutcome, commandId: string): Promise<RunCommandResult> {
+  const result = await client.POST("/api/v3/runs/{runId}/outcome", {
+    params: { path: { runId: run.id }, header: mutationHeaders() },
+    body: { commandId, expectedRevision: run.revision, actualCases: outcome.actualCases, wasteLbs: outcome.wasteLbs },
+  });
+  if (result.response.status === 409) {
+    const conflict = result.error as { currentRun?: Run } | undefined;
+    if (conflict?.currentRun) return { run: conflict.currentRun, conflict: true };
+  }
+  const accepted = await unwrap(result);
+  return { run: accepted.run, conflict: false };
+}
+
 export async function applyRunOperation(
   run: Run,
   commandType: RunOperationType,

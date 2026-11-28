@@ -112,6 +112,19 @@ async function withApi(t, overrides = {}, options = {}) {
       return { outcome: "accepted", replayed: false, commandId: input.command.commandId, run: { ...RUN, revision: 1 } };
     },
   };
+  const outcomes = {
+    execute: async (input) => {
+      calls.push(["outcome", input]);
+      return input.command.expectedRevision === 0
+        ? {
+            outcome: "accepted",
+            replayed: false,
+            commandId: input.command.commandId,
+            run: { ...RUN, revision: 1, actualCases: input.command.actualCases, wasteLbs: input.command.wasteLbs },
+          }
+        : { outcome: "conflict", expectedRevision: input.command.expectedRevision, currentRun: { ...RUN, revision: 1 } };
+    },
+  };
   const runToTimes = {
     execute: async (input) => {
       calls.push(["runToTime", input]);
@@ -184,6 +197,7 @@ async function withApi(t, overrides = {}, options = {}) {
     commands: { ...commands, ...overrides.commands },
     runToTimes: { ...runToTimes, ...overrides.runToTimes },
     lineTiming: { ...lineTiming, ...overrides.lineTiming },
+    outcomes: { ...outcomes, ...overrides.outcomes },
     operations: { ...operations, ...overrides.operations },
     stations: { ...stations, ...overrides.stations },
     operationalReads: { ...operationalReads, ...overrides.operationalReads },
@@ -206,6 +220,7 @@ function withApiArgs(overrides = {}) {
     commands: { execute: noop },
     runToTimes: { execute: noop },
     lineTiming: { execute: noop },
+    outcomes: { execute: noop },
     operations: { execute: noop, getStopReasons: noop, saveStopReasons: noop },
     stations: { execute: noop },
     operationalReads: { build: noop },
@@ -475,6 +490,34 @@ test("accepts exact Run to Time requests and preserves canonical conflicts", asy
 
   const unsupported = await send(baseUrl, path, { method: "POST", body: { ...body, actorId: AUTH.actorId } });
   assert.equal(unsupported.status, 400);
+});
+
+test("accepts exact run outcome requests and preserves canonical conflicts", async (t) => {
+  const { baseUrl, calls } = await withApi(t);
+  const path = `/api/v3/runs/${RUN_ID}/outcome`;
+  const body = { commandId: "outcome-once", expectedRevision: 0, actualCases: 104, wasteLbs: 3.25 };
+  const accepted = await send(baseUrl, path, { method: "POST", body });
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json()).run.actualCases, 104);
+  assert.deepEqual(calls[0], ["outcome", { auth: AUTH, command: { ...body, runId: RUN_ID } }]);
+
+  const conflict = await send(baseUrl, path, {
+    method: "POST", body: { ...body, commandId: "outcome-stale", expectedRevision: 1 },
+  });
+  assert.equal(conflict.status, 409);
+  assert.equal((await conflict.json()).currentRun.revision, 1);
+
+  const unsupported = await send(baseUrl, path, {
+    method: "POST", body: { ...body, commandId: "outcome-extra", wasteLbs: undefined },
+  });
+  assert.equal(unsupported.status, 400);
+
+  const query = await send(baseUrl, `${path}?x=1`, { method: "POST", body });
+  assert.equal(query.status, 400);
+
+  const malformed = await send(baseUrl, "/api/v3/runs/not-a-uuid/outcome", { method: "POST", body });
+  assert.equal(malformed.status, 400);
+  assert.equal(calls.length, 2);
 });
 
 test("rejects unauthenticated requests and mutations without CSRF verification", async (t) => {
